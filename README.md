@@ -44,9 +44,38 @@ woddi-harbor/
 
 ```bash
 cd /srv/http/woddi-harbor
+./harbor.sh console
+```
+
+Das Skript erledigt:
+
+- OS-Hinweise fuer `Ubuntu` und `SLES`
+- Erzeugung der virtuellen Umgebung
+- Installation in die venv
+- Initialisierung der Harbor-Konfiguration
+- Start der interaktiven Harbor-Konsole
+
+Von dort aus kannst du schrittweise:
+
+- das externe LLM konfigurieren
+- lokale Docs- und Mail-Module anlegen
+- MCP-HTTP-Dienste einbinden
+- Module starten, stoppen, restarten und testen
+- den System-Prompt anpassen
+- Host und Port aendern
+
+Wenn du stattdessen direkt nur die API starten willst:
+
+```bash
+./harbor.sh start
+```
+
+Wenn du lieber manuell arbeiten willst:
+
+```bash
+cd /srv/http/woddi-harbor
 python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
+.venv/bin/python -m pip install -e .
 
 woddi-harbor init
 woddi-harbor llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL> --api-key-env HARBOR_LLM_API_KEY
@@ -57,6 +86,26 @@ woddi-harbor module add-mcp netbox http://127.0.0.1:9010
 woddi-harbor module start docs-local
 woddi-harbor module start mails-local
 woddi-harbor serve --host 127.0.0.1 --port 9680
+```
+
+Wenn du die virtuelle Umgebung interaktiv aktivieren willst:
+
+```bash
+# bash / zsh
+. .venv/bin/activate
+
+# fish
+source .venv/bin/activate.fish
+```
+
+Praktische Wrapper-Aufrufe:
+
+```bash
+./harbor.sh bootstrap
+./harbor.sh install
+./harbor.sh console
+./harbor.sh cli status
+./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
 
 ## Linux-Kompatibilitaet
@@ -93,8 +142,7 @@ Danach wie gewohnt:
 
 ```bash
 python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
+.venv/bin/python -m pip install -e .
 ```
 
 Chat:

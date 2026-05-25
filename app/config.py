@@ -154,6 +154,14 @@ def system_prompt(settings: HarborSettings | None = None) -> str:
     return "Du bist Harbor."
 
 
+def save_system_prompt(text: str, settings: HarborSettings | None = None) -> Path:
+    current = settings or load_settings()
+    prompt_path = BASE_DIR / current.system_prompt_path
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(text.strip() + "\n", encoding="utf-8")
+    return prompt_path
+
+
 def llm_api_key(settings: HarborSettings) -> str:
     if settings.llm.api_key:
         return settings.llm.api_key

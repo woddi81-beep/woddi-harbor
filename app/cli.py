@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .config import HarborSettings, ModuleConfig, ensure_layout, find_module, load_modules, load_settings, save_settings
+from .console import run_console
 from .control import create_app
 from .modules import (
     execute_module,
@@ -96,6 +97,13 @@ def status() -> None:
         )
     )
     _print_modules()
+
+
+@app.command("console-ui")
+def console_ui() -> None:
+    """Open the interactive Harbor control console."""
+    ensure_layout()
+    run_console(console)
 
 
 @app.command()
