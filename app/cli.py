@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from dataclasses import replace
 from typing import Optional
 
@@ -35,6 +37,11 @@ app.add_typer(llm_app, name="llm")
 console = Console()
 
 
+def _check(name: str, ok: bool, detail: str) -> None:
+    status = "[green]pass[/green]" if ok else "[red]fail[/red]"
+    console.print(f"{status} {name}: {detail}")
+
+
 def _print_modules() -> None:
     table = Table(title="Harbor Modules")
     table.add_column("ID")
@@ -60,6 +67,22 @@ def init() -> None:
     """Create default configuration and directories."""
     ensure_layout()
     console.print(Panel.fit("woddi-harbor initialisiert unter /srv/http/woddi-harbor", title="Ready"))
+
+
+@app.command("check-prerequisites")
+def check_prerequisites() -> None:
+    """Check basic Linux prerequisites for SLES/Ubuntu style deployments."""
+    py_ok = sys.version_info >= (3, 10)
+    venv_ok = True
+    try:
+        import venv  # noqa: F401
+    except Exception:
+        venv_ok = False
+    _check("python", py_ok, f"{sys.version.split()[0]} (min 3.10)")
+    _check("venv", venv_ok, "Python venv module available" if venv_ok else "python3-venv/python311-venv missing")
+    _check("git", shutil.which("git") is not None, shutil.which("git") or "git missing")
+    _check("systemctl", shutil.which("systemctl") is not None, shutil.which("systemctl") or "optional")
+    _check("layout", True, "config/, data/, logs/ are created by `woddi-harbor init`")
 
 
 @app.command()

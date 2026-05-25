@@ -7,7 +7,7 @@ name = "woddi-harbor"
 version = "0.1.0"
 description = "Local-first AI control hub for external LLMs, search modules, and MCP services."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115,<1.0",
   "httpx>=0.28,<1.0",

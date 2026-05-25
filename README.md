@@ -2,6 +2,8 @@
 
 `woddi-harbor` ist ein lokaler Control-Hub fuer eine persoenliche AI mit externer LLM-Anbindung, lokalen Suchmodulen und separaten MCP-Diensten.
 
+Zielplattformen fuer den Betrieb sind Linux-Systeme wie `SLES` und `Ubuntu`.
+
 Der Name passt bewusst zum Zielbild:
 
 - ein sicherer zentraler Hafen fuer Modelle, Module und Tools
@@ -55,6 +57,44 @@ woddi-harbor module add-mcp netbox http://127.0.0.1:9010
 woddi-harbor module start docs-local
 woddi-harbor module start mails-local
 woddi-harbor serve --host 127.0.0.1 --port 9680
+```
+
+## Linux-Kompatibilitaet
+
+`woddi-harbor` ist bewusst auf einen einfachen Linux-Stack reduziert:
+
+- Python `3.10+`
+- `venv`
+- `git`
+- `curl`
+- optional `systemd` fuer Service-Betrieb
+
+Schneller Vorab-Check:
+
+```bash
+woddi-harbor check-prerequisites
+```
+
+Ubuntu/Debian Bootstrap:
+
+```bash
+cd /srv/http/woddi-harbor
+bash scripts/bootstrap_ubuntu.sh
+```
+
+SLES Bootstrap:
+
+```bash
+cd /srv/http/woddi-harbor
+bash scripts/bootstrap_sles.sh
+```
+
+Danach wie gewohnt:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
 ```
 
 Chat:
