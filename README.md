@@ -134,6 +134,8 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh console
 ./harbor.sh cli onboard --llm-base-url http://<LLM-HOST>:<PORT>/v1 --llm-model <MODEL>
 ./harbor.sh cli status
+./harbor.sh cli module check docs-local
+./harbor.sh cli service check harbor
 ./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
 
@@ -187,17 +189,16 @@ woddi-harbor service list
 Harbor als User-Service installieren:
 
 ```bash
-woddi-harbor service install harbor --mode user
-woddi-harbor service run harbor enable
-woddi-harbor service run harbor start
+woddi-harbor service install harbor --mode user --enable --start
+woddi-harbor service check harbor
 ```
 
 Lokales Modul als User-Service installieren:
 
 ```bash
-woddi-harbor service install module:docs-local --mode user
-woddi-harbor service run module:docs-local enable
-woddi-harbor service run module:docs-local start
+woddi-harbor service install module:docs-local --mode user --enable --start
+woddi-harbor module check docs-local
+woddi-harbor service check module:docs-local
 ```
 
 Der gleiche Flow funktioniert mit `--mode system`, sofern du die noetigen Rechte hast.

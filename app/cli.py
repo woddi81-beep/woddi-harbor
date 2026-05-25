@@ -28,6 +28,7 @@ from .console import run_console
 from .control import create_app
 from .modules import (
     execute_module,
+    health_check_module,
     module_log_path,
     module_status,
     parse_json_payload,
@@ -36,9 +37,10 @@ from .modules import (
     start_module,
     stop_module,
     upsert_module,
+    validate_module_config,
     worker_execute,
 )
-from .services import install_service, service_action
+from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
 
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -253,6 +255,9 @@ def module_add_docs(
         port=port or reserve_port(),
         top_k=top_k,
     )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
     console.print(Panel.fit(f"Docs-Modul registriert: {module_id}", title="Module"))
 
@@ -275,6 +280,9 @@ def module_add_maildir(
         port=port or reserve_port(),
         top_k=top_k,
     )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
     console.print(Panel.fit(f"Mail-Modul registriert: {module_id}", title="Module"))
 
@@ -299,6 +307,9 @@ def module_add_mcp(
         api_key_env=api_key_env,
         timeout_seconds=timeout_seconds,
     )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
     console.print(Panel.fit(f"MCP-Modul registriert: {module_id}", title="Module"))
 
@@ -341,6 +352,13 @@ def module_logs(module_id: str, lines: int = 50) -> None:
     console.print(Panel("\n".join(text[-lines:]), title=f"Logs {module_id}"))
 
 
+@module_app.command("check")
+def module_check(module_id: str) -> None:
+    """Validate and health-check a module."""
+    result = health_check_module(module_id)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Check"))
+
+
 @service_app.command("list")
 def service_list() -> None:
     """List service profiles."""
@@ -352,9 +370,11 @@ def service_list() -> None:
 def service_install(
     profile_id: str = typer.Argument(..., help="harbor or module:<module-id>"),
     mode: str = typer.Option("user", help="user or system"),
+    enable: bool = typer.Option(False, help="Enable after install"),
+    start: bool = typer.Option(False, help="Start after install"),
 ) -> None:
     """Install a systemd service unit."""
-    result = install_service(profile_id, mode)
+    result = install_and_optionally_enable_service(profile_id, mode, enable=enable, start=start)
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Install"))
 
 
@@ -366,6 +386,13 @@ def service_run(
     """Run a systemd action for an installed profile."""
     result = service_action(profile_id, action)
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Action"))
+
+
+@service_app.command("check")
+def service_check(profile_id: str = typer.Argument(..., help="harbor or module:<module-id>")) -> None:
+    """Check installed systemd state for a profile."""
+    result = health_check_service(profile_id)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Check"))
 
 
 @app.command(hidden=True)

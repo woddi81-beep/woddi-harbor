@@ -10,6 +10,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -36,7 +37,48 @@ def reserve_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def validate_module_config(module: ModuleConfig) -> list[str]:
+    errors: list[str] = []
+    if not module.id.strip():
+        errors.append("Module ID fehlt.")
+    if module.type not in {"docs", "maildir", "mcp_http"}:
+        errors.append(f"Unbekannter Modultyp: {module.type}")
+    if module.transport not in {"local", "remote"}:
+        errors.append(f"Ungueltiger Transport: {module.transport}")
+    if module.type in {"docs", "maildir"}:
+        if module.transport != "local":
+            errors.append(f"{module.type} muss lokal sein.")
+        root = Path(module.path).expanduser()
+        if not module.path.strip():
+            errors.append("Lokaler Pfad fehlt.")
+        elif not root.exists():
+            errors.append(f"Pfad existiert nicht: {root}")
+        elif not root.is_dir():
+            errors.append(f"Pfad ist kein Verzeichnis: {root}")
+        if module.port <= 0 or module.port > 65535:
+            errors.append(f"Port ungueltig: {module.port}")
+        if module.top_k <= 0:
+            errors.append("top_k muss groesser als 0 sein.")
+    if module.type == "mcp_http":
+        if module.transport != "remote":
+            errors.append("mcp_http muss remote sein.")
+        if not module.base_url.strip():
+            errors.append("Base URL fehlt.")
+        else:
+            parsed = urlparse(module.base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                errors.append(f"Base URL ungueltig: {module.base_url}")
+    return errors
+
+
+def validate_or_raise(module: ModuleConfig) -> None:
+    errors = validate_module_config(module)
+    if errors:
+        raise ValueError(" ".join(errors))
+
+
 def upsert_module(module: ModuleConfig) -> ModuleConfig:
+    validate_or_raise(module)
     modules = load_modules()
     replaced = False
     for index, existing in enumerate(modules):
@@ -110,6 +152,43 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         "port": module.port,
         "health": health,
     }
+
+
+def health_check_module(module_id: str) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+    errors = validate_module_config(module)
+    status = module_status(module)
+    payload: dict[str, Any] = {
+        "ok": not errors,
+        "module_id": module_id,
+        "validation_errors": errors,
+        "status": status,
+    }
+    if module.type == "mcp_http" and not errors:
+        headers: dict[str, str] = {}
+        secret = module_secret(module)
+        if secret:
+            headers["Authorization"] = f"Bearer {secret}"
+        try:
+            with httpx.Client(timeout=min(module.timeout_seconds, 10.0)) as client:
+                response = client.post(
+                    module.base_url.rstrip("/") + "/execute",
+                    headers=headers,
+                    json={"action": "health", "payload": {}},
+                )
+            payload["remote_status_code"] = response.status_code
+            payload["remote_ok"] = response.is_success
+            if response.is_success:
+                payload["remote_payload"] = response.json()
+            else:
+                payload["ok"] = False
+                payload["remote_body"] = response.text[:600]
+        except Exception as exc:
+            payload["ok"] = False
+            payload["remote_error"] = str(exc)
+    return payload
 
 
 def start_module(module_id: str) -> dict[str, Any]:

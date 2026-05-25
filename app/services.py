@@ -3,7 +3,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .config import BASE_DIR, CONFIG_DIR, ModuleConfig, ServiceProfile, find_module, find_service_profile, save_service_profiles, sync_service_profiles
+import httpx
+
+from .config import BASE_DIR, CONFIG_DIR, ModuleConfig, ServiceProfile, find_module, find_service_profile, load_settings, save_service_profiles, sync_service_profiles
+from .modules import health_check_module, module_url
 
 
 SYSTEMD_DIR = BASE_DIR / "systemd"
@@ -83,6 +86,16 @@ def install_service(profile_id: str, mode: str) -> dict:
     return {"ok": True, "unit_path": str(target_path), "unit_name": unit_name, "mode": mode}
 
 
+def install_and_optionally_enable_service(profile_id: str, mode: str, *, enable: bool = False, start: bool = False) -> dict:
+    result = install_service(profile_id, mode)
+    actions: list[dict] = []
+    if enable:
+        actions.append(service_action(profile_id, "enable"))
+    if start:
+        actions.append(service_action(profile_id, "start"))
+    return {**result, "actions": actions}
+
+
 def service_action(profile_id: str, action: str) -> dict:
     profile = find_service_profile(profile_id)
     if profile is None:
@@ -107,3 +120,45 @@ def service_action(profile_id: str, action: str) -> dict:
 
 def list_service_profiles() -> list[ServiceProfile]:
     return sync_service_profiles()
+
+
+def health_check_service(profile_id: str) -> dict:
+    profile = find_service_profile(profile_id)
+    if profile is None:
+        raise ValueError(f"Service-Profil nicht gefunden: {profile_id}")
+    payload = {
+        "ok": True,
+        "profile_id": profile_id,
+        "kind": profile.kind,
+        "mode": profile.systemd_mode,
+        "unit_name": profile.resolved_unit_name() + ".service",
+    }
+    if profile.systemd_mode in {"user", "system"}:
+        status = service_action(profile_id, "status")
+        payload["systemd"] = status
+        payload["ok"] = payload["ok"] and bool(status.get("ok"))
+    else:
+        payload["systemd"] = {
+            "ok": False,
+            "message": "Keine systemd-Unit installiert.",
+        }
+    if profile.kind == "harbor":
+        settings = load_settings()
+        api_url = f"http://{settings.host}:{settings.port}/api/health"
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                response = client.get(api_url)
+            payload["runtime"] = {
+                "ok": response.is_success,
+                "url": api_url,
+                "status_code": response.status_code,
+                "body": response.json() if response.is_success else response.text[:600],
+            }
+            payload["ok"] = payload["ok"] and response.is_success
+        except Exception as exc:
+            payload["runtime"] = {"ok": False, "url": api_url, "error": str(exc)}
+            payload["ok"] = False
+    elif profile.kind == "module":
+        payload["runtime"] = health_check_module(profile.module_id)
+        payload["ok"] = payload["ok"] and bool(payload["runtime"].get("ok"))
+    return payload

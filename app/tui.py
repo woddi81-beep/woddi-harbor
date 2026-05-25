@@ -24,6 +24,7 @@ from .config import (
 )
 from .modules import (
     execute_module,
+    health_check_module,
     module_log_path,
     module_status,
     parse_json_payload,
@@ -33,8 +34,9 @@ from .modules import (
     start_module,
     stop_module,
     upsert_module,
+    validate_module_config,
 )
-from .services import install_service, service_action
+from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
 
 
 class ModuleItem(ListItem):
@@ -195,6 +197,7 @@ class HarborTui(App[None]):
         Binding("u", "install_user_service", "Install Unit"),
         Binding("e", "enable_service", "Enable"),
         Binding("z", "service_status", "Service Status"),
+        Binding("h", "health_check", "Health Check"),
     ]
 
     def __init__(self) -> None:
@@ -208,7 +211,7 @@ class HarborTui(App[None]):
                 yield Static("Service Deck", classes="section-title")
                 yield ListView(id="module-list")
                 yield Static(
-                    "a add  s start  x stop  d restart  c call\nu install  e enable  z svc-status\nl llm  p prompt  v server  g logs  q quit",
+                    "a add  s start  x stop  d restart  c call\nu install  e enable  z svc-status  h health\nl llm  p prompt  v server  g logs  q quit",
                     id="actions",
                 )
             with Vertical(id="main"):
@@ -426,7 +429,7 @@ class HarborTui(App[None]):
     def action_install_user_service(self) -> None:
         profile_id = self._current_profile_id()
         try:
-            result = install_service(profile_id, "user")
+            result = install_and_optionally_enable_service(profile_id, "user", enable=True)
             self.refresh_dashboard()
             self._log(f"[green]User-Service installiert fuer {profile_id}.[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
@@ -443,10 +446,24 @@ class HarborTui(App[None]):
     def action_service_status(self) -> None:
         profile_id = self._current_profile_id()
         try:
-            result = service_action(profile_id, "status")
+            result = health_check_service(profile_id)
             self._log(f"[b]Service status {profile_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
             self._log(f"[red]Service status fehlgeschlagen:[/red] {exc}")
+
+    def action_health_check(self) -> None:
+        if self.selected_module_id:
+            try:
+                result = health_check_module(self.selected_module_id)
+                self._log(f"[b]Module health {self.selected_module_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+            except Exception as exc:
+                self._log(f"[red]Module health fehlgeschlagen:[/red] {exc}")
+            return
+        try:
+            result = health_check_service("harbor")
+            self._log(f"[b]Harbor health[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+        except Exception as exc:
+            self._log(f"[red]Harbor health fehlgeschlagen:[/red] {exc}")
 
     def _run_selected_action(self, action: Any, verb: str) -> None:
         module_id = self.selected_module_id
@@ -546,6 +563,10 @@ class HarborTui(App[None]):
                 port=int(values["port"] or reserve_port()),
                 top_k=int(values["top_k"] or 5),
             )
+        errors = validate_module_config(module)
+        if errors:
+            self._log("[red]Modul ungueltig:[/red] " + " ".join(errors))
+            return
         upsert_module(module)
         self.selected_module_id = module.id
         self.refresh_dashboard()
