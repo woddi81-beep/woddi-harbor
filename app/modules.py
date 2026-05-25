@@ -34,6 +34,16 @@ def module_index_path(module_id: str) -> Path:
     return RUNTIME_DIR / "indexes" / f"{module_id}.json"
 
 
+def _auth_headers(module: ModuleConfig, *, force_auth: bool = False) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    secret = module_secret(module)
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+    elif force_auth:
+        headers["Authorization"] = "Bearer "
+    return headers
+
+
 def reserve_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -179,28 +189,113 @@ def health_check_module(module_id: str) -> dict[str, Any]:
             "document_count": index.document_count if index else 0,
         }
     if module.type == "mcp_http" and not errors:
-        headers: dict[str, str] = {}
-        secret = module_secret(module)
-        if secret:
-            headers["Authorization"] = f"Bearer {secret}"
-        try:
-            with httpx.Client(timeout=min(module.timeout_seconds, 10.0)) as client:
-                response = client.post(
-                    module.base_url.rstrip("/") + "/execute",
-                    headers=headers,
-                    json={"action": "health", "payload": {}},
-                )
-            payload["remote_status_code"] = response.status_code
-            payload["remote_ok"] = response.is_success
-            if response.is_success:
-                payload["remote_payload"] = response.json()
-            else:
-                payload["ok"] = False
-                payload["remote_body"] = response.text[:600]
-        except Exception as exc:
-            payload["ok"] = False
-            payload["remote_error"] = str(exc)
+        discovery = discover_remote_module(module)
+        payload["remote"] = discovery
+        payload["ok"] = payload["ok"] and bool(discovery.get("ok"))
     return payload
+
+
+def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
+    base_url = module.base_url.rstrip("/")
+    timeout = min(module.timeout_seconds, 10.0)
+    attempts: list[dict[str, Any]] = []
+    capabilities: list[str] = []
+    actions: list[str] = []
+
+    candidate_calls = [
+        ("GET", "/", None, "root"),
+        ("GET", "/health", None, "health"),
+        ("GET", "/capabilities", None, "capabilities"),
+        ("GET", "/.well-known/mcp", None, "well_known_mcp"),
+        ("POST", "/execute", {"action": "capabilities", "payload": {}}, "execute_capabilities"),
+        ("POST", "/execute", {"action": "list_capabilities", "payload": {}}, "execute_list_capabilities"),
+        ("POST", "/execute", {"action": "health", "payload": {}}, "execute_health"),
+    ]
+
+    def extract_details(body: Any) -> tuple[list[str], list[str]]:
+        local_capabilities: list[str] = []
+        local_actions: list[str] = []
+        if isinstance(body, dict):
+            for key in ("capabilities", "supported_capabilities", "features"):
+                value = body.get(key)
+                if isinstance(value, list):
+                    local_capabilities.extend(str(item) for item in value)
+                elif isinstance(value, dict):
+                    local_capabilities.extend(str(item) for item in value.keys())
+            for key in ("actions", "supported_actions", "tools", "methods"):
+                value = body.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict) and "name" in item:
+                            local_actions.append(str(item["name"]))
+                        else:
+                            local_actions.append(str(item))
+                elif isinstance(value, dict):
+                    local_actions.extend(str(item) for item in value.keys())
+        return local_capabilities, local_actions
+
+    secret_present = bool(module_secret(module))
+    auth_modes = [False, True] if secret_present else [False]
+
+    with httpx.Client(timeout=timeout) as client:
+        for use_auth in auth_modes:
+            headers = _auth_headers(module, force_auth=False) if use_auth else {"Content-Type": "application/json"}
+            for method, suffix, body, label in candidate_calls:
+                url = base_url + suffix
+                try:
+                    if method == "GET":
+                        response = client.get(url, headers=headers)
+                    else:
+                        response = client.post(url, headers=headers, json=body)
+                    content_type = response.headers.get("content-type", "")
+                    parsed_body: Any
+                    if "json" in content_type:
+                        try:
+                            parsed_body = response.json()
+                        except Exception:
+                            parsed_body = response.text[:800]
+                    else:
+                        parsed_body = response.text[:800]
+                    attempt = {
+                        "label": label,
+                        "auth": use_auth,
+                        "method": method,
+                        "url": url,
+                        "status_code": response.status_code,
+                        "ok": response.is_success,
+                    }
+                    if response.is_success:
+                        attempt["body"] = parsed_body
+                        new_capabilities, new_actions = extract_details(parsed_body)
+                        capabilities.extend(new_capabilities)
+                        actions.extend(new_actions)
+                    else:
+                        attempt["body_preview"] = response.text[:300]
+                    attempts.append(attempt)
+                except Exception as exc:
+                    attempts.append(
+                        {
+                            "label": label,
+                            "auth": use_auth,
+                            "method": method,
+                            "url": url,
+                            "ok": False,
+                            "error": str(exc),
+                        }
+                    )
+
+    dedup_capabilities = sorted({item for item in capabilities if item})
+    dedup_actions = sorted({item for item in actions if item})
+    successful = [attempt for attempt in attempts if attempt.get("ok")]
+    return {
+        "ok": bool(successful),
+        "base_url": base_url,
+        "auth_configured": secret_present,
+        "successful_attempts": len(successful),
+        "capabilities": dedup_capabilities,
+        "actions": dedup_actions,
+        "attempts": attempts,
+    }
 
 
 def start_module(module_id: str) -> dict[str, Any]:
@@ -272,10 +367,7 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
         raise ValueError(f"Unbekanntes Modul: {module_id}")
 
     if module.type == "mcp_http":
-        headers = {"Content-Type": "application/json"}
-        secret = module_secret(module)
-        if secret:
-            headers["Authorization"] = f"Bearer {secret}"
+        headers = _auth_headers(module)
         with httpx.Client(timeout=module.timeout_seconds) as client:
             response = client.post(
                 module.base_url.rstrip("/") + "/execute",

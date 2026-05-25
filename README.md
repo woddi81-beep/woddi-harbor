@@ -17,6 +17,7 @@ Der Name passt bewusst zum Zielbild:
 - lokale Maildir-Suche als eigener Modul-Prozess
 - persistente Suchindizes fuer Docs und Maildir unter `data/runtime/indexes/`
 - generische MCP-HTTP-Anbindung fuer externe Dienste wie NetBox oder OpenStack
+- MCP-Discovery/Capability-Handshake fuer tokenlose und tokenbasierte HTTP-Dienste
 - CLI mit Rich-Ausgabe fuer Status, Konfiguration und Modulsteuerung
 - FastAPI-Control-Plane fuer spaetere Oberflaechen und Automatisierung
 - jeder lokale Modul-Dienst ist einzeln start-, stopp- und restartbar
@@ -138,6 +139,7 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh cli status
 ./harbor.sh cli module check docs-local
 ./harbor.sh cli module reindex docs-local
+./harbor.sh cli module discover netbox
 ./harbor.sh cli service check harbor
 ./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
@@ -251,6 +253,12 @@ woddi-harbor module call netbox health '{}'
 woddi-harbor module call netbox search '{"query":"router"}'
 ```
 
+Remote-MCP-Capabilities pruefen:
+
+```bash
+woddi-harbor module discover netbox
+```
+
 Lokale Suchindizes gezielt neu bauen:
 
 ```bash
@@ -281,6 +289,12 @@ Durchsucht lokale Mail-Verzeichnisse (`Maildir` oder einfache `.eml`-Sammlungen)
 ### `mcp_http`
 
 Spricht einen externen MCP- oder MCP-aehnlichen HTTP-Dienst an. Harbor behandelt diese Definitionen als verwaltbare Integrationen; Restart ist hier sinnvollerweise Sache des Ziel-Diensts selbst.
+
+Wichtig:
+
+- ein Token ist optional
+- Harbor versucht Discovery und Health sowohl fuer offene als auch fuer geschuetzte HTTP-Dienste
+- Discovery prueft mehrere gaengige Muster wie `/health`, `/capabilities`, `/.well-known/mcp` und `POST /execute`
 
 ## Namensvorschlag
 

@@ -32,6 +32,7 @@ from .config import (
 from .console import run_console
 from .control import create_app
 from .modules import (
+    discover_remote_module,
     execute_module,
     health_check_module,
     module_log_path,
@@ -398,6 +399,18 @@ def module_reindex(module_id: str) -> None:
     """Force rebuild a local search index."""
     result = execute_module(module_id, "reindex", {})
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Reindex"))
+
+
+@module_app.command("discover")
+def module_discover(module_id: str) -> None:
+    """Run remote capability discovery for an mcp_http module."""
+    module = find_module(module_id)
+    if module is None:
+        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
+    if module.type != "mcp_http":
+        raise typer.BadParameter("discover ist nur fuer mcp_http-Module sinnvoll.")
+    result = discover_remote_module(module)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Discovery"))
 
 
 @service_app.command("list")
