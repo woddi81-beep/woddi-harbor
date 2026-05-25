@@ -12,7 +12,16 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
 
-from .config import ModuleConfig, load_modules, load_settings, save_settings, save_system_prompt, system_prompt
+from .config import (
+    ModuleConfig,
+    load_modules,
+    load_service_profiles,
+    load_settings,
+    save_settings,
+    save_system_prompt,
+    system_prompt,
+    sync_service_profiles,
+)
 from .modules import (
     execute_module,
     module_log_path,
@@ -25,6 +34,7 @@ from .modules import (
     stop_module,
     upsert_module,
 )
+from .services import install_service, service_action
 
 
 class ModuleItem(ListItem):
@@ -182,6 +192,9 @@ class HarborTui(App[None]):
         Binding("l", "configure_llm", "LLM"),
         Binding("p", "edit_prompt", "Prompt"),
         Binding("v", "edit_server", "Server"),
+        Binding("u", "install_user_service", "Install Unit"),
+        Binding("e", "enable_service", "Enable"),
+        Binding("z", "service_status", "Service Status"),
     ]
 
     def __init__(self) -> None:
@@ -195,7 +208,7 @@ class HarborTui(App[None]):
                 yield Static("Service Deck", classes="section-title")
                 yield ListView(id="module-list")
                 yield Static(
-                    "a add  s start  x stop  d restart  c call\nl llm  p prompt  v server  g logs  q quit",
+                    "a add  s start  x stop  d restart  c call\nu install  e enable  z svc-status\nl llm  p prompt  v server  g logs  q quit",
                     id="actions",
                 )
             with Vertical(id="main"):
@@ -203,6 +216,7 @@ class HarborTui(App[None]):
                     yield Static(id="card-llm", classes="card")
                     yield Static(id="card-server", classes="card")
                     yield Static(id="card-prompt", classes="card")
+                    yield Static(id="card-services", classes="card")
                 yield Static(id="detail")
                 yield RichLog(id="event-log", highlight=True, markup=True)
         yield Footer()
@@ -212,10 +226,14 @@ class HarborTui(App[None]):
         self.sub_title = "Local AI control console"
         self.refresh_dashboard()
         self._log("TUI bereit. Module ueber [b]a[/b] anlegen oder LLM mit [b]l[/b] konfigurieren.")
+        settings = load_settings()
+        if not settings.onboarding_complete:
+            self.call_after_refresh(self.action_onboard)
 
     def refresh_dashboard(self) -> None:
         settings = load_settings()
         modules = load_modules()
+        profiles = sync_service_profiles()
 
         list_view = self.query_one("#module-list", ListView)
         list_view.clear()
@@ -235,6 +253,11 @@ class HarborTui(App[None]):
         )
         self.query_one("#card-prompt", Static).update(
             f"[b]Prompt[/b]\n{_truncate(system_prompt(settings), 120)}"
+        )
+        user_units = sum(1 for item in profiles if item.systemd_mode == "user")
+        system_units = sum(1 for item in profiles if item.systemd_mode == "system")
+        self.query_one("#card-services", Static).update(
+            f"[b]Services[/b]\nprofiles={len(profiles)}\nuser={user_units} system={system_units}"
         )
         self._render_detail()
 
@@ -343,6 +366,24 @@ class HarborTui(App[None]):
             self._save_prompt,
         )
 
+    def action_onboard(self) -> None:
+        settings = load_settings()
+        self.push_screen(
+            DictFormScreen(
+                "First-run onboarding",
+                [
+                    {"name": "base_url", "label": "LLM Base URL", "value": settings.llm.base_url or "http://127.0.0.1:8000/v1"},
+                    {"name": "model", "label": "Model", "value": settings.llm.model or ""},
+                    {"name": "api_key_env", "label": "API key env", "value": settings.llm.api_key_env or "HARBOR_LLM_API_KEY"},
+                    {"name": "docs_path", "label": "Docs path (optional)", "value": ""},
+                    {"name": "maildir_path", "label": "Maildir path (optional)", "value": ""},
+                    {"name": "mcp_base_url", "label": "MCP HTTP URL (optional)", "value": ""},
+                ],
+                submit_label="Finish",
+            ),
+            self._save_onboarding,
+        )
+
     def action_add_module(self) -> None:
         self.push_screen(
             DictFormScreen(
@@ -381,6 +422,31 @@ class HarborTui(App[None]):
             ),
             self._call_selected_module,
         )
+
+    def action_install_user_service(self) -> None:
+        profile_id = self._current_profile_id()
+        try:
+            result = install_service(profile_id, "user")
+            self.refresh_dashboard()
+            self._log(f"[green]User-Service installiert fuer {profile_id}.[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+        except Exception as exc:
+            self._log(f"[red]Service-Install fehlgeschlagen:[/red] {exc}")
+
+    def action_enable_service(self) -> None:
+        profile_id = self._current_profile_id()
+        try:
+            result = service_action(profile_id, "enable")
+            self._log(f"[green]Service enabled: {profile_id}[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+        except Exception as exc:
+            self._log(f"[red]Service enable fehlgeschlagen:[/red] {exc}")
+
+    def action_service_status(self) -> None:
+        profile_id = self._current_profile_id()
+        try:
+            result = service_action(profile_id, "status")
+            self._log(f"[b]Service status {profile_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+        except Exception as exc:
+            self._log(f"[red]Service status fehlgeschlagen:[/red] {exc}")
 
     def _run_selected_action(self, action: Any, verb: str) -> None:
         module_id = self.selected_module_id
@@ -427,6 +493,27 @@ class HarborTui(App[None]):
         save_system_prompt(values["prompt"])
         self.refresh_dashboard()
         self._log("[green]System Prompt gespeichert.[/green]")
+
+    def _save_onboarding(self, values: dict[str, str] | None) -> None:
+        if not values:
+            return
+        settings = load_settings()
+        settings.llm.base_url = values["base_url"].strip()
+        settings.llm.model = values["model"].strip()
+        settings.llm.api_key_env = values["api_key_env"].strip()
+        settings.onboarding_complete = True
+        save_settings(settings)
+        docs_path = values["docs_path"].strip()
+        maildir_path = values["maildir_path"].strip()
+        mcp_base_url = values["mcp_base_url"].strip()
+        if docs_path:
+            upsert_module(ModuleConfig(id="docs-local", type="docs", transport="local", path=docs_path, port=reserve_port()))
+        if maildir_path:
+            upsert_module(ModuleConfig(id="maildir-local", type="maildir", transport="local", path=maildir_path, port=reserve_port()))
+        if mcp_base_url:
+            upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
+        self.refresh_dashboard()
+        self._log("[green]Onboarding abgeschlossen.[/green]")
 
     def _save_module(self, values: dict[str, str] | None) -> None:
         if not values:
@@ -477,6 +564,11 @@ class HarborTui(App[None]):
 
     def _log(self, message: str) -> None:
         self.query_one("#event-log", RichLog).write(message)
+
+    def _current_profile_id(self) -> str:
+        if self.selected_module_id:
+            return f"module:{self.selected_module_id}"
+        return "harbor"
 
 
 def _truncate(text: str, limit: int) -> str:

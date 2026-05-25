@@ -7,6 +7,7 @@ __pycache__/
 config/harbor.local.json
 config/harbor.json
 config/modules.json
+config/services.json
 config/system_prompt.txt
 data/logs/
 data/runtime/

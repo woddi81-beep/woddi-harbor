@@ -61,8 +61,10 @@ Von dort aus kannst du schrittweise:
 - lokale Docs- und Mail-Module anlegen
 - MCP-HTTP-Dienste einbinden
 - Module starten, stoppen, restarten und testen
+- beim ersten Start ein gefuehrtes Onboarding durchlaufen
 - den System-Prompt anpassen
 - Host und Port aendern
+- systemd-Units fuer Harbor oder lokale Module vorbereiten
 
 Die neue TUI ist deutlich naeher an einem echten Operations-Deck:
 
@@ -83,6 +85,9 @@ Wichtige Tasten in der TUI:
 - `d` Modul restarten
 - `c` Modul aufrufen
 - `g` Logs ansehen
+- `u` User-systemd-Unit fuer aktuelles Ziel installieren
+- `e` systemd-Service aktivieren
+- `z` systemd-Status anzeigen
 - `Backspace` Modul entfernen
 - `r` Ansicht aktualisieren
 - `q` beenden
@@ -127,6 +132,7 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh bootstrap
 ./harbor.sh install
 ./harbor.sh console
+./harbor.sh cli onboard --llm-base-url http://<LLM-HOST>:<PORT>/v1 --llm-model <MODEL>
 ./harbor.sh cli status
 ./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
@@ -167,6 +173,34 @@ Danach wie gewohnt:
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
+
+## systemd
+
+Fuer produktionsnahen Betrieb auf `Ubuntu` oder `SLES` kann Harbor User- oder System-Units schreiben.
+
+Profiles ansehen:
+
+```bash
+woddi-harbor service list
+```
+
+Harbor als User-Service installieren:
+
+```bash
+woddi-harbor service install harbor --mode user
+woddi-harbor service run harbor enable
+woddi-harbor service run harbor start
+```
+
+Lokales Modul als User-Service installieren:
+
+```bash
+woddi-harbor service install module:docs-local --mode user
+woddi-harbor service run module:docs-local enable
+woddi-harbor service run module:docs-local start
+```
+
+Der gleiche Flow funktioniert mit `--mode system`, sofern du die noetigen Rechte hast.
 
 Chat:
 

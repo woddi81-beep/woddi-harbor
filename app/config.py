@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 
 ModuleType = Literal["docs", "maildir", "mcp_http"]
+ServiceKind = Literal["harbor", "module"]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
@@ -33,6 +34,7 @@ class HarborSettings:
     host: str = "127.0.0.1"
     port: int = 9680
     system_prompt_path: str = "config/system_prompt.txt"
+    onboarding_complete: bool = False
     llm: LlmSettings = field(default_factory=LlmSettings)
 
 
@@ -57,6 +59,24 @@ class ModuleConfig:
         return self.name or self.id
 
 
+@dataclass
+class ServiceProfile:
+    id: str
+    kind: ServiceKind
+    module_id: str = ""
+    enabled: bool = True
+    autostart: bool = False
+    systemd_mode: str = "none"
+    unit_name: str = ""
+
+    def resolved_unit_name(self) -> str:
+        if self.unit_name:
+            return self.unit_name
+        if self.kind == "harbor":
+            return "woddi-harbor"
+        return f"woddi-harbor-{self.module_id}"
+
+
 def ensure_layout() -> None:
     for directory in (CONFIG_DIR, DATA_DIR, LOG_DIR, RUNTIME_DIR, PID_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -64,6 +84,7 @@ def ensure_layout() -> None:
     harbor_file = CONFIG_DIR / "harbor.json"
     modules_file = CONFIG_DIR / "modules.json"
     prompt_file = CONFIG_DIR / "system_prompt.txt"
+    services_file = CONFIG_DIR / "services.json"
 
     if not harbor_file.exists():
         harbor_file.write_text(
@@ -79,6 +100,8 @@ def ensure_layout() -> None:
             "Wenn Daten fehlen, sage das klar.\n",
             encoding="utf-8",
         )
+    if not services_file.exists():
+        services_file.write_text('{\n  "profiles": []\n}\n', encoding="utf-8")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -106,6 +129,7 @@ def load_settings() -> HarborSettings:
         host=str(payload.get("host", "127.0.0.1")),
         port=int(payload.get("port", 9680)),
         system_prompt_path=str(payload.get("system_prompt_path", "config/system_prompt.txt")),
+        onboarding_complete=bool(payload.get("onboarding_complete", False)),
         llm=llm,
     )
 
@@ -144,6 +168,56 @@ def load_modules() -> list[ModuleConfig]:
 def save_modules(modules: list[ModuleConfig]) -> None:
     ensure_layout()
     _write_json(CONFIG_DIR / "modules.json", {"modules": [asdict(module) for module in modules]})
+    sync_service_profiles()
+
+
+def load_service_profiles() -> list[ServiceProfile]:
+    ensure_layout()
+    payload = _load_json(CONFIG_DIR / "services.json")
+    profiles: list[ServiceProfile] = []
+    for raw in payload.get("profiles", []):
+        profiles.append(
+            ServiceProfile(
+                id=str(raw["id"]),
+                kind=str(raw["kind"]),
+                module_id=str(raw.get("module_id", "")),
+                enabled=bool(raw.get("enabled", True)),
+                autostart=bool(raw.get("autostart", False)),
+                systemd_mode=str(raw.get("systemd_mode", "none")),
+                unit_name=str(raw.get("unit_name", "")),
+            )
+        )
+    return profiles
+
+
+def save_service_profiles(profiles: list[ServiceProfile]) -> None:
+    ensure_layout()
+    _write_json(CONFIG_DIR / "services.json", {"profiles": [asdict(profile) for profile in profiles]})
+
+
+def sync_service_profiles() -> list[ServiceProfile]:
+    profiles = {profile.id: profile for profile in load_service_profiles()}
+    if "harbor" not in profiles:
+        profiles["harbor"] = ServiceProfile(id="harbor", kind="harbor")
+    module_ids = {module.id for module in load_modules() if module.transport == "local"}
+    for module_id in module_ids:
+        profile_id = f"module:{module_id}"
+        if profile_id not in profiles:
+            profiles[profile_id] = ServiceProfile(id=profile_id, kind="module", module_id=module_id)
+    for profile_id in list(profiles):
+        profile = profiles[profile_id]
+        if profile.kind == "module" and profile.module_id not in module_ids:
+            del profiles[profile_id]
+    ordered = sorted(profiles.values(), key=lambda item: item.id)
+    save_service_profiles(ordered)
+    return ordered
+
+
+def find_service_profile(profile_id: str) -> ServiceProfile | None:
+    for profile in sync_service_profiles():
+        if profile.id == profile_id:
+            return profile
+    return None
 
 
 def system_prompt(settings: HarborSettings | None = None) -> str:

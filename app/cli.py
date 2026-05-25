@@ -13,7 +13,17 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import HarborSettings, ModuleConfig, ensure_layout, find_module, load_modules, load_settings, save_settings
+from .config import (
+    HarborSettings,
+    ModuleConfig,
+    ensure_layout,
+    find_module,
+    load_modules,
+    load_service_profiles,
+    load_settings,
+    save_settings,
+    sync_service_profiles,
+)
 from .console import run_console
 from .control import create_app
 from .modules import (
@@ -28,13 +38,16 @@ from .modules import (
     upsert_module,
     worker_execute,
 )
+from .services import install_service, service_action
 
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 module_app = typer.Typer(no_args_is_help=True)
 llm_app = typer.Typer(no_args_is_help=True)
+service_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
+app.add_typer(service_app, name="service")
 console = Console()
 
 
@@ -63,11 +76,59 @@ def _print_modules() -> None:
     console.print(table)
 
 
+def _print_services() -> None:
+    table = Table(title="Harbor Services")
+    table.add_column("Profile")
+    table.add_column("Kind")
+    table.add_column("Mode")
+    table.add_column("Unit")
+    table.add_column("Autostart")
+    for profile in sync_service_profiles():
+        table.add_row(
+            profile.id,
+            profile.kind,
+            profile.systemd_mode,
+            profile.resolved_unit_name(),
+            "yes" if profile.autostart else "no",
+        )
+    console.print(table)
+
+
 @app.command()
 def init() -> None:
     """Create default configuration and directories."""
     ensure_layout()
+    sync_service_profiles()
     console.print(Panel.fit("woddi-harbor initialisiert unter /srv/http/woddi-harbor", title="Ready"))
+
+
+@app.command()
+def onboard(
+    llm_base_url: str = typer.Option("", help="OpenAI-compatible /v1 base URL"),
+    llm_model: str = typer.Option("", help="Default model name"),
+    llm_api_key_env: str = typer.Option("HARBOR_LLM_API_KEY"),
+    docs_path: str = typer.Option("", help="Optional first docs path"),
+    maildir_path: str = typer.Option("", help="Optional first maildir path"),
+    mcp_base_url: str = typer.Option("", help="Optional first MCP HTTP URL"),
+) -> None:
+    """Guided first-run onboarding without the TUI."""
+    ensure_layout()
+    settings = load_settings()
+    if llm_base_url:
+        settings.llm.base_url = llm_base_url
+    if llm_model:
+        settings.llm.model = llm_model
+    settings.llm.api_key_env = llm_api_key_env
+    settings.onboarding_complete = True
+    save_settings(settings)
+    if docs_path:
+        upsert_module(ModuleConfig(id="docs-local", type="docs", transport="local", path=docs_path, port=reserve_port()))
+    if maildir_path:
+        upsert_module(ModuleConfig(id="maildir-local", type="maildir", transport="local", path=maildir_path, port=reserve_port()))
+    if mcp_base_url:
+        upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
+    sync_service_profiles()
+    console.print(Panel.fit("Onboarding gespeichert. Danach `./harbor.sh console` oder `woddi-harbor tui` starten.", title="Onboard"))
 
 
 @app.command("check-prerequisites")
@@ -97,6 +158,7 @@ def status() -> None:
         )
     )
     _print_modules()
+    _print_services()
 
 
 @app.command("console-ui")
@@ -277,6 +339,33 @@ def module_logs(module_id: str, lines: int = 50) -> None:
         raise typer.BadParameter(f"Kein Log fuer {module_id}: {log_path}")
     text = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     console.print(Panel("\n".join(text[-lines:]), title=f"Logs {module_id}"))
+
+
+@service_app.command("list")
+def service_list() -> None:
+    """List service profiles."""
+    sync_service_profiles()
+    _print_services()
+
+
+@service_app.command("install")
+def service_install(
+    profile_id: str = typer.Argument(..., help="harbor or module:<module-id>"),
+    mode: str = typer.Option("user", help="user or system"),
+) -> None:
+    """Install a systemd service unit."""
+    result = install_service(profile_id, mode)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Install"))
+
+
+@service_app.command("run")
+def service_run(
+    profile_id: str = typer.Argument(..., help="harbor or module:<module-id>"),
+    action: str = typer.Argument(..., help="start|stop|restart|enable|disable|status"),
+) -> None:
+    """Run a systemd action for an installed profile."""
+    result = service_action(profile_id, action)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Action"))
 
 
 @app.command(hidden=True)
