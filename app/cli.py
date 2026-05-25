@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import getpass
 import shutil
 import sys
 from dataclasses import replace
@@ -13,7 +14,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .auth import hash_password
 from .config import (
+    HarborUser,
     HarborSettings,
     ModuleConfig,
     ensure_layout,
@@ -21,6 +24,8 @@ from .config import (
     load_modules,
     load_service_profiles,
     load_settings,
+    load_users,
+    save_users,
     save_settings,
     sync_service_profiles,
 )
@@ -47,9 +52,11 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 module_app = typer.Typer(no_args_is_help=True)
 llm_app = typer.Typer(no_args_is_help=True)
 service_app = typer.Typer(no_args_is_help=True)
+user_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
 app.add_typer(service_app, name="service")
+app.add_typer(user_app, name="user")
 console = Console()
 
 
@@ -96,6 +103,16 @@ def _print_services() -> None:
     console.print(table)
 
 
+def _print_users() -> None:
+    table = Table(title="Harbor Users")
+    table.add_column("Username")
+    table.add_column("Role")
+    table.add_column("Enabled")
+    for user in load_users():
+        table.add_row(user.username, user.role, "yes" if user.enabled else "no")
+    console.print(table)
+
+
 @app.command()
 def init() -> None:
     """Create default configuration and directories."""
@@ -131,6 +148,23 @@ def onboard(
         upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
     sync_service_profiles()
     console.print(Panel.fit("Onboarding gespeichert. Danach `./harbor.sh console` oder `woddi-harbor tui` starten.", title="Onboard"))
+
+
+@app.command("init-admin")
+def init_admin(
+    username: str = typer.Option("admin"),
+    role: str = typer.Option("admin"),
+) -> None:
+    """Create the first local admin user."""
+    ensure_layout()
+    if load_users():
+        raise typer.BadParameter("Benutzer existieren bereits. Nutze `woddi-harbor user add`.")
+    password = getpass.getpass("Password: ")
+    password_confirm = getpass.getpass("Confirm Password: ")
+    if password != password_confirm:
+        raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+    save_users([HarborUser(username=username, password_hash=hash_password(password), role=role, enabled=True)])
+    console.print(Panel.fit(f"Initialer Benutzer angelegt: {username}", title="Auth"))
 
 
 @app.command("check-prerequisites")
@@ -393,6 +427,66 @@ def service_check(profile_id: str = typer.Argument(..., help="harbor or module:<
     """Check installed systemd state for a profile."""
     result = health_check_service(profile_id)
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Check"))
+
+
+@user_app.command("list")
+def user_list() -> None:
+    """List configured users."""
+    _print_users()
+
+
+@user_app.command("add")
+def user_add(
+    username: str,
+    role: str = typer.Option("viewer"),
+) -> None:
+    """Add a new local user."""
+    if role not in {"admin", "operator", "viewer"}:
+        raise typer.BadParameter("role muss admin, operator oder viewer sein.")
+    users = load_users()
+    if any(user.username == username for user in users):
+        raise typer.BadParameter(f"Benutzer existiert bereits: {username}")
+    password = getpass.getpass("Password: ")
+    password_confirm = getpass.getpass("Confirm Password: ")
+    if password != password_confirm:
+        raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+    users.append(HarborUser(username=username, password_hash=hash_password(password), role=role, enabled=True))
+    save_users(users)
+    console.print(Panel.fit(f"Benutzer angelegt: {username}", title="User"))
+
+
+@user_app.command("set-role")
+def user_set_role(username: str, role: str) -> None:
+    """Change a user's role."""
+    if role not in {"admin", "operator", "viewer"}:
+        raise typer.BadParameter("role muss admin, operator oder viewer sein.")
+    users = load_users()
+    changed = False
+    for user in users:
+        if user.username == username:
+            user.role = role
+            changed = True
+            break
+    if not changed:
+        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+    save_users(users)
+    console.print(Panel.fit(f"Rolle gesetzt: {username} -> {role}", title="User"))
+
+
+@user_app.command("disable")
+def user_disable(username: str) -> None:
+    """Disable a user account."""
+    users = load_users()
+    changed = False
+    for user in users:
+        if user.username == username:
+            user.enabled = False
+            changed = True
+            break
+    if not changed:
+        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+    save_users(users)
+    console.print(Panel.fit(f"Benutzer deaktiviert: {username}", title="User"))
 
 
 @app.command(hidden=True)

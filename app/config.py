@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 ModuleType = Literal["docs", "maildir", "mcp_http"]
 ServiceKind = Literal["harbor", "module"]
+UserRole = Literal["admin", "operator", "viewer"]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
@@ -77,6 +78,14 @@ class ServiceProfile:
         return f"woddi-harbor-{self.module_id}"
 
 
+@dataclass
+class HarborUser:
+    username: str
+    password_hash: str
+    role: UserRole = "viewer"
+    enabled: bool = True
+
+
 def ensure_layout() -> None:
     for directory in (CONFIG_DIR, DATA_DIR, LOG_DIR, RUNTIME_DIR, PID_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -85,6 +94,7 @@ def ensure_layout() -> None:
     modules_file = CONFIG_DIR / "modules.json"
     prompt_file = CONFIG_DIR / "system_prompt.txt"
     services_file = CONFIG_DIR / "services.json"
+    users_file = CONFIG_DIR / "users.json"
 
     if not harbor_file.exists():
         harbor_file.write_text(
@@ -102,6 +112,8 @@ def ensure_layout() -> None:
         )
     if not services_file.exists():
         services_file.write_text('{\n  "profiles": []\n}\n', encoding="utf-8")
+    if not users_file.exists():
+        users_file.write_text('{\n  "users": []\n}\n', encoding="utf-8")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -217,6 +229,35 @@ def find_service_profile(profile_id: str) -> ServiceProfile | None:
     for profile in sync_service_profiles():
         if profile.id == profile_id:
             return profile
+    return None
+
+
+def load_users() -> list[HarborUser]:
+    ensure_layout()
+    payload = _load_json(CONFIG_DIR / "users.json")
+    users: list[HarborUser] = []
+    for raw in payload.get("users", []):
+        users.append(
+            HarborUser(
+                username=str(raw["username"]),
+                password_hash=str(raw["password_hash"]),
+                role=str(raw.get("role", "viewer")),
+                enabled=bool(raw.get("enabled", True)),
+            )
+        )
+    return users
+
+
+def save_users(users: list[HarborUser]) -> None:
+    ensure_layout()
+    _write_json(CONFIG_DIR / "users.json", {"users": [asdict(user) for user in users]})
+
+
+def find_user(username: str) -> HarborUser | None:
+    normalized = username.strip()
+    for user in load_users():
+        if user.username == normalized:
+            return user
     return None
 
 

@@ -132,6 +132,7 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh bootstrap
 ./harbor.sh install
 ./harbor.sh console
+./harbor.sh cli init-admin --username admin
 ./harbor.sh cli onboard --llm-base-url http://<LLM-HOST>:<PORT>/v1 --llm-model <MODEL>
 ./harbor.sh cli status
 ./harbor.sh cli module check docs-local
@@ -202,6 +203,38 @@ woddi-harbor service check module:docs-local
 ```
 
 Der gleiche Flow funktioniert mit `--mode system`, sofern du die noetigen Rechte hast.
+
+## Auth
+
+Die HTTP-Control-Plane kann mit lokalen Benutzern und Rollen abgesichert werden:
+
+- `admin`
+- `operator`
+- `viewer`
+
+Initialen Admin anlegen:
+
+```bash
+woddi-harbor init-admin --username admin
+```
+
+Weitere Benutzer verwalten:
+
+```bash
+woddi-harbor user list
+woddi-harbor user add alice --role operator
+woddi-harbor user set-role alice admin
+woddi-harbor user disable alice
+```
+
+Sobald mindestens ein Benutzer existiert, erwarten die API-Endpunkte HTTP Basic Auth.
+
+Beispiel:
+
+```bash
+curl -u admin:SECRET http://127.0.0.1:9680/api/modules
+curl -u admin:SECRET -X POST http://127.0.0.1:9680/api/modules/docs-local/start
+```
 
 Chat:
 

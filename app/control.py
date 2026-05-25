@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from .auth import require_role
 from .config import HarborSettings, find_module, load_modules, load_settings, system_prompt
 from .llm import complete_chat
 from .modules import execute_module, module_status, restart_module, start_module, stop_module
@@ -75,39 +76,39 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/modules")
-    def modules() -> dict[str, Any]:
+    def modules(_user= require_role("viewer")) -> dict[str, Any]:
         return {"modules": [module_status(module) for module in load_modules()]}
 
     @app.post("/api/modules/{module_id}/start")
-    def module_start(module_id: str) -> dict[str, Any]:
+    def module_start(module_id: str, _user=require_role("operator")) -> dict[str, Any]:
         try:
             return start_module(module_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/modules/{module_id}/stop")
-    def module_stop(module_id: str) -> dict[str, Any]:
+    def module_stop(module_id: str, _user=require_role("operator")) -> dict[str, Any]:
         try:
             return stop_module(module_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/modules/{module_id}/restart")
-    def module_restart(module_id: str) -> dict[str, Any]:
+    def module_restart(module_id: str, _user=require_role("operator")) -> dict[str, Any]:
         try:
             return restart_module(module_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/modules/{module_id}/execute")
-    def module_execute(module_id: str, body: ExecuteRequest) -> dict[str, Any]:
+    def module_execute(module_id: str, body: ExecuteRequest, _user=require_role("operator")) -> dict[str, Any]:
         try:
             return execute_module(module_id, body.action, body.payload)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/chat")
-    def chat(body: ChatRequest) -> dict[str, Any]:
+    def chat(body: ChatRequest, _user=require_role("viewer")) -> dict[str, Any]:
         settings = load_settings()
         messages, used_modules = _build_messages(settings, body.message, body.modules)
         try:
@@ -121,7 +122,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "reply": content, "used_modules": used_modules, "raw": response}
 
     @app.get("/api/modules/{module_id}")
-    def module_get(module_id: str) -> dict[str, Any]:
+    def module_get(module_id: str, _user=require_role("viewer")) -> dict[str, Any]:
         module = find_module(module_id)
         if module is None:
             raise HTTPException(status_code=404, detail="Modul nicht gefunden.")
