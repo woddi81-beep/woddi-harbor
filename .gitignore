@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+config/harbor.local.json
+data/logs/
+data/runtime/
