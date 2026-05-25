@@ -15,6 +15,7 @@ Der Name passt bewusst zum Zielbild:
 - externes OpenAI-kompatibles LLM (`/v1/chat/completions`)
 - lokale Dokumentensuche als eigener Modul-Prozess
 - lokale Maildir-Suche als eigener Modul-Prozess
+- persistente Suchindizes fuer Docs und Maildir unter `data/runtime/indexes/`
 - generische MCP-HTTP-Anbindung fuer externe Dienste wie NetBox oder OpenStack
 - CLI mit Rich-Ausgabe fuer Status, Konfiguration und Modulsteuerung
 - FastAPI-Control-Plane fuer spaetere Oberflaechen und Automatisierung
@@ -136,6 +137,7 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh cli onboard --llm-base-url http://<LLM-HOST>:<PORT>/v1 --llm-model <MODEL>
 ./harbor.sh cli status
 ./harbor.sh cli module check docs-local
+./harbor.sh cli module reindex docs-local
 ./harbor.sh cli service check harbor
 ./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
@@ -247,6 +249,13 @@ Direkter MCP-Aufruf:
 ```bash
 woddi-harbor module call netbox health '{}'
 woddi-harbor module call netbox search '{"query":"router"}'
+```
+
+Lokale Suchindizes gezielt neu bauen:
+
+```bash
+woddi-harbor module reindex docs-local
+woddi-harbor module reindex maildir-local
 ```
 
 ## API

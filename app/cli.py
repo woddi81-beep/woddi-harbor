@@ -393,6 +393,13 @@ def module_check(module_id: str) -> None:
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Check"))
 
 
+@module_app.command("reindex")
+def module_reindex(module_id: str) -> None:
+    """Force rebuild a local search index."""
+    result = execute_module(module_id, "reindex", {})
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Reindex"))
+
+
 @service_app.command("list")
 def service_list() -> None:
     """List service profiles."""

@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import BASE_DIR, LOG_DIR, PID_DIR, ModuleConfig, find_module, load_modules, module_secret
-from .search import collect_mail_documents, collect_text_documents, score_documents
+from .config import BASE_DIR, LOG_DIR, PID_DIR, RUNTIME_DIR, ModuleConfig, find_module, load_modules, module_secret
+from .search import ensure_index, load_index, search_index
 
 
 def module_url(module: ModuleConfig) -> str:
@@ -28,6 +28,10 @@ def module_pid_path(module_id: str) -> Path:
 
 def module_log_path(module_id: str) -> Path:
     return LOG_DIR / f"{module_id}.log"
+
+
+def module_index_path(module_id: str) -> Path:
+    return RUNTIME_DIR / "indexes" / f"{module_id}.json"
 
 
 def reserve_port() -> int:
@@ -151,6 +155,7 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         "host": module.host,
         "port": module.port,
         "health": health,
+        "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
     }
 
 
@@ -166,6 +171,13 @@ def health_check_module(module_id: str) -> dict[str, Any]:
         "validation_errors": errors,
         "status": status,
     }
+    if module.type in {"docs", "maildir"}:
+        index = load_index(module_index_path(module.id))
+        payload["index"] = {
+            "exists": index is not None,
+            "built_at": index.built_at if index else "",
+            "document_count": index.document_count if index else 0,
+        }
     if module.type == "mcp_http" and not errors:
         headers: dict[str, str] = {}
         secret = module_secret(module)
@@ -285,6 +297,7 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
 
 
 def worker_health(module: ModuleConfig) -> dict[str, Any]:
+    index = load_index(module_index_path(module.id)) if module.type in {"docs", "maildir"} else None
     return {
         "module_id": module.id,
         "name": module.display_name(),
@@ -292,6 +305,9 @@ def worker_health(module: ModuleConfig) -> dict[str, Any]:
         "path": module.path,
         "transport": module.transport,
         "port": module.port,
+        "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
+        "index_built_at": index.built_at if index else "",
+        "index_document_count": index.document_count if index else 0,
     }
 
 
@@ -299,22 +315,90 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
     root = Path(module.path).expanduser()
     top_k = int(payload.get("top_k", module.top_k))
     if module.type == "docs":
+        index_path = module_index_path(module.id)
         if action == "health":
             return {"ok": True, "data": worker_health(module)}
+        if action == "stats":
+            index, rebuilt = ensure_index("docs", root, index_path)
+            return {
+                "ok": True,
+                "data": {
+                    "rebuilt": rebuilt,
+                    "built_at": index.built_at,
+                    "document_count": index.document_count,
+                    "inventory_count": index.inventory_count,
+                    "index_path": str(index_path),
+                },
+            }
+        if action == "reindex":
+            index, _rebuilt = ensure_index("docs", root, index_path, force_rebuild=True)
+            return {
+                "ok": True,
+                "data": {
+                    "rebuilt": True,
+                    "built_at": index.built_at,
+                    "document_count": index.document_count,
+                    "inventory_count": index.inventory_count,
+                    "index_path": str(index_path),
+                },
+            }
         if action == "search":
             query = str(payload.get("query", "")).strip()
-            docs = collect_text_documents(root)
-            hits = score_documents(docs, query, top_k)
-            return {"ok": True, "data": {"query": query, "hits": [asdict(hit) for hit in hits], "documents": len(docs)}}
+            index, rebuilt = ensure_index("docs", root, index_path)
+            hits = search_index(index, query, top_k)
+            return {
+                "ok": True,
+                "data": {
+                    "query": query,
+                    "hits": [asdict(hit) for hit in hits],
+                    "documents": index.document_count,
+                    "rebuilt": rebuilt,
+                    "index_built_at": index.built_at,
+                },
+            }
         raise ValueError(f"Aktion fuer docs nicht bekannt: {action}")
     if module.type == "maildir":
+        index_path = module_index_path(module.id)
         if action == "health":
             return {"ok": True, "data": worker_health(module)}
+        if action == "stats":
+            index, rebuilt = ensure_index("maildir", root, index_path)
+            return {
+                "ok": True,
+                "data": {
+                    "rebuilt": rebuilt,
+                    "built_at": index.built_at,
+                    "document_count": index.document_count,
+                    "inventory_count": index.inventory_count,
+                    "index_path": str(index_path),
+                },
+            }
+        if action == "reindex":
+            index, _rebuilt = ensure_index("maildir", root, index_path, force_rebuild=True)
+            return {
+                "ok": True,
+                "data": {
+                    "rebuilt": True,
+                    "built_at": index.built_at,
+                    "document_count": index.document_count,
+                    "inventory_count": index.inventory_count,
+                    "index_path": str(index_path),
+                },
+            }
         if action == "search":
             query = str(payload.get("query", "")).strip()
-            docs = collect_mail_documents(root)
-            hits = score_documents(docs, query, top_k)
-            return {"ok": True, "data": {"query": query, "hits": [asdict(hit) for hit in hits], "messages": len(docs)}}
+            index, rebuilt = ensure_index("maildir", root, index_path)
+            hits = search_index(index, query, top_k)
+            return {
+                "ok": True,
+                "data": {
+                    "query": query,
+                    "hits": [asdict(hit) for hit in hits],
+                    "messages": index.document_count,
+                    "rebuilt": rebuilt,
+                    "index_built_at": index.built_at,
+                },
+            }
         raise ValueError(f"Aktion fuer maildir nicht bekannt: {action}")
     raise ValueError(f"Worker-Typ nicht unterstuetzt: {module.type}")
 
