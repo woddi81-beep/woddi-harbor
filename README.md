@@ -53,7 +53,7 @@ Das Skript erledigt:
 - Erzeugung der virtuellen Umgebung
 - Installation in die venv
 - Initialisierung der Harbor-Konfiguration
-- Start der interaktiven Harbor-Konsole
+- Start der Harbor-TUI mit Fallback auf die einfache Konsole
 
 Von dort aus kannst du schrittweise:
 
@@ -63,6 +63,29 @@ Von dort aus kannst du schrittweise:
 - Module starten, stoppen, restarten und testen
 - den System-Prompt anpassen
 - Host und Port aendern
+
+Die neue TUI ist deutlich naeher an einem echten Operations-Deck:
+
+- linke Navigationsspalte fuer Module und Services
+- Karten fuer LLM, Server und Prompt
+- Detailpaneel fuer das aktuell ausgewaehlte Modul
+- Event-Log im unteren Bereich
+- Hotkeys fuer die haeufigen Aktionen
+
+Wichtige Tasten in der TUI:
+
+- `a` Modul anlegen
+- `l` LLM konfigurieren
+- `p` Prompt aendern
+- `v` Server host/port aendern
+- `s` Modul starten
+- `x` Modul stoppen
+- `d` Modul restarten
+- `c` Modul aufrufen
+- `g` Logs ansehen
+- `Backspace` Modul entfernen
+- `r` Ansicht aktualisieren
+- `q` beenden
 
 Wenn du stattdessen direkt nur die API starten willst:
 

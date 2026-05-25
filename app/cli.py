@@ -107,6 +107,15 @@ def console_ui() -> None:
 
 
 @app.command()
+def tui() -> None:
+    """Open the richer Harbor terminal UI."""
+    ensure_layout()
+    from .tui import run_tui
+
+    run_tui()
+
+
+@app.command()
 def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
     """Run the Harbor control API."""
     settings = load_settings()

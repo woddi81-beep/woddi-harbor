@@ -42,7 +42,7 @@ Commands:
   install             Create venv and install woddi-harbor into it
   init                Initialize Harbor config/layout
   start               Ensure install, init if needed, then start API
-  console             Open the interactive Harbor control console
+  console             Open the richer Harbor TUI, fallback to the simple console
   cli [args...]       Run woddi-harbor CLI inside the venv
   activate-hint       Print the correct activation command for the current shell
   help                Show this help
@@ -153,6 +153,10 @@ case "$cmd" in
   console)
     install_project
     "$VENV_DIR/bin/woddi-harbor" init >/dev/null
+    if "$VENV_DIR/bin/woddi-harbor" tui; then
+      exit 0
+    fi
+    log "TUI konnte nicht gestartet werden, wechsle auf einfache Konsole"
     exec "$VENV_DIR/bin/woddi-harbor" console-ui
     ;;
   cli)
