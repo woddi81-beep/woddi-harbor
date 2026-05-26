@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -14,7 +15,18 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import BASE_DIR, LOG_DIR, PID_DIR, RUNTIME_DIR, ModuleConfig, find_module, load_modules, module_secret, module_sources
+from .config import (
+    BASE_DIR,
+    LOG_DIR,
+    PID_DIR,
+    RUNTIME_DIR,
+    ModuleConfig,
+    find_module,
+    load_modules,
+    module_secret,
+    module_sources,
+    resolve_module_source_path,
+)
 from .search import ensure_index, load_index, search_index
 
 
@@ -51,6 +63,115 @@ def reserve_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _worker_python_executable() -> str:
+    executable = sys.executable.strip()
+    if executable and Path(executable).exists():
+        return executable
+    for candidate in ("python3", "python"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise RuntimeError("Kein Python-Interpreter gefunden. Erwarte sys.executable oder python3 im PATH.")
+
+
+def _append_module_log(module_id: str, message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    with module_log_path(module_id).open("a", encoding="utf-8", buffering=1) as handle:
+        handle.write(f"[{timestamp}] {message}\n")
+
+
+def _read_module_log_tail(module_id: str, *, lines: int = 20) -> str:
+    log_path = module_log_path(module_id)
+    if not log_path.exists():
+        return ""
+    content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(content[-lines:])
+
+
+def _port_bindable(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+
+
+def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> bool:
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{module_url(module)}/health")
+        if response.status_code != 200:
+            return False
+        payload = response.json()
+        return str(payload.get("module_id", "")) == module.id
+    except Exception:
+        return False
+
+
+def _ensure_startable_port(module: ModuleConfig) -> ModuleConfig:
+    if module.port <= 0 or module.port > 65535:
+        module.port = reserve_port()
+        upsert_module(module)
+        _append_module_log(module.id, f"Neuen Port reserviert: {module.port}")
+        return module
+    if _module_health_reachable(module, timeout=0.5):
+        return module
+    if _port_bindable(module.host, module.port):
+        return module
+    previous_port = module.port
+    module.port = reserve_port()
+    upsert_module(module)
+    _append_module_log(module.id, f"Port {previous_port} war belegt. Neuer Port: {module.port}")
+    return module
+
+
+def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
+    python_executable = _worker_python_executable()
+    log_path = module_log_path(module.id)
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
+    with log_path.open("a", encoding="utf-8", buffering=1) as handle:
+        return subprocess.Popen(
+            [
+                python_executable,
+                "-m",
+                "app.cli",
+                "worker",
+                module.id,
+            ],
+            cwd=str(BASE_DIR),
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=env,
+            text=True,
+        )
+
+
+def _cleanup_failed_start(module_id: str, process: subprocess.Popen[str] | None = None) -> None:
+    if process is not None and process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    module_pid_path(module_id).unlink(missing_ok=True)
+
+
+def _wait_for_worker_start(process: subprocess.Popen[str], module: ModuleConfig, *, timeout_seconds: float = 6.0) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _module_health_reachable(module, timeout=0.5):
+            return True, ""
+        returncode = process.poll()
+        if returncode is not None:
+            return False, f"Worker-Prozess wurde vorzeitig beendet (Exit-Code {returncode})."
+        time.sleep(0.2)
+    return False, f"Health-Check fuer {module.host}:{module.port} hat nicht innerhalb von {timeout_seconds:.1f}s geantwortet."
+
+
 def validate_module_config(module: ModuleConfig) -> list[str]:
     errors: list[str] = []
     if not module.id.strip():
@@ -73,7 +194,7 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
             if source.id in seen_source_ids:
                 errors.append(f"Doppelte Quellen-ID: {source.id}")
             seen_source_ids.add(source.id)
-            root = Path(source.path).expanduser()
+            root = resolve_module_source_path(source)
             if not source.path.strip():
                 errors.append(f"Pfad fehlt fuer Quelle {source.id}.")
             elif not root.exists():
@@ -153,16 +274,18 @@ def read_module_pid(module_id: str) -> int | None:
 
 def module_status(module: ModuleConfig) -> dict[str, Any]:
     pid = read_module_pid(module.id)
-    running = pid is not None
     health: dict[str, Any] | None = None
-    if running:
+    if module.transport == "local" and module.port > 0:
         try:
             with httpx.Client(timeout=2.5) as client:
                 response = client.get(f"{module_url(module)}/health")
                 response.raise_for_status()
-                health = response.json()
+                payload = response.json()
+                if str(payload.get("module_id", "")) == module.id:
+                    health = payload
         except Exception:
             health = None
+    running = pid is not None or health is not None
     sources = module_sources(module, enabled_only=False)
     return {
         "id": module.id,
@@ -370,35 +493,37 @@ def start_module(module_id: str) -> dict[str, Any]:
         return {"ok": True, "message": "Remote-Modul hat keinen lokalen Prozess.", "status": module_status(module)}
     if read_module_pid(module_id) is not None:
         return {"ok": True, "message": "Modul laeuft bereits.", "status": module_status(module)}
-    if not module.port:
-        module.port = reserve_port()
-        upsert_module(module)
-
-    log_path = module_log_path(module_id)
-    with log_path.open("a", encoding="utf-8") as handle:
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "app.cli",
-                "worker",
-                module.id,
-            ],
-            cwd=str(BASE_DIR),
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    if _module_health_reachable(module, timeout=0.5):
+        _append_module_log(module.id, "Health-Endpoint antwortet bereits, aber die PID-Datei fehlt.")
+        return {
+            "ok": True,
+            "message": "Modul antwortet bereits, aber die PID-Datei fehlt.",
+            "status": module_status(module),
+        }
+    module = _ensure_startable_port(module)
+    validate_or_raise(module)
+    try:
+        process = _spawn_worker(module)
+    except Exception as exc:
+        _append_module_log(module.id, f"Worker-Start fehlgeschlagen: {exc}")
+        return {
+            "ok": False,
+            "message": f"Worker konnte nicht gestartet werden: {exc}",
+            "status": module_status(module),
+            "log_tail": _read_module_log_tail(module.id),
+        }
     module_pid_path(module_id).write_text(f"{process.pid}\n", encoding="utf-8")
-    for _ in range(20):
-        time.sleep(0.2)
-        try:
-            with httpx.Client(timeout=1.0) as client:
-                response = client.get(f"{module_url(module)}/health")
-            if response.status_code == 200:
-                break
-        except Exception:
-            continue
+    started, detail = _wait_for_worker_start(process, module)
+    if not started:
+        _append_module_log(module.id, detail)
+        _cleanup_failed_start(module.id, process)
+        return {
+            "ok": False,
+            "message": detail,
+            "status": module_status(module),
+            "log_tail": _read_module_log_tail(module.id),
+        }
+    _append_module_log(module.id, f"Worker ist erreichbar auf {module.host}:{module.port} (PID {process.pid})")
     return {"ok": True, "message": "Modul gestartet.", "status": module_status(module)}
 
 
@@ -470,7 +595,7 @@ def worker_health(module: ModuleConfig) -> dict[str, Any]:
 
 def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -> dict[str, Any]:
     roots = [
-        (source.id, source.display_name(), Path(source.path).expanduser())
+        (source.id, source.display_name(), resolve_module_source_path(source))
         for source in module_sources(module)
     ]
     top_k = int(payload.get("top_k", module.top_k))

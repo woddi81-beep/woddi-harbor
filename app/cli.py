@@ -9,7 +9,7 @@ from typing import Optional
 
 import typer
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -526,7 +526,7 @@ def worker(module_id: str) -> None:
         action = str(body.get("action", "")).strip()
         payload = body.get("payload") or {}
         if not isinstance(payload, dict):
-            raise typer.BadParameter("payload muss ein JSON-Objekt sein.")
+            raise HTTPException(status_code=400, detail="payload muss ein JSON-Objekt sein.")
         return worker_execute(module, action, payload)
 
     uvicorn.run(api, host=module.host, port=module.port, log_level="warning")

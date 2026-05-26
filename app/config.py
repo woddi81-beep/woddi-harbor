@@ -143,6 +143,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def resolve_path(raw_path: str, *, base_dir: Path | None = None) -> Path:
+    path = Path(raw_path.strip()).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    root = base_dir or BASE_DIR
+    return (root / path).resolve()
+
+
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
@@ -322,7 +330,7 @@ def find_user(username: str) -> HarborUser | None:
 
 def system_prompt(settings: HarborSettings | None = None) -> str:
     current = settings or load_settings()
-    prompt_path = BASE_DIR / current.system_prompt_path
+    prompt_path = resolve_path(current.system_prompt_path)
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8", errors="replace").strip()
     return "Du bist Harbor."
@@ -330,7 +338,7 @@ def system_prompt(settings: HarborSettings | None = None) -> str:
 
 def save_system_prompt(text: str, settings: HarborSettings | None = None) -> Path:
     current = settings or load_settings()
-    prompt_path = BASE_DIR / current.system_prompt_path
+    prompt_path = resolve_path(current.system_prompt_path)
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(text.strip() + "\n", encoding="utf-8")
     return prompt_path
@@ -364,3 +372,7 @@ def module_sources(module: ModuleConfig, *, enabled_only: bool = True) -> list[M
     if enabled_only:
         return [source for source in sources if source.enabled]
     return sources
+
+
+def resolve_module_source_path(source: ModuleSource) -> Path:
+    return resolve_path(source.path)
