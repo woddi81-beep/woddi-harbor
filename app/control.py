@@ -697,10 +697,7 @@ def create_app() -> FastAPI:
             response = complete_chat(settings, messages)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        content = ""
-        choices = response.get("choices") or []
-        if choices:
-            content = str(choices[0].get("message", {}).get("content", ""))
+        content = response.get("message", {}).get("content", "") or ""
         return {"ok": True, "reply": content, "used_modules": used_modules, "raw": response}
 
     @app.get("/api/modules/{module_id}")
