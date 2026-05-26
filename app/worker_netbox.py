@@ -1,26 +1,67 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 
+from fastapi import FastAPI
 import uvicorn
 
 from .config import find_module
 from .mcp.netbox import create_app
 
 
-def run_worker(module_id: str, port: int) -> None:
-    module = find_module(module_id)
-    if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+def _netbox_credentials() -> tuple[str, str]:
     netbox_url = os.getenv("NETBOX_URL", "").strip()
     netbox_token = os.getenv("NETBOX_TOKEN", "").strip()
     if not netbox_url:
         raise ValueError("NETBOX_URL fehlt.")
     if not netbox_token:
         raise ValueError("NETBOX_TOKEN fehlt.")
-    api = create_app(netbox_url=netbox_url, netbox_token=netbox_token)
-    uvicorn.run(api, host=module.host, port=port, log_level="warning")
+    return netbox_url, netbox_token
+
+
+def create_worker_app(module_id: str) -> FastAPI:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Modul nicht gefunden: {module_id}")
+
+    netbox_url, netbox_token = _netbox_credentials()
+    return create_app(netbox_url=netbox_url, netbox_token=netbox_token)
+
+
+def _install_signal_handlers(server: uvicorn.Server) -> dict[int, signal.Handlers]:
+    previous_handlers: dict[int, signal.Handlers] = {}
+
+    def _request_shutdown(signum: int, _frame: object) -> None:
+        server.should_exit = True
+        if signum == signal.SIGINT:
+            server.force_exit = True
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, _request_shutdown)
+    return previous_handlers
+
+
+def _restore_signal_handlers(previous_handlers: dict[int, signal.Handlers]) -> None:
+    for signum, handler in previous_handlers.items():
+        signal.signal(signum, handler)
+
+
+def run_worker(module_id: str, port: int) -> None:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Modul nicht gefunden: {module_id}")
+
+    api = create_worker_app(module_id)
+    config = uvicorn.Config(api, host=module.host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    previous_handlers = _install_signal_handlers(server)
+    try:
+        server.run()
+    finally:
+        _restore_signal_handlers(previous_handlers)
 
 
 def main() -> None:
