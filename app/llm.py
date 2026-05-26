@@ -23,6 +23,7 @@ def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> d
         "stream": False,
     }
     with httpx.Client(timeout=settings.llm.timeout_seconds) as client:
-        response = client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+        endpoint = "/api/chat" if "11434" in base_url else "/chat/completions"
+        response = client.post(f"{base_url}{endpoint}", headers=headers, json=payload)
         response.raise_for_status()
         return response.json()
