@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import html
 import json
+import os
+import time
+from collections import deque
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_role
-from .config import HarborSettings, find_module, load_modules, load_settings, system_prompt
+from .config import HarborSettings, LOG_DIR, find_module, load_modules, load_settings, system_prompt
 from .llm import complete_chat
 from .modules import execute_module, list_module_overview, module_status, restart_module, start_module, stop_module
+
+
+APP_STARTED_AT = time.time()
+RECENT_ACTIVITY: deque[dict[str, Any]] = deque(maxlen=25)
+DEFAULT_LOG_PATH = Path("~/.harbor/logs/harbor.log").expanduser()
 
 
 class ExecuteRequest(BaseModel):
@@ -23,6 +33,103 @@ class ExecuteRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
     modules: list[str] | None = None
+
+
+def _record_activity(kind: str, label: str, detail: str = "") -> None:
+    RECENT_ACTIVITY.appendleft(
+        {
+            "kind": kind,
+            "label": label,
+            "detail": detail,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+        }
+    )
+
+
+def _llm_health(settings: HarborSettings) -> dict[str, Any]:
+    if not settings.llm.base_url or not settings.llm.model:
+        return {"connected": False, "status": "unconfigured", "detail": "LLM ist nicht konfiguriert."}
+    headers = {"Content-Type": "application/json"}
+    if settings.llm.api_key:
+        headers["Authorization"] = f"Bearer {settings.llm.api_key}"
+    elif settings.llm.api_key_env:
+        secret = os.getenv(settings.llm.api_key_env, "").strip()
+        if secret:
+            headers["Authorization"] = f"Bearer {secret}"
+    base_url = settings.llm.base_url.rstrip("/")
+    try:
+        with httpx.Client(timeout=min(settings.llm.timeout_seconds, 4.0)) as client:
+            response = client.get(f"{base_url}/models", headers=headers)
+            response.raise_for_status()
+        return {
+            "connected": True,
+            "status": "connected",
+            "detail": f"{settings.llm.model} via {base_url}",
+        }
+    except Exception as exc:
+        return {
+            "connected": False,
+            "status": "error",
+            "detail": str(exc),
+        }
+
+
+def _system_stats() -> dict[str, Any]:
+    uptime_seconds = max(0, int(time.time() - APP_STARTED_AT))
+    memory_mb = 0.0
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    memory_kb = int(line.split()[1])
+                    memory_mb = round(memory_kb / 1024, 1)
+                    break
+    except Exception:
+        memory_mb = 0.0
+    cpu_load = None
+    try:
+        cpu_load = round(os.getloadavg()[0], 2)
+    except Exception:
+        cpu_load = None
+    return {
+        "cpu_load_1m": cpu_load,
+        "memory_mb": memory_mb,
+        "uptime_seconds": uptime_seconds,
+    }
+
+
+def _dashboard_payload() -> dict[str, Any]:
+    settings = load_settings()
+    modules = list_module_overview()
+    llm = _llm_health(settings)
+    active_modules = [module for module in modules if module["running"]]
+    invalid_modules = [module for module in modules if module["validation_errors"]]
+    return {
+        "app": {
+            "name": settings.name,
+            "host": settings.host,
+            "port": settings.port,
+        },
+        "llm": llm,
+        "modules": {
+            "total": len(modules),
+            "active": len(active_modules),
+            "enabled": len([module for module in modules if module["enabled"]]),
+            "invalid": len(invalid_modules),
+            "items": modules,
+        },
+        "activity": list(RECENT_ACTIVITY),
+        "stats": _system_stats(),
+    }
+
+
+def _read_harbor_log() -> dict[str, Any]:
+    candidates = [DEFAULT_LOG_PATH, LOG_DIR / "harbor.log"]
+    for path in candidates:
+        if path.exists():
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            return {"path": str(path), "content": "\n".join(lines[-200:])}
+    return {"path": str(DEFAULT_LOG_PATH), "content": "Logdatei nicht gefunden."}
 
 
 def _chat_page_html(settings: HarborSettings) -> str:

@@ -1,5 +1,6 @@
 #!/bin/bash
-cd /srv/http/woddi-harbor
+cd "$(dirname "$0")"
+
 LOGDIR="$HOME/.harbor/logs"
 mkdir -p "$LOGDIR"
 LOGFILE="$LOGDIR/harbor.log"
