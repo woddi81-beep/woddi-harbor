@@ -213,8 +213,7 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
             [
                 python_executable,
                 "-m",
-                "app.cli",
-                "worker",
+                "app.worker",
                 module.id,
             ],
             cwd=str(BASE_DIR),

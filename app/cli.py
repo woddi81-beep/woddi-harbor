@@ -9,7 +9,7 @@ from typing import Optional
 
 import typer
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -48,9 +48,9 @@ from .modules import (
     upsert_module,
     validate_module_config,
     validation_errors_by_module,
-    worker_execute,
 )
 from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
+from .worker import run_worker
 
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -662,24 +662,10 @@ def user_disable(username: str) -> None:
 @app.command(hidden=True)
 def worker(module_id: str) -> None:
     """Run a single local module worker."""
-    module = find_module(module_id)
-    if module is None:
-        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
-    api = FastAPI(title=f"Harbor Worker {module_id}")
-
-    @api.get("/health")
-    def health() -> dict:
-        return module_status(module)
-
-    @api.post("/execute")
-    def execute(body: dict) -> dict:
-        action = str(body.get("action", "")).strip()
-        payload = body.get("payload") or {}
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="payload muss ein JSON-Objekt sein.")
-        return worker_execute(module, action, payload)
-
-    uvicorn.run(api, host=module.host, port=module.port, log_level="warning")
+    try:
+        run_worker(module_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def main() -> None:

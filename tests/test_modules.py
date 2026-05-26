@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import ModuleConfig
 from app import cli
 from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module
+from app.worker import create_worker_app
 
 
 class FakeResponse:
@@ -96,6 +97,20 @@ class ModuleTests(unittest.TestCase):
             cli.worker("docs-local")
 
         app = captured["app"]
+        response = TestClient(app).get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["module_id"], "docs-local")
+        self.assertTrue(response.json()["ready"])
+
+    def test_create_worker_app_health_endpoint_does_not_call_module_status(self) -> None:
+        module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
+        with (
+            patch("app.worker.find_module", return_value=module),
+            patch("app.cli.module_status", side_effect=AssertionError("module_status must not be used for worker /health")),
+            patch("app.modules.load_index", side_effect=AssertionError("load_index must not be used for worker /health")),
+        ):
+            app = create_worker_app("docs-local")
+
         response = TestClient(app).get("/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["module_id"], "docs-local")
