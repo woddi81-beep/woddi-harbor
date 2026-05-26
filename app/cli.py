@@ -35,15 +35,19 @@ from .modules import (
     discover_remote_module,
     execute_module,
     health_check_module,
+    module_diagnostics,
     module_log_path,
     module_status,
+    module_test,
     parse_json_payload,
+    remove_module,
     restart_module,
     reserve_port,
     start_module,
     stop_module,
     upsert_module,
     validate_module_config,
+    validation_errors_by_module,
     worker_execute,
 )
 from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
@@ -69,8 +73,10 @@ def _check(name: str, ok: bool, detail: str) -> None:
 def _print_modules() -> None:
     table = Table(title="Harbor Modules")
     table.add_column("ID")
+    table.add_column("Provider")
     table.add_column("Type")
     table.add_column("Transport")
+    table.add_column("Protocol")
     table.add_column("State")
     table.add_column("Endpoint / Path")
     for module in load_modules():
@@ -78,8 +84,10 @@ def _print_modules() -> None:
         endpoint = module.base_url or module.path or f"http://{module.host}:{module.port}"
         table.add_row(
             module.id,
+            module.provider or "-",
             module.type,
             module.transport,
+            module.remote_protocol,
             "running" if status["running"] else "stopped",
             endpoint,
         )
@@ -289,6 +297,7 @@ def module_add_docs(
         path=path,
         port=port or reserve_port(),
         top_k=top_k,
+        test_action="stats",
     )
     errors = validate_module_config(module)
     if errors:
@@ -314,6 +323,7 @@ def module_add_maildir(
         path=path,
         port=port or reserve_port(),
         top_k=top_k,
+        test_action="stats",
     )
     errors = validate_module_config(module)
     if errors:
@@ -327,26 +337,152 @@ def module_add_mcp(
     module_id: str,
     base_url: str,
     name: str = typer.Option(""),
+    provider: str = typer.Option("generic"),
     api_key: str = typer.Option(""),
     api_key_env: str = typer.Option(""),
     timeout_seconds: float = typer.Option(30.0),
+    remote_protocol: str = typer.Option("auto"),
 ) -> None:
     """Register an external MCP-style HTTP service."""
     module = ModuleConfig(
         id=module_id,
         name=name,
         type="mcp_http",
+        provider=provider,
         transport="remote",
+        remote_protocol=remote_protocol,
         base_url=base_url,
         api_key=api_key,
         api_key_env=api_key_env,
         timeout_seconds=timeout_seconds,
+        test_action="discover" if remote_protocol == "mcp" else "health",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
     console.print(Panel.fit(f"MCP-Modul registriert: {module_id}", title="Module"))
+
+
+@module_app.command("add-netbox-mcp")
+def module_add_netbox_mcp(
+    module_id: str = typer.Argument("netbox"),
+    endpoint: str = typer.Option("http://127.0.0.1:8000/mcp", help="HTTP MCP endpoint, z. B. http://127.0.0.1:8000/mcp"),
+    name: str = typer.Option("NetBox MCP"),
+    netbox_url: str = typer.Option("", help="Dokumentationswert fuer die dahinterliegende NetBox-Instanz"),
+    token_env: str = typer.Option("NETBOX_TOKEN", help="Dokumentationswert fuer den Token-ENV-Namen"),
+    verify_ssl: bool = typer.Option(True),
+    timeout_seconds: float = typer.Option(30.0),
+) -> None:
+    """Register the netboxlabs netbox-mcp-server as a standard MCP HTTP integration."""
+    module = ModuleConfig(
+        id=module_id,
+        name=name,
+        type="mcp_http",
+        provider="netbox-mcp-server",
+        transport="remote",
+        remote_protocol="mcp",
+        base_url=endpoint,
+        timeout_seconds=timeout_seconds,
+        tool_names=["get_objects", "get_object_by_id", "get_changelogs"],
+        test_action="discover",
+        settings={
+            "netbox_url": netbox_url,
+            "netbox_token_env": token_env,
+            "verify_ssl": verify_ssl,
+            "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
+        },
+        notes="Erwartet einen laufenden netbox-mcp-server im HTTP-Transport auf /mcp.",
+    )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
+    upsert_module(module)
+    console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
+
+
+@module_app.command("set")
+def module_set(
+    module_id: str,
+    name: str = typer.Option("", help="Neuer Anzeigename"),
+    enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled"),
+    provider: str = typer.Option("", help="Provider, z. B. netbox-mcp-server"),
+    base_url: str = typer.Option("", help="Remote URL"),
+    path: str = typer.Option("", help="Lokaler Pfad"),
+    host: str = typer.Option("", help="Lokaler Host"),
+    port: int = typer.Option(-1, help="Lokaler Port"),
+    top_k: int = typer.Option(-1, help="Top-K fuer Suchmodule"),
+    timeout_seconds: float = typer.Option(-1.0),
+    api_key: str = typer.Option(""),
+    api_key_env: str = typer.Option(""),
+    remote_protocol: str = typer.Option("", help="auto|harbor_execute|mcp"),
+    notes: str = typer.Option("", help="Notizen"),
+    tool_names: str = typer.Option("", help="Kommagetrennte Tool-Namen"),
+    test_action: str = typer.Option("", help="Probe-Aktion fuer module test"),
+    test_payload: str = typer.Option("", help="Probe-Payload als JSON-Objekt"),
+    test_expect_contains: str = typer.Option("", help="Kommagetrennte Begriffe, die in der Ausgabe vorkommen sollen"),
+    settings_json: str = typer.Option("", help="Zusatzkonfiguration als JSON-Objekt"),
+) -> None:
+    """Update an existing module or addon configuration."""
+    module = find_module(module_id)
+    if module is None:
+        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
+    updated = replace(module)
+    if name:
+        updated.name = name.strip()
+    if enabled is not None:
+        updated.enabled = enabled
+    if provider:
+        updated.provider = provider.strip()
+    if base_url:
+        updated.base_url = base_url.strip()
+    if path:
+        updated.path = path.strip()
+    if host:
+        updated.host = host.strip()
+    if port >= 0:
+        updated.port = port
+    if top_k > 0:
+        updated.top_k = top_k
+    if timeout_seconds >= 0:
+        updated.timeout_seconds = timeout_seconds
+    if api_key:
+        updated.api_key = api_key
+    if api_key_env:
+        updated.api_key_env = api_key_env.strip()
+    if remote_protocol:
+        updated.remote_protocol = remote_protocol.strip()
+    if notes:
+        updated.notes = notes
+    if tool_names:
+        updated.tool_names = [item.strip() for item in tool_names.split(",") if item.strip()]
+    if test_action:
+        updated.test_action = test_action.strip()
+    if test_payload:
+        updated.test_payload = parse_json_payload(test_payload)
+    if test_expect_contains:
+        updated.test_expect_contains = [item.strip() for item in test_expect_contains.split(",") if item.strip()]
+    if settings_json:
+        parsed = parse_json_payload(settings_json)
+        updated.settings = parsed
+    errors = validation_errors_by_module([candidate if candidate.id != module_id else updated for candidate in load_modules()]).get(module_id, [])
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
+    upsert_module(updated)
+    console.print(Panel.fit(f"Modul aktualisiert: {module_id}", title="Module"))
+
+
+@module_app.command("remove")
+def module_remove(module_id: str) -> None:
+    """Remove a module or addon configuration."""
+    try:
+        stop_module(module_id)
+    except Exception:
+        pass
+    removed = remove_module(module_id)
+    if not removed:
+        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
+    console.print(Panel.fit(f"Modul entfernt: {module_id}", title="Module"))
 
 
 @module_app.command("start")
@@ -411,6 +547,20 @@ def module_discover(module_id: str) -> None:
         raise typer.BadParameter("discover ist nur fuer mcp_http-Module sinnvoll.")
     result = discover_remote_module(module)
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Discovery"))
+
+
+@module_app.command("diagnose")
+def module_diagnose(module_id: str, lines: int = 40) -> None:
+    """Show combined status, health, discovery and recent logs for a module."""
+    result = module_diagnostics(module_id, log_lines=lines)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Diagnose"))
+
+
+@module_app.command("test")
+def module_run_test(module_id: str) -> None:
+    """Run the configured connectivity and output smoke test for a module."""
+    result = module_test(module_id)
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Test"))
 
 
 @service_app.command("list")

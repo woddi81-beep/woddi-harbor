@@ -17,7 +17,9 @@ Der Name passt bewusst zum Zielbild:
 - lokale Maildir-Suche als eigener Modul-Prozess
 - persistente Suchindizes fuer Docs und Maildir unter `data/runtime/indexes/`
 - generische MCP-HTTP-Anbindung fuer externe Dienste wie NetBox oder OpenStack
+- standardkonforme MCP-HTTP-Anbindung fuer `/mcp`-Server wie `netbox-mcp-server`
 - MCP-Discovery/Capability-Handshake fuer tokenlose und tokenbasierte HTTP-Dienste
+- zentrale Diagnose- und Statusdaten fuer Startfehler, Health und Reindex-Jobs
 - CLI mit Rich-Ausgabe fuer Status, Konfiguration und Modulsteuerung
 - FastAPI-Control-Plane fuer spaetere Oberflaechen und Automatisierung
 - jeder lokale Modul-Dienst ist einzeln start-, stopp- und restartbar
@@ -140,8 +142,19 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh cli module check docs-local
 ./harbor.sh cli module reindex docs-local
 ./harbor.sh cli module discover netbox
+./harbor.sh cli module diagnose netbox
+./harbor.sh cli module test netbox
+./harbor.sh cli module add-netbox-mcp netbox --endpoint http://127.0.0.1:8000/mcp
 ./harbor.sh cli service check harbor
 ./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
+```
+
+Generische Pflege bestehender Module:
+
+```bash
+./harbor.sh cli module set netbox --provider netbox-mcp-server --remote-protocol mcp --base-url http://127.0.0.1:8000/mcp
+./harbor.sh cli module set netbox --test-action get_objects --test-payload '{"object_type":"dcim.devices","limit":1}' --test-expect-contains device
+./harbor.sh cli module remove netbox
 ```
 
 ## Linux-Kompatibilitaet
@@ -239,6 +252,29 @@ Beispiel:
 curl -u admin:SECRET http://127.0.0.1:9680/api/modules
 curl -u admin:SECRET -X POST http://127.0.0.1:9680/api/modules/docs-local/start
 ```
+
+## NetBox MCP Integration
+
+`woddi-harbor` kann standardkonforme HTTP-MCP-Endpunkte unter `/mcp` direkt discovery-en und Tools aufrufen. Das passt zum offiziellen `netbox-mcp-server` von NetBox Labs.
+
+Schnellstart:
+
+```bash
+./harbor.sh cli module add-netbox-mcp netbox --endpoint http://127.0.0.1:8000/mcp
+./harbor.sh cli module discover netbox
+./harbor.sh cli module test netbox
+./harbor.sh cli module call netbox get_objects '{"object_type":"dcim.devices","limit":5}'
+```
+
+Erwarteter Upstream laut Projekt-README:
+
+- HTTP-Transport aktivieren
+- Endpunkt auf `/mcp`
+- Tools wie `get_objects`, `get_object_by_id`, `get_changelogs`
+
+Mehr Details zum Upstream-Projekt:
+
+- https://github.com/netboxlabs/netbox-mcp-server
 
 Chat:
 

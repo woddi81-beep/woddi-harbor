@@ -56,7 +56,9 @@ class ModuleConfig:
     type: ModuleType
     enabled: bool = True
     name: str = ""
+    provider: str = ""
     transport: str = "local"
+    remote_protocol: str = "auto"
     path: str = ""
     base_url: str = ""
     api_key: str = ""
@@ -66,6 +68,11 @@ class ModuleConfig:
     timeout_seconds: float = 30.0
     top_k: int = 5
     notes: str = ""
+    tool_names: list[str] = field(default_factory=list)
+    test_action: str = ""
+    test_payload: dict[str, Any] = field(default_factory=dict)
+    test_expect_contains: list[str] = field(default_factory=list)
+    settings: dict[str, Any] = field(default_factory=dict)
     sources: list[ModuleSource] = field(default_factory=list)
 
     def display_name(self) -> str:
@@ -223,7 +230,9 @@ def load_modules() -> list[ModuleConfig]:
                 type=str(raw["type"]),
                 enabled=bool(raw.get("enabled", True)),
                 name=str(raw.get("name", "")),
+                provider=str(raw.get("provider", "")),
                 transport=str(raw.get("transport", "local")),
+                remote_protocol=str(raw.get("remote_protocol", "auto")),
                 path=str(raw.get("path", "")),
                 base_url=str(raw.get("base_url", "")),
                 api_key=str(raw.get("api_key", "")),
@@ -233,6 +242,11 @@ def load_modules() -> list[ModuleConfig]:
                 timeout_seconds=float(raw.get("timeout_seconds", 30.0)),
                 top_k=int(raw.get("top_k", 5)),
                 notes=str(raw.get("notes", "")),
+                tool_names=[str(item) for item in raw.get("tool_names", []) if str(item).strip()],
+                test_action=str(raw.get("test_action", "")),
+                test_payload=dict(raw.get("test_payload", {})) if isinstance(raw.get("test_payload", {}), dict) else {},
+                test_expect_contains=[str(item) for item in raw.get("test_expect_contains", []) if str(item).strip()],
+                settings=dict(raw.get("settings", {})) if isinstance(raw.get("settings", {}), dict) else {},
                 sources=sources,
             )
         )

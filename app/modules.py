@@ -30,6 +30,9 @@ from .config import (
 from .search import ensure_index, load_index, search_index
 
 
+MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
 def module_url(module: ModuleConfig) -> str:
     return f"http://{module.host}:{module.port}"
 
@@ -46,6 +49,10 @@ def module_index_path(module_id: str) -> Path:
     return RUNTIME_DIR / "indexes" / f"{module_id}.json"
 
 
+def module_runtime_path(module_id: str) -> Path:
+    return RUNTIME_DIR / "state" / f"{module_id}.json"
+
+
 def _auth_headers(module: ModuleConfig, *, force_auth: bool = False) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     secret = module_secret(module)
@@ -54,6 +61,68 @@ def _auth_headers(module: ModuleConfig, *, force_auth: bool = False) -> dict[str
     elif force_auth:
         headers["Authorization"] = "Bearer "
     return headers
+
+
+def _runtime_defaults(module_id: str) -> dict[str, Any]:
+    return {
+        "module_id": module_id,
+        "last_start_attempt_at": "",
+        "last_started_at": "",
+        "last_stopped_at": "",
+        "last_health_ok_at": "",
+        "last_test_at": "",
+        "last_test_ok": False,
+        "last_test_connected": False,
+        "last_test_meaningful_output": False,
+        "last_test_message": "",
+        "last_discovery_at": "",
+        "last_discovery_ok": False,
+        "last_error": "",
+        "last_start_error": "",
+        "last_discovery_error": "",
+        "last_discovered_tools": [],
+        "last_execute_error": "",
+        "last_index_started_at": "",
+        "last_index_completed_at": "",
+        "last_index_duration_seconds": 0.0,
+        "last_index_document_count": 0,
+        "last_index_inventory_count": 0,
+        "last_index_error": "",
+        "restart_count": 0,
+    }
+
+
+def _timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def load_module_runtime_state(module_id: str) -> dict[str, Any]:
+    path = module_runtime_path(module_id)
+    payload = _runtime_defaults(module_id)
+    if not path.exists():
+        return payload
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return payload
+    if isinstance(raw, dict):
+        payload.update(raw)
+    return payload
+
+
+def save_module_runtime_state(module_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    path = module_runtime_path(module_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    merged = _runtime_defaults(module_id)
+    merged.update(state)
+    path.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return merged
+
+
+def update_module_runtime_state(module_id: str, **updates: Any) -> dict[str, Any]:
+    state = load_module_runtime_state(module_id)
+    state.update(updates)
+    return save_module_runtime_state(module_id, state)
 
 
 def reserve_port() -> int:
@@ -105,7 +174,10 @@ def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> b
         if response.status_code != 200:
             return False
         payload = response.json()
-        return str(payload.get("module_id", "")) == module.id
+        ok = str(payload.get("module_id", "")) == module.id
+        if ok:
+            update_module_runtime_state(module.id, last_health_ok_at=_timestamp())
+        return ok
     except Exception:
         return False
 
@@ -180,6 +252,8 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
         errors.append(f"Unbekannter Modultyp: {module.type}")
     if module.transport not in {"local", "remote"}:
         errors.append(f"Ungueltiger Transport: {module.transport}")
+    if module.remote_protocol not in {"auto", "harbor_execute", "mcp"}:
+        errors.append(f"Ungueltiges Remote-Protokoll: {module.remote_protocol}")
     if module.type in {"docs", "maildir"}:
         if module.transport != "local":
             errors.append(f"{module.type} muss lokal sein.")
@@ -217,6 +291,24 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     return errors
 
 
+def validation_errors_by_module(modules: list[ModuleConfig] | None = None) -> dict[str, list[str]]:
+    current_modules = modules or load_modules()
+    errors = {module.id: list(validate_module_config(module)) for module in current_modules}
+    port_usage: dict[tuple[str, int], list[str]] = {}
+    for module in current_modules:
+        if module.transport != "local" or module.port <= 0:
+            continue
+        key = (module.host, module.port)
+        port_usage.setdefault(key, []).append(module.id)
+    for (host, port), module_ids in port_usage.items():
+        if len(module_ids) < 2:
+            continue
+        detail = f"Port-Konflikt: {host}:{port} wird mehrfach genutzt ({', '.join(sorted(module_ids))})."
+        for module_id in module_ids:
+            errors.setdefault(module_id, []).append(detail)
+    return errors
+
+
 def validate_or_raise(module: ModuleConfig) -> None:
     errors = validate_module_config(module)
     if errors:
@@ -224,7 +316,6 @@ def validate_or_raise(module: ModuleConfig) -> None:
 
 
 def upsert_module(module: ModuleConfig) -> ModuleConfig:
-    validate_or_raise(module)
     modules = load_modules()
     replaced = False
     for index, existing in enumerate(modules):
@@ -234,6 +325,9 @@ def upsert_module(module: ModuleConfig) -> ModuleConfig:
             break
     if not replaced:
         modules.append(module)
+    errors = validation_errors_by_module(modules).get(module.id, [])
+    if errors:
+        raise ValueError(" ".join(errors))
     from .config import save_modules
 
     save_modules(modules)
@@ -273,6 +367,8 @@ def read_module_pid(module_id: str) -> int | None:
 
 
 def module_status(module: ModuleConfig) -> dict[str, Any]:
+    current_modules = load_modules()
+    all_errors = validation_errors_by_module(current_modules)
     pid = read_module_pid(module.id)
     health: dict[str, Any] | None = None
     if module.transport == "local" and module.port > 0:
@@ -287,12 +383,17 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
             health = None
     running = pid is not None or health is not None
     sources = module_sources(module, enabled_only=False)
+    runtime_state = load_module_runtime_state(module.id)
+    index = load_index(module_index_path(module.id)) if module.type in {"docs", "maildir"} else None
+    validation_errors = all_errors.get(module.id, [])
     return {
         "id": module.id,
         "name": module.display_name(),
         "type": module.type,
+        "provider": module.provider,
         "enabled": module.enabled,
         "transport": module.transport,
+        "remote_protocol": module.remote_protocol,
         "running": running,
         "pid": pid,
         "path": module.path,
@@ -310,9 +411,27 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         "base_url": module.base_url,
         "host": module.host,
         "port": module.port,
+        "timeout_seconds": module.timeout_seconds,
+        "top_k": module.top_k,
+        "api_key_env": module.api_key_env,
+        "notes": module.notes,
+        "tool_names": module.tool_names,
+        "test_action": module.test_action,
+        "test_payload": module.test_payload,
+        "test_expect_contains": module.test_expect_contains,
+        "settings": module.settings,
         "health": health,
         "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
-        "validation_errors": validate_module_config(module),
+        "index": {
+            "exists": index is not None,
+            "built_at": index.built_at if index else "",
+            "document_count": index.document_count if index else 0,
+            "inventory_count": index.inventory_count if index else 0,
+        }
+        if module.type in {"docs", "maildir"}
+        else None,
+        "runtime_state": runtime_state,
+        "validation_errors": validation_errors,
     }
 
 
@@ -339,6 +458,7 @@ def module_overview(module: ModuleConfig) -> dict[str, Any]:
         "id": module.id,
         "name": module.display_name(),
         "type": module.type,
+        "provider": module.provider,
         "transport": module.transport,
         "state": state,
         "tone": tone,
@@ -347,6 +467,7 @@ def module_overview(module: ModuleConfig) -> dict[str, Any]:
         "running": status["running"],
         "source_count": status["source_count"],
         "enabled_source_count": status["enabled_source_count"],
+        "runtime_state": status["runtime_state"],
         "validation_errors": validation_errors,
         "status": status,
     }
@@ -360,7 +481,7 @@ def health_check_module(module_id: str) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
-    errors = validate_module_config(module)
+    errors = validation_errors_by_module().get(module.id, [])
     status = module_status(module)
     payload: dict[str, Any] = {
         "ok": not errors,
@@ -382,7 +503,207 @@ def health_check_module(module_id: str) -> dict[str, Any]:
     return payload
 
 
+def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+    payload: dict[str, Any] = {
+        "ok": True,
+        "module_id": module_id,
+        "status": module_status(module),
+        "health": health_check_module(module_id),
+        "log_path": str(module_log_path(module_id)),
+        "log_tail": _read_module_log_tail(module_id, lines=log_lines),
+    }
+    if module.type == "mcp_http":
+        remote = discover_remote_module(module)
+        payload["remote"] = remote
+        payload["ok"] = payload["ok"] and bool(remote.get("ok"))
+    return payload
+
+
+def _default_test_config(module: ModuleConfig) -> tuple[str, dict[str, Any], list[str]]:
+    if module.type == "docs":
+        query = str(module.settings.get("default_test_query", "")).strip()
+        if query:
+            return "search", {"query": query, "top_k": module.top_k}, []
+        return "stats", {}, []
+    if module.type == "maildir":
+        query = str(module.settings.get("default_test_query", "")).strip()
+        if query:
+            return "search", {"query": query, "top_k": module.top_k}, []
+        return "stats", {}, []
+    if module.type == "mcp_http":
+        if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
+            if module.tool_names:
+                return module.tool_names[0], {}, []
+            return "discover", {}, []
+        return "health", {}, []
+    return "health", {}, []
+
+
+def _contains_expected_terms(output_text: str, expected_terms: list[str]) -> bool:
+    if not expected_terms:
+        return True
+    normalized = output_text.lower()
+    return all(term.lower() in normalized for term in expected_terms)
+
+
+def module_test(module_id: str) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+    action, payload, expected_terms = _default_test_config(module)
+    if module.test_action.strip():
+        action = module.test_action.strip()
+    if module.test_payload:
+        payload = module.test_payload
+    if module.test_expect_contains:
+        expected_terms = module.test_expect_contains
+    result: dict[str, Any]
+    connected = False
+    meaningful_output = False
+    output_summary = ""
+    try:
+        if module.type == "mcp_http" and action == "discover":
+            result = discover_remote_module(module)
+            connected = bool(result.get("ok"))
+            tools = result.get("tools") or result.get("actions") or []
+            meaningful_output = bool(tools)
+            output_summary = json.dumps(tools, ensure_ascii=False)
+        else:
+            result = execute_module(module.id, action, payload)
+            connected = bool(result.get("ok", True))
+            result_data = result.get("data", result)
+            if module.type in {"docs", "maildir"} and action == "search":
+                hits = result_data.get("hits", [])
+                meaningful_output = bool(hits)
+                output_summary = json.dumps(hits[:3], ensure_ascii=False)
+            elif module.type in {"docs", "maildir"} and action == "stats":
+                meaningful_output = int(result_data.get("document_count", 0) or result_data.get("messages", 0) or 0) >= 0
+                output_summary = json.dumps(result_data, ensure_ascii=False)
+            elif module.type == "mcp_http":
+                output_summary = json.dumps(result_data, ensure_ascii=False)
+                meaningful_output = bool(output_summary.strip() and output_summary not in {"{}", "[]", '""'})
+            else:
+                output_summary = json.dumps(result_data, ensure_ascii=False)
+                meaningful_output = bool(output_summary.strip())
+            if meaningful_output and expected_terms:
+                meaningful_output = _contains_expected_terms(output_summary, expected_terms)
+        message = "Modultest erfolgreich." if connected and meaningful_output else "Verbindung ok, aber Ausgabe ist nicht aussagekraeftig genug."
+        if not connected:
+            message = "Verbindungstest fehlgeschlagen."
+        update_module_runtime_state(
+            module.id,
+            last_test_at=_timestamp(),
+            last_test_ok=connected and meaningful_output,
+            last_test_connected=connected,
+            last_test_meaningful_output=meaningful_output,
+            last_test_message=message,
+            last_error="" if connected else message,
+        )
+        return {
+            "ok": connected and meaningful_output,
+            "connected": connected,
+            "meaningful_output": meaningful_output,
+            "module_id": module_id,
+            "action": action,
+            "payload": payload,
+            "expected_terms": expected_terms,
+            "message": message,
+            "result": result,
+            "output_summary": output_summary[:1200],
+        }
+    except Exception as exc:
+        update_module_runtime_state(
+            module.id,
+            last_test_at=_timestamp(),
+            last_test_ok=False,
+            last_test_connected=False,
+            last_test_meaningful_output=False,
+            last_test_message=str(exc),
+            last_execute_error=str(exc),
+            last_error=str(exc),
+        )
+        return {
+            "ok": False,
+            "connected": False,
+            "meaningful_output": False,
+            "module_id": module_id,
+            "action": action,
+            "payload": payload,
+            "expected_terms": expected_terms,
+            "message": str(exc),
+        }
+
+
+def _mcp_endpoint(module: ModuleConfig) -> str:
+    return module.base_url.rstrip("/")
+
+
+def _mcp_request(
+    client: httpx.Client,
+    module: ModuleConfig,
+    session_id: str | None,
+    method: str,
+    params: dict[str, Any] | None,
+    *,
+    request_id: int | None,
+) -> tuple[dict[str, Any], str | None]:
+    headers = _auth_headers(module)
+    if session_id:
+        headers["mcp-session-id"] = session_id
+    body: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+    if request_id is not None:
+        body["id"] = request_id
+    if params is not None:
+        body["params"] = params
+    response = client.post(_mcp_endpoint(module), headers=headers, json=body)
+    response.raise_for_status()
+    next_session_id = response.headers.get("mcp-session-id") or session_id
+    if request_id is None:
+        return {"ok": True}, next_session_id
+    payload = response.json()
+    if "error" in payload:
+        detail = payload["error"]
+        raise ValueError(f"MCP-Fehler {method}: {detail}")
+    return payload, next_session_id
+
+
+def _mcp_session(client: httpx.Client, module: ModuleConfig) -> str | None:
+    response, session_id = _mcp_request(
+        client,
+        module,
+        None,
+        "initialize",
+        {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "woddi-harbor", "version": "0.1.0"},
+        },
+        request_id=1,
+    )
+    _mcp_request(client, module, session_id, "notifications/initialized", {}, request_id=None)
+    return session_id or response.get("result", {}).get("sessionId")
+
+
+def _call_mcp_tool(module: ModuleConfig, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    with httpx.Client(timeout=module.timeout_seconds) as client:
+        session_id = _mcp_session(client, module)
+        payload, _ = _mcp_request(
+            client,
+            module,
+            session_id,
+            "tools/call",
+            {"name": tool_name, "arguments": arguments},
+            request_id=3,
+        )
+    return payload.get("result", payload)
+
+
 def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
+    if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
+        return discover_standard_mcp_module(module)
     base_url = module.base_url.rstrip("/")
     timeout = min(module.timeout_seconds, 10.0)
     attempts: list[dict[str, Any]] = []
@@ -474,6 +795,22 @@ def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
     dedup_capabilities = sorted({item for item in capabilities if item})
     dedup_actions = sorted({item for item in actions if item})
     successful = [attempt for attempt in attempts if attempt.get("ok")]
+    if successful:
+        update_module_runtime_state(
+            module.id,
+            last_discovery_at=_timestamp(),
+            last_discovery_ok=True,
+            last_discovery_error="",
+            last_discovered_tools=dedup_actions,
+        )
+    else:
+        update_module_runtime_state(
+            module.id,
+            last_discovery_at=_timestamp(),
+            last_discovery_ok=False,
+            last_discovery_error="Discovery ohne erfolgreiche Antwort.",
+            last_error="Discovery ohne erfolgreiche Antwort.",
+        )
     return {
         "ok": bool(successful),
         "base_url": base_url,
@@ -485,12 +822,77 @@ def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
     }
 
 
+def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    tools: list[str] = []
+    session_id: str | None = None
+    try:
+        with httpx.Client(timeout=min(module.timeout_seconds, 10.0)) as client:
+            initialize_payload, session_id = _mcp_request(
+                client,
+                module,
+                None,
+                "initialize",
+                {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "woddi-harbor", "version": "0.1.0"},
+                },
+                request_id=1,
+            )
+            attempts.append({"label": "initialize", "ok": True, "body": initialize_payload})
+            _mcp_request(client, module, session_id, "notifications/initialized", {}, request_id=None)
+            attempts.append({"label": "notifications/initialized", "ok": True})
+            tools_payload, session_id = _mcp_request(client, module, session_id, "tools/list", {}, request_id=2)
+            attempts.append({"label": "tools/list", "ok": True, "body": tools_payload})
+            for item in tools_payload.get("result", {}).get("tools", []):
+                if isinstance(item, dict) and str(item.get("name", "")).strip():
+                    tools.append(str(item["name"]))
+    except Exception as exc:
+        attempts.append({"label": "mcp", "ok": False, "error": str(exc)})
+        update_module_runtime_state(
+            module.id,
+            last_discovery_at=_timestamp(),
+            last_discovery_ok=False,
+            last_discovery_error=str(exc),
+            last_error=str(exc),
+        )
+        return {
+            "ok": False,
+            "base_url": module.base_url.rstrip("/"),
+            "protocol": "mcp",
+            "auth_configured": bool(module_secret(module)),
+            "session_id": session_id or "",
+            "tools": [],
+            "attempts": attempts,
+        }
+    deduped_tools = sorted({item for item in tools if item})
+    update_module_runtime_state(
+        module.id,
+        last_discovery_at=_timestamp(),
+        last_discovery_ok=True,
+        last_discovery_error="",
+        last_discovered_tools=deduped_tools,
+    )
+    return {
+        "ok": True,
+        "base_url": module.base_url.rstrip("/"),
+        "protocol": "mcp",
+        "auth_configured": bool(module_secret(module)),
+        "session_id": session_id or "",
+        "tools": deduped_tools,
+        "capabilities": ["tools"],
+        "attempts": attempts,
+    }
+
+
 def start_module(module_id: str) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
     if module.transport != "local":
         return {"ok": True, "message": "Remote-Modul hat keinen lokalen Prozess.", "status": module_status(module)}
+    update_module_runtime_state(module.id, last_start_attempt_at=_timestamp(), last_start_error="")
     if read_module_pid(module_id) is not None:
         return {"ok": True, "message": "Modul laeuft bereits.", "status": module_status(module)}
     if _module_health_reachable(module, timeout=0.5):
@@ -506,6 +908,7 @@ def start_module(module_id: str) -> dict[str, Any]:
         process = _spawn_worker(module)
     except Exception as exc:
         _append_module_log(module.id, f"Worker-Start fehlgeschlagen: {exc}")
+        update_module_runtime_state(module.id, last_start_error=str(exc), last_error=str(exc))
         return {
             "ok": False,
             "message": f"Worker konnte nicht gestartet werden: {exc}",
@@ -517,6 +920,7 @@ def start_module(module_id: str) -> dict[str, Any]:
     if not started:
         _append_module_log(module.id, detail)
         _cleanup_failed_start(module.id, process)
+        update_module_runtime_state(module.id, last_start_error=detail, last_error=detail)
         return {
             "ok": False,
             "message": detail,
@@ -524,6 +928,15 @@ def start_module(module_id: str) -> dict[str, Any]:
             "log_tail": _read_module_log_tail(module.id),
         }
     _append_module_log(module.id, f"Worker ist erreichbar auf {module.host}:{module.port} (PID {process.pid})")
+    state = load_module_runtime_state(module.id)
+    update_module_runtime_state(
+        module.id,
+        last_started_at=_timestamp(),
+        last_health_ok_at=_timestamp(),
+        last_start_error="",
+        last_error="",
+        restart_count=int(state.get("restart_count", 0)),
+    )
     return {"ok": True, "message": "Modul gestartet.", "status": module_status(module)}
 
 
@@ -542,10 +955,13 @@ def stop_module(module_id: str) -> dict[str, Any]:
     if read_module_pid(module_id) is not None:
         os.killpg(pid, signal.SIGKILL)
     module_pid_path(module_id).unlink(missing_ok=True)
+    update_module_runtime_state(module.id, last_stopped_at=_timestamp())
     return {"ok": True, "message": "Modul gestoppt.", "status": module_status(module)}
 
 
 def restart_module(module_id: str) -> dict[str, Any]:
+    state = load_module_runtime_state(module_id)
+    update_module_runtime_state(module_id, restart_count=int(state.get("restart_count", 0)) + 1)
     stop_module(module_id)
     return start_module(module_id)
 
@@ -556,15 +972,30 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
         raise ValueError(f"Unbekanntes Modul: {module_id}")
 
     if module.type == "mcp_http":
-        headers = _auth_headers(module)
-        with httpx.Client(timeout=module.timeout_seconds) as client:
-            response = client.post(
-                module.base_url.rstrip("/") + "/execute",
-                headers=headers,
-                json={"action": action, "payload": payload},
-            )
-            response.raise_for_status()
-            return response.json()
+        try:
+            if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
+                if action in {"discover", "capabilities", "tools/list", "list_tools"}:
+                    return {"ok": True, "data": discover_standard_mcp_module(module)}
+                tool_name = str(payload.get("tool") or action).strip()
+                arguments = payload.get("arguments")
+                if not isinstance(arguments, dict):
+                    arguments = {key: value for key, value in payload.items() if key != "tool"}
+                result = _call_mcp_tool(module, tool_name, arguments)
+                update_module_runtime_state(module.id, last_execute_error="", last_error="")
+                return {"ok": True, "data": result, "tool": tool_name}
+            headers = _auth_headers(module)
+            with httpx.Client(timeout=module.timeout_seconds) as client:
+                response = client.post(
+                    module.base_url.rstrip("/") + "/execute",
+                    headers=headers,
+                    json={"action": action, "payload": payload},
+                )
+                response.raise_for_status()
+                update_module_runtime_state(module.id, last_execute_error="", last_error="")
+                return response.json()
+        except Exception as exc:
+            update_module_runtime_state(module.id, last_execute_error=str(exc), last_error=str(exc))
+            raise
 
     if module.transport != "local":
         raise ValueError(f"Nicht unterstuetztes Transportmodell fuer {module.id}")
@@ -618,7 +1049,17 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                 },
             }
         if action == "reindex":
+            started_at = time.monotonic()
+            update_module_runtime_state(module.id, last_index_started_at=_timestamp(), last_index_error="")
             index, _rebuilt = ensure_index("docs", roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
+            update_module_runtime_state(
+                module.id,
+                last_index_completed_at=_timestamp(),
+                last_index_duration_seconds=round(time.monotonic() - started_at, 3),
+                last_index_document_count=index.document_count,
+                last_index_inventory_count=index.inventory_count,
+                last_index_error="",
+            )
             return {
                 "ok": True,
                 "data": {
@@ -664,7 +1105,17 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                 },
             }
         if action == "reindex":
+            started_at = time.monotonic()
+            update_module_runtime_state(module.id, last_index_started_at=_timestamp(), last_index_error="")
             index, _rebuilt = ensure_index("maildir", roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
+            update_module_runtime_state(
+                module.id,
+                last_index_completed_at=_timestamp(),
+                last_index_duration_seconds=round(time.monotonic() - started_at, 3),
+                last_index_document_count=index.document_count,
+                last_index_inventory_count=index.inventory_count,
+                last_index_error="",
+            )
             return {
                 "ok": True,
                 "data": {
