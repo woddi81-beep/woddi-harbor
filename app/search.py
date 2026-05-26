@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import email
 import json
+import logging
 import math
 import re
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from email import policy
@@ -33,6 +35,9 @@ TEXT_EXTENSIONS = {
 }
 
 IndexKind = Literal["docs", "maildir"]
+logger = logging.getLogger(__name__)
+PROGRESS_LOG_EVERY = 25
+PROGRESS_LOG_INTERVAL_SECONDS = 2.0
 
 
 @dataclass
@@ -126,26 +131,60 @@ def score_documents(documents: list[IndexedDocument], query: str, top_k: int) ->
     return hits[:top_k]
 
 
-def _iter_text_paths(root: Path) -> list[Path]:
+def _iter_text_paths(root: Path, *, deadline: float | None = None, kind: IndexKind = "docs") -> list[Path]:
     if not root.exists():
         return []
     paths: list[Path] = []
-    for path in sorted(root.rglob("*")):
+    for path in root.rglob("*"):
+        _check_deadline(deadline, kind, f"dem Dateiscan von {root}")
         if path.is_file() and path.suffix.lower() in TEXT_EXTENSIONS:
             paths.append(path)
+    paths.sort()
     return paths
 
 
-def _iter_mail_paths(root: Path) -> list[Path]:
+def _iter_mail_paths(root: Path, *, deadline: float | None = None, kind: IndexKind = "maildir") -> list[Path]:
     if not root.exists():
         return []
     paths: list[Path] = []
-    for path in sorted(root.rglob("*")):
+    for path in root.rglob("*"):
+        _check_deadline(deadline, kind, f"dem Dateiscan von {root}")
         if not path.is_file():
             continue
         if path.suffix.lower() in {".eml", ""} or path.parent.name in {"cur", "new"}:
             paths.append(path)
+    paths.sort()
     return paths
+
+
+def _check_deadline(deadline: float | None, kind: IndexKind, phase: str) -> None:
+    if deadline is None:
+        return
+    if time.monotonic() > deadline:
+        raise TimeoutError(f"Indexing fuer {kind} hat das Timeout waehrend {phase} ueberschritten.")
+
+
+def _deadline_from_timeout(timeout_seconds: float | None) -> float | None:
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return None
+    return time.monotonic() + timeout_seconds
+
+
+def _log_progress(
+    kind: IndexKind,
+    root: Path,
+    processed: int,
+    total: int,
+    *,
+    phase: str,
+    last_logged_at: float,
+) -> float:
+    now = time.monotonic()
+    should_log = processed == total or processed == 1 or processed % PROGRESS_LOG_EVERY == 0
+    if not should_log and now - last_logged_at < PROGRESS_LOG_INTERVAL_SECONDS:
+        return last_logged_at
+    logger.info("Indexing %s: %s %s/%s fuer %s", kind, phase, processed, total, root)
+    return now
 
 
 def _inventory_signature(paths: list[tuple[str, Path]], root: Path) -> tuple[str, int]:
@@ -158,6 +197,38 @@ def _inventory_signature(paths: list[tuple[str, Path]], root: Path) -> tuple[str
         relative = path.relative_to(root).as_posix()
         parts.append(f"{source_id}|{relative}|{stat.st_size}|{stat.st_mtime_ns}")
     return "\n".join(parts), len(parts)
+
+
+def _inventory_for_roots(
+    kind: IndexKind,
+    roots: list[tuple[str, str, Path]],
+    *,
+    timeout_seconds: float | None = None,
+    deadline: float | None = None,
+) -> tuple[list[tuple[str, str, Path]], list[tuple[str, Path]], list[str], str, int]:
+    normalized_roots = [(source_id, source_label, root.expanduser().resolve()) for source_id, source_label, root in roots]
+    inventory_items: list[tuple[str, Path]] = []
+    root_strings: list[str] = []
+    effective_deadline = deadline if deadline is not None else _deadline_from_timeout(timeout_seconds)
+    for source_id, _source_label, root in normalized_roots:
+        logger.info("Indexing %s: starte Dateiscan fuer %s", kind, root)
+        paths = (
+            _iter_text_paths(root, deadline=effective_deadline, kind=kind)
+            if kind == "docs"
+            else _iter_mail_paths(root, deadline=effective_deadline, kind=kind)
+        )
+        inventory_items.extend((source_id, path) for path in paths)
+        root_strings.append(f"{source_id}:{root}")
+        logger.info("Indexing %s: Dateiscan fuer %s abgeschlossen, %s Dateien gefunden", kind, root, len(paths))
+    signature_parts: list[str] = []
+    inventory_count = 0
+    for source_id, _source_label, root in normalized_roots:
+        _check_deadline(effective_deadline, kind, f"dem Inventarvergleich von {root}")
+        source_items = [(item_source, path) for item_source, path in inventory_items if item_source == source_id]
+        signature, source_count = _inventory_signature(source_items, root)
+        signature_parts.append(signature)
+        inventory_count += source_count
+    return normalized_roots, inventory_items, root_strings, "\n".join(part for part in signature_parts if part), inventory_count
 
 
 def _mail_to_document(path: Path, *, source_id: str = "", source_label: str = "") -> IndexedDocument | None:
@@ -212,16 +283,25 @@ def _text_to_document(path: Path, *, source_id: str = "", source_label: str = ""
     )
 
 
-def build_index(kind: IndexKind, roots: list[tuple[str, str, Path]]) -> SearchIndex:
-    normalized_roots = [(source_id, source_label, root.expanduser().resolve()) for source_id, source_label, root in roots]
-    inventory_items: list[tuple[str, Path]] = []
+def build_index(
+    kind: IndexKind,
+    roots: list[tuple[str, str, Path]],
+    *,
+    timeout_seconds: float | None = None,
+) -> SearchIndex:
+    deadline = _deadline_from_timeout(timeout_seconds)
+    normalized_roots, inventory_items, root_strings, inventory_signature, inventory_count = _inventory_for_roots(
+        kind,
+        roots,
+        deadline=deadline,
+    )
     documents: list[IndexedDocument] = []
-    root_strings: list[str] = []
     for source_id, source_label, root in normalized_roots:
-        paths = _iter_text_paths(root) if kind == "docs" else _iter_mail_paths(root)
-        inventory_items.extend((source_id, path) for path in paths)
-        root_strings.append(f"{source_id}:{root}")
-        for path in paths:
+        source_paths = [path for item_source, path in inventory_items if item_source == source_id]
+        last_logged_at = 0.0
+        total = len(source_paths)
+        for index, path in enumerate(source_paths, start=1):
+            _check_deadline(deadline, kind, f"dem Lesen von {path}")
             document = (
                 _text_to_document(path, source_id=source_id, source_label=source_label)
                 if kind == "docs"
@@ -229,13 +309,14 @@ def build_index(kind: IndexKind, roots: list[tuple[str, str, Path]]) -> SearchIn
             )
             if document is not None:
                 documents.append(document)
-    signature_parts: list[str] = []
-    inventory_count = 0
-    for source_id, source_label, root in normalized_roots:
-        source_items = [(item_source, path) for item_source, path in inventory_items if item_source == source_id]
-        signature, source_count = _inventory_signature(source_items, root)
-        signature_parts.append(signature)
-        inventory_count += source_count
+            last_logged_at = _log_progress(
+                kind,
+                root,
+                index,
+                total,
+                phase="Dateien gelesen",
+                last_logged_at=last_logged_at,
+            )
     return SearchIndex(
         kind=kind,
         root=root_strings[0] if root_strings else "",
@@ -243,7 +324,7 @@ def build_index(kind: IndexKind, roots: list[tuple[str, str, Path]]) -> SearchIn
         built_at=datetime.now(timezone.utc).isoformat(),
         document_count=len(documents),
         inventory_count=inventory_count,
-        inventory_signature="\n".join(part for part in signature_parts if part),
+        inventory_signature=inventory_signature,
         documents=documents,
     )
 
@@ -274,16 +355,25 @@ def load_index(path: Path) -> SearchIndex | None:
     )
 
 
-def index_is_stale(index: SearchIndex, roots: list[tuple[str, str, Path]]) -> bool:
-    normalized_roots = [f"{source_id}:{root.expanduser().resolve()}" for source_id, _source_label, root in roots]
+def index_is_stale(
+    index: SearchIndex,
+    roots: list[tuple[str, str, Path]],
+    *,
+    timeout_seconds: float | None = None,
+) -> bool:
+    normalized_roots, _inventory_items, root_strings, inventory_signature, inventory_count = _inventory_for_roots(
+        index.kind,
+        roots,
+        timeout_seconds=timeout_seconds,
+    )
+    normalized_root_strings = [f"{source_id}:{root}" for source_id, _source_label, root in normalized_roots]
     current_roots = index.roots or ([index.root] if index.root else [])
-    if normalized_roots != current_roots:
+    if normalized_root_strings != current_roots:
         return True
-    rebuilt = build_index(index.kind, roots)
     return (
-        rebuilt.inventory_signature != index.inventory_signature
-        or rebuilt.inventory_count != index.inventory_count
-        or rebuilt.document_count != index.document_count
+        inventory_signature != index.inventory_signature
+        or inventory_count != index.inventory_count
+        or root_strings != current_roots
     )
 
 
@@ -293,11 +383,12 @@ def ensure_index(
     target: Path,
     *,
     force_rebuild: bool = False,
+    timeout_seconds: float | None = None,
 ) -> tuple[SearchIndex, bool]:
     current = None if force_rebuild else load_index(target)
-    if current is not None and not index_is_stale(current, roots):
+    if current is not None and not index_is_stale(current, roots, timeout_seconds=timeout_seconds):
         return current, False
-    rebuilt = build_index(kind, roots)
+    rebuilt = build_index(kind, roots, timeout_seconds=timeout_seconds)
     save_index(rebuilt, target)
     return rebuilt, True
 

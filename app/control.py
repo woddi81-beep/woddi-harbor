@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from .auth import require_role
 from .config import HarborSettings, LOG_DIR, find_module, load_modules, load_settings, system_prompt
-from .llm import complete_chat
+from .llm import complete_chat, extract_chat_content
 from .modules import execute_module, list_module_overview, module_status, restart_module, start_module, stop_module
 
 
@@ -59,7 +59,10 @@ def _llm_health(settings: HarborSettings) -> dict[str, Any]:
     base_url = settings.llm.base_url.rstrip("/")
     try:
         with httpx.Client(timeout=min(settings.llm.timeout_seconds, 4.0)) as client:
-            response = client.get(f"{base_url}/models", headers=headers)
+            if "/api" in base_url or "11434" in base_url:
+                response = client.get(f"{base_url}/tags", headers=headers)
+            else:
+                response = client.get(f"{base_url}/models", headers=headers)
             response.raise_for_status()
         return {
             "connected": True,
@@ -697,7 +700,7 @@ def create_app() -> FastAPI:
             response = complete_chat(settings, messages)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        content = response.get("message", {}).get("content", "") or ""
+        content = extract_chat_content(response)
         return {"ok": True, "reply": content, "used_modules": used_modules, "raw": response}
 
     @app.get("/api/modules/{module_id}")

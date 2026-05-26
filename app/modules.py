@@ -474,12 +474,13 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
         for source in module_sources(module)
     ]
     top_k = int(payload.get("top_k", module.top_k))
+    index_timeout = module.timeout_seconds if module.timeout_seconds > 0 else None
     if module.type == "docs":
         index_path = module_index_path(module.id)
         if action == "health":
             return {"ok": True, "data": worker_health(module)}
         if action == "stats":
-            index, rebuilt = ensure_index("docs", roots, index_path)
+            index, rebuilt = ensure_index("docs", roots, index_path, timeout_seconds=index_timeout)
             return {
                 "ok": True,
                 "data": {
@@ -492,7 +493,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                 },
             }
         if action == "reindex":
-            index, _rebuilt = ensure_index("docs", roots, index_path, force_rebuild=True)
+            index, _rebuilt = ensure_index("docs", roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
             return {
                 "ok": True,
                 "data": {
@@ -506,7 +507,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             }
         if action == "search":
             query = str(payload.get("query", "")).strip()
-            index, rebuilt = ensure_index("docs", roots, index_path)
+            index, rebuilt = ensure_index("docs", roots, index_path, timeout_seconds=index_timeout)
             hits = search_index(index, query, top_k)
             return {
                 "ok": True,
@@ -525,7 +526,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
         if action == "health":
             return {"ok": True, "data": worker_health(module)}
         if action == "stats":
-            index, rebuilt = ensure_index("maildir", roots, index_path)
+            index, rebuilt = ensure_index("maildir", roots, index_path, timeout_seconds=index_timeout)
             return {
                 "ok": True,
                 "data": {
@@ -538,7 +539,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                 },
             }
         if action == "reindex":
-            index, _rebuilt = ensure_index("maildir", roots, index_path, force_rebuild=True)
+            index, _rebuilt = ensure_index("maildir", roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
             return {
                 "ok": True,
                 "data": {
@@ -552,7 +553,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             }
         if action == "search":
             query = str(payload.get("query", "")).strip()
-            index, rebuilt = ensure_index("maildir", roots, index_path)
+            index, rebuilt = ensure_index("maildir", roots, index_path, timeout_seconds=index_timeout)
             hits = search_index(index, query, top_k)
             return {
                 "ok": True,
