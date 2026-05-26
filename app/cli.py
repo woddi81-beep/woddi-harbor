@@ -367,32 +367,38 @@ def module_add_mcp(
 @module_app.command("add-netbox-mcp")
 def module_add_netbox_mcp(
     module_id: str = typer.Argument("netbox"),
-    endpoint: str = typer.Option("http://127.0.0.1:8000/mcp", help="HTTP MCP endpoint, z. B. http://127.0.0.1:8000/mcp"),
     name: str = typer.Option("NetBox MCP"),
-    netbox_url: str = typer.Option("", help="Dokumentationswert fuer die dahinterliegende NetBox-Instanz"),
-    token_env: str = typer.Option("NETBOX_TOKEN", help="Dokumentationswert fuer den Token-ENV-Namen"),
-    verify_ssl: bool = typer.Option(True),
+    netbox_url: str = typer.Option(..., help="Basis-URL der NetBox-Instanz, z. B. https://netbox.example.com"),
+    api_key: str = typer.Option("", help="NetBox API-Token"),
+    api_key_env: str = typer.Option("", help="ENV-Name fuer das NetBox API-Token"),
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
     timeout_seconds: float = typer.Option(30.0),
 ) -> None:
-    """Register the netboxlabs netbox-mcp-server as a standard MCP HTTP integration."""
+    """Register a local NetBox MCP server managed by Harbor."""
+    if api_key and api_key_env:
+        raise typer.BadParameter("Nutze entweder --api-key oder --api-key-env.")
+    if not api_key and not api_key_env:
+        raise typer.BadParameter("NetBox API-Token fehlt. Nutze --api-key oder --api-key-env.")
     module = ModuleConfig(
         id=module_id,
         name=name,
-        type="mcp_http",
-        provider="netbox-mcp-server",
-        transport="remote",
+        type="netbox_mcp",
+        provider="netbox",
+        transport="local",
         remote_protocol="mcp",
-        base_url=endpoint,
+        host=host,
+        port=port,
         timeout_seconds=timeout_seconds,
         tool_names=["get_objects", "get_object_by_id", "get_changelogs"],
         test_action="discover",
         settings={
             "netbox_url": netbox_url,
-            "netbox_token_env": token_env,
-            "verify_ssl": verify_ssl,
+            "netbox_token": api_key,
+            "netbox_token_env": api_key_env,
             "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
         },
-        notes="Erwartet einen laufenden netbox-mcp-server im HTTP-Transport auf /mcp.",
+        notes="Harbor startet den lokalen NetBox MCP Worker und exponiert /mcp sowie /health.",
     )
     errors = validate_module_config(module)
     if errors:

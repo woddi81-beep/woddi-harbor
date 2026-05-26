@@ -37,6 +37,23 @@ def module_url(module: ModuleConfig) -> str:
     return f"http://{module.host}:{module.port}"
 
 
+def _local_netbox_health_url(module: ModuleConfig) -> str:
+    return f"{module_url(module)}/health"
+
+
+def _netbox_settings(module: ModuleConfig) -> tuple[str, str]:
+    netbox_url = str(module.settings.get("netbox_url", "")).strip()
+    netbox_token = str(module.settings.get("netbox_token", "")).strip()
+    token_env = str(module.settings.get("netbox_token_env", "")).strip()
+    if not netbox_token and token_env:
+        netbox_token = os.getenv(token_env, "").strip()
+    return netbox_url, netbox_token
+
+
+def _is_local_mcp_module(module: ModuleConfig) -> bool:
+    return module.type == "netbox_mcp"
+
+
 def module_pid_path(module_id: str) -> Path:
     return PID_DIR / f"{module_id}.pid"
 
@@ -173,11 +190,14 @@ def _port_bindable(host: str, port: int) -> bool:
 def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> bool:
     try:
         with httpx.Client(timeout=timeout) as client:
-            response = client.get(f"{module_url(module)}/health")
+            response = client.get(_local_netbox_health_url(module) if _is_local_mcp_module(module) else f"{module_url(module)}/health")
         if response.status_code != 200:
             return False
         payload = response.json()
-        ok = str(payload.get("module_id", "")) == module.id
+        if _is_local_mcp_module(module):
+            ok = bool(payload.get("ok")) and str(payload.get("server", "")).strip() == "netbox-mcp-server"
+        else:
+            ok = str(payload.get("module_id", "")) == module.id
         if ok:
             update_module_runtime_state(module.id, last_health_ok_at=_timestamp())
         return ok
@@ -207,15 +227,27 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
     log_path = module_log_path(module.id)
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    command = [
+        python_executable,
+        "-m",
+        "app.worker",
+        module.id,
+    ]
+    if module.type == "netbox_mcp":
+        netbox_url, netbox_token = _netbox_settings(module)
+        env["NETBOX_URL"] = netbox_url
+        env["NETBOX_TOKEN"] = netbox_token
+        command = [
+            python_executable,
+            "-m",
+            "app.worker_netbox",
+            module.id,
+            str(module.port),
+        ]
     _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         return subprocess.Popen(
-            [
-                python_executable,
-                "-m",
-                "app.worker",
-                module.id,
-            ],
+            command,
             cwd=str(BASE_DIR),
             stdout=handle,
             stderr=subprocess.STDOUT,
@@ -250,7 +282,7 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     errors: list[str] = []
     if not module.id.strip():
         errors.append("Module ID fehlt.")
-    if module.type not in {"docs", "maildir", "mcp_http"}:
+    if module.type not in {"docs", "maildir", "mcp_http", "netbox_mcp"}:
         errors.append(f"Unbekannter Modultyp: {module.type}")
     if module.transport not in {"local", "remote"}:
         errors.append(f"Ungueltiger Transport: {module.transport}")
@@ -290,6 +322,20 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
             parsed = urlparse(module.base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 errors.append(f"Base URL ungueltig: {module.base_url}")
+    if module.type == "netbox_mcp":
+        if module.transport != "local":
+            errors.append("netbox_mcp muss lokal sein.")
+        netbox_url, netbox_token = _netbox_settings(module)
+        if not netbox_url:
+            errors.append("NetBox URL fehlt.")
+        else:
+            parsed = urlparse(netbox_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                errors.append(f"NetBox URL ungueltig: {netbox_url}")
+        if not netbox_token:
+            errors.append("NetBox Token fehlt.")
+        if module.port < 0 or module.port > 65535:
+            errors.append(f"Port ungueltig: {module.port}")
     return errors
 
 
@@ -376,10 +422,13 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
     if module.transport == "local" and module.port > 0:
         try:
             with httpx.Client(timeout=2.5) as client:
-                response = client.get(f"{module_url(module)}/health")
+                response = client.get(_local_netbox_health_url(module) if _is_local_mcp_module(module) else f"{module_url(module)}/health")
                 response.raise_for_status()
                 payload = response.json()
-                if str(payload.get("module_id", "")) == module.id:
+                if _is_local_mcp_module(module):
+                    if bool(payload.get("ok")) and str(payload.get("server", "")).strip() == "netbox-mcp-server":
+                        health = payload
+                elif str(payload.get("module_id", "")) == module.id:
                     health = payload
         except Exception:
             health = None
@@ -502,6 +551,11 @@ def health_check_module(module_id: str) -> dict[str, Any]:
         discovery = discover_remote_module(module)
         payload["remote"] = discovery
         payload["ok"] = payload["ok"] and bool(discovery.get("ok"))
+    if module.type == "netbox_mcp" and not errors:
+        payload["local"] = status.get("health")
+        discovery = discover_standard_mcp_module(module)
+        payload["remote"] = discovery
+        payload["ok"] = payload["ok"] and bool(status.get("running")) and bool(discovery.get("ok"))
     return payload
 
 
@@ -517,7 +571,7 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
         "log_path": str(module_log_path(module_id)),
         "log_tail": _read_module_log_tail(module_id, lines=log_lines),
     }
-    if module.type == "mcp_http":
+    if module.type in {"mcp_http", "netbox_mcp"}:
         remote = discover_remote_module(module)
         payload["remote"] = remote
         payload["ok"] = payload["ok"] and bool(remote.get("ok"))
@@ -541,6 +595,10 @@ def _default_test_config(module: ModuleConfig) -> tuple[str, dict[str, Any], lis
                 return module.tool_names[0], {}, []
             return "discover", {}, []
         return "health", {}, []
+    if module.type == "netbox_mcp":
+        if module.tool_names:
+            return module.tool_names[0], {}, []
+        return "discover", {}, []
     return "health", {}, []
 
 
@@ -567,7 +625,7 @@ def module_test(module_id: str) -> dict[str, Any]:
     meaningful_output = False
     output_summary = ""
     try:
-        if module.type == "mcp_http" and action == "discover":
+        if module.type in {"mcp_http", "netbox_mcp"} and action == "discover":
             result = discover_remote_module(module)
             connected = bool(result.get("ok"))
             tools = result.get("tools") or result.get("actions") or []
@@ -584,7 +642,7 @@ def module_test(module_id: str) -> dict[str, Any]:
             elif module.type in {"docs", "maildir"} and action == "stats":
                 meaningful_output = int(result_data.get("document_count", 0) or result_data.get("messages", 0) or 0) >= 0
                 output_summary = json.dumps(result_data, ensure_ascii=False)
-            elif module.type == "mcp_http":
+            elif module.type in {"mcp_http", "netbox_mcp"}:
                 output_summary = json.dumps(result_data, ensure_ascii=False)
                 meaningful_output = bool(output_summary.strip() and output_summary not in {"{}", "[]", '""'})
             else:
@@ -640,6 +698,8 @@ def module_test(module_id: str) -> dict[str, Any]:
 
 
 def _mcp_endpoint(module: ModuleConfig) -> str:
+    if module.type == "netbox_mcp":
+        return f"{module_url(module)}/mcp"
     return module.base_url.rstrip("/")
 
 
@@ -704,6 +764,8 @@ def _call_mcp_tool(module: ModuleConfig, tool_name: str, arguments: dict[str, An
 
 
 def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
+    if module.type == "netbox_mcp":
+        return discover_standard_mcp_module(module)
     if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
         return discover_standard_mcp_module(module)
     base_url = module.base_url.rstrip("/")
@@ -828,6 +890,7 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     tools: list[str] = []
     session_id: str | None = None
+    endpoint = _mcp_endpoint(module)
     try:
         with httpx.Client(timeout=min(module.timeout_seconds, 10.0)) as client:
             initialize_payload, session_id = _mcp_request(
@@ -861,9 +924,9 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
         )
         return {
             "ok": False,
-            "base_url": module.base_url.rstrip("/"),
+            "base_url": endpoint,
             "protocol": "mcp",
-            "auth_configured": bool(module_secret(module)),
+            "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _netbox_settings(module)[1])),
             "session_id": session_id or "",
             "tools": [],
             "attempts": attempts,
@@ -878,9 +941,9 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
     )
     return {
         "ok": True,
-        "base_url": module.base_url.rstrip("/"),
+        "base_url": endpoint,
         "protocol": "mcp",
-        "auth_configured": bool(module_secret(module)),
+        "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _netbox_settings(module)[1])),
         "session_id": session_id or "",
         "tools": deduped_tools,
         "capabilities": ["tools"],
@@ -973,9 +1036,11 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
 
-    if module.type == "mcp_http":
+    if module.type in {"mcp_http", "netbox_mcp"}:
         try:
-            if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
+            if module.type == "netbox_mcp" or module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
+                if action == "health":
+                    return {"ok": True, "data": health_check_module(module_id)}
                 if action in {"discover", "capabilities", "tools/list", "list_tools"}:
                     return {"ok": True, "data": discover_standard_mcp_module(module)}
                 tool_name = str(payload.get("tool") or action).strip()
