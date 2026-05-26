@@ -133,6 +133,9 @@ def reserve_port() -> int:
 
 
 def _worker_python_executable() -> str:
+    venv_python = BASE_DIR / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
     executable = sys.executable.strip()
     if executable and Path(executable).exists():
         return executable
@@ -1009,7 +1012,6 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
 
 
 def worker_health(module: ModuleConfig) -> dict[str, Any]:
-    index = load_index(module_index_path(module.id)) if module.type in {"docs", "maildir"} else None
     return {
         "module_id": module.id,
         "name": module.display_name(),
@@ -1018,9 +1020,8 @@ def worker_health(module: ModuleConfig) -> dict[str, Any]:
         "source_count": len(module_sources(module)),
         "transport": module.transport,
         "port": module.port,
+        "ready": True,
         "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
-        "index_built_at": index.built_at if index else "",
-        "index_document_count": index.document_count if index else 0,
     }
 
 

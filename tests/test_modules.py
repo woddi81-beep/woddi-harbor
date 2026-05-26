@@ -4,7 +4,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
 from app.config import ModuleConfig
+from app import cli
 from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module
 
 
@@ -76,6 +79,28 @@ class FakeMcpClient:
 
 
 class ModuleTests(unittest.TestCase):
+    def test_worker_health_endpoint_does_not_call_module_status(self) -> None:
+        module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
+        captured: dict[str, object] = {}
+
+        def fake_run(app, **kwargs) -> None:
+            captured["app"] = app
+            captured["kwargs"] = kwargs
+
+        with (
+            patch("app.cli.find_module", return_value=module),
+            patch("app.cli.uvicorn.run", side_effect=fake_run),
+            patch("app.cli.module_status", side_effect=AssertionError("module_status must not be used for worker /health")),
+            patch("app.modules.load_index", side_effect=AssertionError("load_index must not be used for worker /health")),
+        ):
+            cli.worker("docs-local")
+
+        app = captured["app"]
+        response = TestClient(app).get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["module_id"], "docs-local")
+        self.assertTrue(response.json()["ready"])
+
     def test_validation_errors_by_module_detects_duplicate_ports(self) -> None:
         with tempfile.TemporaryDirectory() as first_dir, tempfile.TemporaryDirectory() as second_dir:
             modules = [
