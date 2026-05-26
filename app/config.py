@@ -40,6 +40,17 @@ class HarborSettings:
 
 
 @dataclass
+class ModuleSource:
+    id: str
+    path: str
+    label: str = ""
+    enabled: bool = True
+
+    def display_name(self) -> str:
+        return self.label or self.id
+
+
+@dataclass
 class ModuleConfig:
     id: str
     type: ModuleType
@@ -55,9 +66,17 @@ class ModuleConfig:
     timeout_seconds: float = 30.0
     top_k: int = 5
     notes: str = ""
+    sources: list[ModuleSource] = field(default_factory=list)
 
     def display_name(self) -> str:
         return self.name or self.id
+
+    def local_sources(self) -> list[ModuleSource]:
+        if self.sources:
+            return self.sources
+        if self.path.strip():
+            return [ModuleSource(id=f"{self.id}-source-1", path=self.path)]
+        return []
 
 
 @dataclass
@@ -124,9 +143,22 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_settings() -> HarborSettings:
     ensure_layout()
     payload = _load_json(CONFIG_DIR / "harbor.json")
+    local_path = CONFIG_DIR / "harbor.local.json"
+    if local_path.exists():
+        payload = _merge_dict(payload, _load_json(local_path))
     llm_payload = payload.get("llm", {})
     llm = LlmSettings(
         base_url=str(llm_payload.get("base_url", "")),
@@ -156,6 +188,27 @@ def load_modules() -> list[ModuleConfig]:
     payload = _load_json(CONFIG_DIR / "modules.json")
     modules: list[ModuleConfig] = []
     for raw in payload.get("modules", []):
+        raw_sources = raw.get("sources", [])
+        sources: list[ModuleSource] = []
+        if isinstance(raw_sources, list):
+            for index, item in enumerate(raw_sources, start=1):
+                if not isinstance(item, dict):
+                    continue
+                source_path = str(item.get("path", "")).strip()
+                if not source_path:
+                    continue
+                source_id = str(item.get("id", "")).strip() or f"{raw['id']}-source-{index}"
+                sources.append(
+                    ModuleSource(
+                        id=source_id,
+                        path=source_path,
+                        label=str(item.get("label", "")),
+                        enabled=bool(item.get("enabled", True)),
+                    )
+                )
+        legacy_path = str(raw.get("path", "")).strip()
+        if not sources and legacy_path:
+            sources.append(ModuleSource(id=f"{raw['id']}-source-1", path=legacy_path))
         modules.append(
             ModuleConfig(
                 id=str(raw["id"]),
@@ -172,6 +225,7 @@ def load_modules() -> list[ModuleConfig]:
                 timeout_seconds=float(raw.get("timeout_seconds", 30.0)),
                 top_k=int(raw.get("top_k", 5)),
                 notes=str(raw.get("notes", "")),
+                sources=sources,
             )
         )
     return modules
@@ -179,7 +233,12 @@ def load_modules() -> list[ModuleConfig]:
 
 def save_modules(modules: list[ModuleConfig]) -> None:
     ensure_layout()
-    _write_json(CONFIG_DIR / "modules.json", {"modules": [asdict(module) for module in modules]})
+    serialized: list[dict[str, Any]] = []
+    for module in modules:
+        payload = asdict(module)
+        payload["path"] = module.local_sources()[0].path if module.local_sources() else module.path
+        serialized.append(payload)
+    _write_json(CONFIG_DIR / "modules.json", {"modules": serialized})
     sync_service_profiles()
 
 
@@ -298,3 +357,10 @@ def find_module(module_id: str) -> ModuleConfig | None:
         if module.id == module_id:
             return module
     return None
+
+
+def module_sources(module: ModuleConfig, *, enabled_only: bool = True) -> list[ModuleSource]:
+    sources = module.local_sources()
+    if enabled_only:
+        return [source for source in sources if source.enabled]
+    return sources

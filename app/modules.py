@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import BASE_DIR, LOG_DIR, PID_DIR, RUNTIME_DIR, ModuleConfig, find_module, load_modules, module_secret
+from .config import BASE_DIR, LOG_DIR, PID_DIR, RUNTIME_DIR, ModuleConfig, find_module, load_modules, module_secret, module_sources
 from .search import ensure_index, load_index, search_index
 
 
@@ -62,13 +62,24 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     if module.type in {"docs", "maildir"}:
         if module.transport != "local":
             errors.append(f"{module.type} muss lokal sein.")
-        root = Path(module.path).expanduser()
-        if not module.path.strip():
-            errors.append("Lokaler Pfad fehlt.")
-        elif not root.exists():
-            errors.append(f"Pfad existiert nicht: {root}")
-        elif not root.is_dir():
-            errors.append(f"Pfad ist kein Verzeichnis: {root}")
+        sources = module_sources(module, enabled_only=False)
+        if not sources:
+            errors.append("Mindestens eine lokale Quelle fehlt.")
+        seen_source_ids: set[str] = set()
+        for source in sources:
+            if not source.id.strip():
+                errors.append("Quellen-ID fehlt.")
+                continue
+            if source.id in seen_source_ids:
+                errors.append(f"Doppelte Quellen-ID: {source.id}")
+            seen_source_ids.add(source.id)
+            root = Path(source.path).expanduser()
+            if not source.path.strip():
+                errors.append(f"Pfad fehlt fuer Quelle {source.id}.")
+            elif not root.exists():
+                errors.append(f"Pfad existiert nicht: {root}")
+            elif not root.is_dir():
+                errors.append(f"Pfad ist kein Verzeichnis: {root}")
         if module.port <= 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
         if module.top_k <= 0:
@@ -152,6 +163,7 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
                 health = response.json()
         except Exception:
             health = None
+    sources = module_sources(module, enabled_only=False)
     return {
         "id": module.id,
         "name": module.display_name(),
@@ -161,12 +173,64 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         "running": running,
         "pid": pid,
         "path": module.path,
+        "source_count": len(sources),
+        "enabled_source_count": len([source for source in sources if source.enabled]),
+        "sources": [
+            {
+                "id": source.id,
+                "label": source.display_name(),
+                "path": source.path,
+                "enabled": source.enabled,
+            }
+            for source in sources
+        ],
         "base_url": module.base_url,
         "host": module.host,
         "port": module.port,
         "health": health,
         "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
+        "validation_errors": validate_module_config(module),
     }
+
+
+def module_overview(module: ModuleConfig) -> dict[str, Any]:
+    status = module_status(module)
+    validation_errors = status["validation_errors"]
+    if not module.enabled:
+        state = "disabled"
+        tone = "muted"
+    elif validation_errors:
+        state = "invalid"
+        tone = "danger"
+    elif module.transport == "remote":
+        state = "remote"
+        tone = "info"
+    elif status["running"]:
+        state = "running"
+        tone = "success"
+    else:
+        state = "stopped"
+        tone = "warning"
+    endpoint = module.base_url or module.path or f"http://{module.host}:{module.port}"
+    return {
+        "id": module.id,
+        "name": module.display_name(),
+        "type": module.type,
+        "transport": module.transport,
+        "state": state,
+        "tone": tone,
+        "enabled": module.enabled,
+        "endpoint": endpoint,
+        "running": status["running"],
+        "source_count": status["source_count"],
+        "enabled_source_count": status["enabled_source_count"],
+        "validation_errors": validation_errors,
+        "status": status,
+    }
+
+
+def list_module_overview() -> list[dict[str, Any]]:
+    return [module_overview(module) for module in load_modules()]
 
 
 def health_check_module(module_id: str) -> dict[str, Any]:
@@ -395,6 +459,7 @@ def worker_health(module: ModuleConfig) -> dict[str, Any]:
         "name": module.display_name(),
         "type": module.type,
         "path": module.path,
+        "source_count": len(module_sources(module)),
         "transport": module.transport,
         "port": module.port,
         "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
@@ -404,14 +469,17 @@ def worker_health(module: ModuleConfig) -> dict[str, Any]:
 
 
 def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-    root = Path(module.path).expanduser()
+    roots = [
+        (source.id, source.display_name(), Path(source.path).expanduser())
+        for source in module_sources(module)
+    ]
     top_k = int(payload.get("top_k", module.top_k))
     if module.type == "docs":
         index_path = module_index_path(module.id)
         if action == "health":
             return {"ok": True, "data": worker_health(module)}
         if action == "stats":
-            index, rebuilt = ensure_index("docs", root, index_path)
+            index, rebuilt = ensure_index("docs", roots, index_path)
             return {
                 "ok": True,
                 "data": {
@@ -420,10 +488,11 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "document_count": index.document_count,
                     "inventory_count": index.inventory_count,
                     "index_path": str(index_path),
+                    "roots": index.roots,
                 },
             }
         if action == "reindex":
-            index, _rebuilt = ensure_index("docs", root, index_path, force_rebuild=True)
+            index, _rebuilt = ensure_index("docs", roots, index_path, force_rebuild=True)
             return {
                 "ok": True,
                 "data": {
@@ -432,11 +501,12 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "document_count": index.document_count,
                     "inventory_count": index.inventory_count,
                     "index_path": str(index_path),
+                    "roots": index.roots,
                 },
             }
         if action == "search":
             query = str(payload.get("query", "")).strip()
-            index, rebuilt = ensure_index("docs", root, index_path)
+            index, rebuilt = ensure_index("docs", roots, index_path)
             hits = search_index(index, query, top_k)
             return {
                 "ok": True,
@@ -446,6 +516,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "documents": index.document_count,
                     "rebuilt": rebuilt,
                     "index_built_at": index.built_at,
+                    "roots": index.roots,
                 },
             }
         raise ValueError(f"Aktion fuer docs nicht bekannt: {action}")
@@ -454,7 +525,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
         if action == "health":
             return {"ok": True, "data": worker_health(module)}
         if action == "stats":
-            index, rebuilt = ensure_index("maildir", root, index_path)
+            index, rebuilt = ensure_index("maildir", roots, index_path)
             return {
                 "ok": True,
                 "data": {
@@ -463,10 +534,11 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "document_count": index.document_count,
                     "inventory_count": index.inventory_count,
                     "index_path": str(index_path),
+                    "roots": index.roots,
                 },
             }
         if action == "reindex":
-            index, _rebuilt = ensure_index("maildir", root, index_path, force_rebuild=True)
+            index, _rebuilt = ensure_index("maildir", roots, index_path, force_rebuild=True)
             return {
                 "ok": True,
                 "data": {
@@ -475,11 +547,12 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "document_count": index.document_count,
                     "inventory_count": index.inventory_count,
                     "index_path": str(index_path),
+                    "roots": index.roots,
                 },
             }
         if action == "search":
             query = str(payload.get("query", "")).strip()
-            index, rebuilt = ensure_index("maildir", root, index_path)
+            index, rebuilt = ensure_index("maildir", roots, index_path)
             hits = search_index(index, query, top_k)
             return {
                 "ok": True,
@@ -489,6 +562,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "messages": index.document_count,
                     "rebuilt": rebuilt,
                     "index_built_at": index.built_at,
+                    "roots": index.roots,
                 },
             }
         raise ValueError(f"Aktion fuer maildir nicht bekannt: {action}")

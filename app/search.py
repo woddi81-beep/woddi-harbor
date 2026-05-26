@@ -41,6 +41,8 @@ class SearchHit:
     title: str
     location: str
     snippet: str
+    source_id: str = ""
+    source_label: str = ""
 
 
 @dataclass
@@ -50,12 +52,15 @@ class IndexedDocument:
     text: str
     size: int
     mtime_ns: int
+    source_id: str = ""
+    source_label: str = ""
 
 
 @dataclass
 class SearchIndex:
     kind: IndexKind
     root: str
+    roots: list[str]
     built_at: str
     document_count: int
     inventory_count: int
@@ -81,18 +86,18 @@ def _snippet(text: str, query_terms: list[str], limit: int = 260) -> str:
     return normalized[:limit].strip()
 
 
-def score_documents(documents: list[tuple[str, str, str]], query: str, top_k: int) -> list[SearchHit]:
+def score_documents(documents: list[IndexedDocument], query: str, top_k: int) -> list[SearchHit]:
     query_terms = tokenize(query)
     if not query_terms:
         return []
-    doc_tokens = [tokenize(title + "\n" + text) for title, _location, text in documents]
+    doc_tokens = [tokenize(document.title + "\n" + document.text) for document in documents]
     document_frequency: dict[str, int] = {}
     for tokens in doc_tokens:
         for token in set(tokens):
             document_frequency[token] = document_frequency.get(token, 0) + 1
     hits: list[SearchHit] = []
     corpus_size = max(len(doc_tokens), 1)
-    for (title, location, text), tokens in zip(documents, doc_tokens, strict=False):
+    for document, tokens in zip(documents, doc_tokens, strict=False):
         if not tokens:
             continue
         token_counts: dict[str, int] = {}
@@ -110,9 +115,11 @@ def score_documents(documents: list[tuple[str, str, str]], query: str, top_k: in
         hits.append(
             SearchHit(
                 score=round(score, 4),
-                title=title,
-                location=location,
-                snippet=_snippet(text, query_terms),
+                title=document.title,
+                location=document.location,
+                snippet=_snippet(document.text, query_terms),
+                source_id=document.source_id,
+                source_label=document.source_label,
             )
         )
     hits.sort(key=lambda hit: hit.score, reverse=True)
@@ -141,19 +148,19 @@ def _iter_mail_paths(root: Path) -> list[Path]:
     return paths
 
 
-def _inventory_signature(paths: list[Path], root: Path) -> tuple[str, int]:
+def _inventory_signature(paths: list[tuple[str, Path]], root: Path) -> tuple[str, int]:
     parts: list[str] = []
-    for path in paths:
+    for source_id, path in paths:
         try:
             stat = path.stat()
         except OSError:
             continue
         relative = path.relative_to(root).as_posix()
-        parts.append(f"{relative}|{stat.st_size}|{stat.st_mtime_ns}")
+        parts.append(f"{source_id}|{relative}|{stat.st_size}|{stat.st_mtime_ns}")
     return "\n".join(parts), len(parts)
 
 
-def _mail_to_document(path: Path) -> IndexedDocument | None:
+def _mail_to_document(path: Path, *, source_id: str = "", source_label: str = "") -> IndexedDocument | None:
     try:
         message = email.message_from_bytes(path.read_bytes(), policy=policy.default)
     except Exception:
@@ -183,10 +190,12 @@ def _mail_to_document(path: Path) -> IndexedDocument | None:
         text=combined,
         size=int(stat.st_size),
         mtime_ns=int(stat.st_mtime_ns),
+        source_id=source_id,
+        source_label=source_label,
     )
 
 
-def _text_to_document(path: Path) -> IndexedDocument | None:
+def _text_to_document(path: Path, *, source_id: str = "", source_label: str = "") -> IndexedDocument | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
@@ -198,25 +207,43 @@ def _text_to_document(path: Path) -> IndexedDocument | None:
         text=text,
         size=int(stat.st_size),
         mtime_ns=int(stat.st_mtime_ns),
+        source_id=source_id,
+        source_label=source_label,
     )
 
 
-def build_index(kind: IndexKind, root: Path) -> SearchIndex:
-    root = root.expanduser().resolve()
-    paths = _iter_text_paths(root) if kind == "docs" else _iter_mail_paths(root)
-    signature, inventory_count = _inventory_signature(paths, root)
+def build_index(kind: IndexKind, roots: list[tuple[str, str, Path]]) -> SearchIndex:
+    normalized_roots = [(source_id, source_label, root.expanduser().resolve()) for source_id, source_label, root in roots]
+    inventory_items: list[tuple[str, Path]] = []
     documents: list[IndexedDocument] = []
-    for path in paths:
-        document = _text_to_document(path) if kind == "docs" else _mail_to_document(path)
-        if document is not None:
-            documents.append(document)
+    root_strings: list[str] = []
+    for source_id, source_label, root in normalized_roots:
+        paths = _iter_text_paths(root) if kind == "docs" else _iter_mail_paths(root)
+        inventory_items.extend((source_id, path) for path in paths)
+        root_strings.append(f"{source_id}:{root}")
+        for path in paths:
+            document = (
+                _text_to_document(path, source_id=source_id, source_label=source_label)
+                if kind == "docs"
+                else _mail_to_document(path, source_id=source_id, source_label=source_label)
+            )
+            if document is not None:
+                documents.append(document)
+    signature_parts: list[str] = []
+    inventory_count = 0
+    for source_id, source_label, root in normalized_roots:
+        source_items = [(item_source, path) for item_source, path in inventory_items if item_source == source_id]
+        signature, source_count = _inventory_signature(source_items, root)
+        signature_parts.append(signature)
+        inventory_count += source_count
     return SearchIndex(
         kind=kind,
-        root=str(root),
+        root=root_strings[0] if root_strings else "",
+        roots=root_strings,
         built_at=datetime.now(timezone.utc).isoformat(),
         document_count=len(documents),
         inventory_count=inventory_count,
-        inventory_signature=signature,
+        inventory_signature="\n".join(part for part in signature_parts if part),
         documents=documents,
     )
 
@@ -238,6 +265,7 @@ def load_index(path: Path) -> SearchIndex | None:
     return SearchIndex(
         kind=str(payload.get("kind", "docs")),
         root=str(payload.get("root", "")),
+        roots=[str(item) for item in payload.get("roots", [])] or ([str(payload.get("root", ""))] if payload.get("root") else []),
         built_at=str(payload.get("built_at", "")),
         document_count=int(payload.get("document_count", len(documents))),
         inventory_count=int(payload.get("inventory_count", len(documents))),
@@ -246,24 +274,33 @@ def load_index(path: Path) -> SearchIndex | None:
     )
 
 
-def index_is_stale(index: SearchIndex, root: Path) -> bool:
-    root = root.expanduser().resolve()
-    if str(root) != index.root:
+def index_is_stale(index: SearchIndex, roots: list[tuple[str, str, Path]]) -> bool:
+    normalized_roots = [f"{source_id}:{root.expanduser().resolve()}" for source_id, _source_label, root in roots]
+    current_roots = index.roots or ([index.root] if index.root else [])
+    if normalized_roots != current_roots:
         return True
-    paths = _iter_text_paths(root) if index.kind == "docs" else _iter_mail_paths(root)
-    signature, inventory_count = _inventory_signature(paths, root)
-    return signature != index.inventory_signature or inventory_count != index.inventory_count
+    rebuilt = build_index(index.kind, roots)
+    return (
+        rebuilt.inventory_signature != index.inventory_signature
+        or rebuilt.inventory_count != index.inventory_count
+        or rebuilt.document_count != index.document_count
+    )
 
 
-def ensure_index(kind: IndexKind, root: Path, target: Path, *, force_rebuild: bool = False) -> tuple[SearchIndex, bool]:
+def ensure_index(
+    kind: IndexKind,
+    roots: list[tuple[str, str, Path]],
+    target: Path,
+    *,
+    force_rebuild: bool = False,
+) -> tuple[SearchIndex, bool]:
     current = None if force_rebuild else load_index(target)
-    if current is not None and not index_is_stale(current, root):
+    if current is not None and not index_is_stale(current, roots):
         return current, False
-    rebuilt = build_index(kind, root)
+    rebuilt = build_index(kind, roots)
     save_index(rebuilt, target)
     return rebuilt, True
 
 
 def search_index(index: SearchIndex, query: str, top_k: int) -> list[SearchHit]:
-    documents = [(doc.title, doc.location, doc.text) for doc in index.documents]
-    return score_documents(documents, query, top_k)
+    return score_documents(index.documents, query, top_k)
