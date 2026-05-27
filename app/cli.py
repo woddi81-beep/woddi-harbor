@@ -407,6 +407,98 @@ def module_add_netbox_mcp(
     console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
 
 
+@module_app.command("add-openstack-mcp")
+def module_add_openstack_mcp(
+    module_id: str = typer.Argument("openstack"),
+    base_url: str = typer.Option(..., help="HTTP MCP Endpoint, z. B. http://127.0.0.1:8080/mcp"),
+    name: str = typer.Option("OpenStack MCP"),
+    api_key: str = typer.Option("", help="Optionaler Bearer Token fuer den MCP Endpoint"),
+    api_key_env: str = typer.Option("", help="ENV-Name fuer den MCP Bearer Token"),
+    timeout_seconds: float = typer.Option(30.0),
+) -> None:
+    """Register an external OpenStack MCP endpoint."""
+    module = ModuleConfig(
+        id=module_id,
+        name=name,
+        type="mcp_http",
+        provider="openstack-mcp-server",
+        transport="remote",
+        remote_protocol="mcp",
+        base_url=base_url,
+        api_key=api_key,
+        api_key_env=api_key_env,
+        timeout_seconds=timeout_seconds,
+        tool_names=["list_servers", "list_projects", "list_images"],
+        test_action="discover",
+        test_payload={},
+        test_expect_contains=["list_servers"],
+        settings={
+            "auth_type": "v3applicationcredential",
+            "auth_url_env": "OS_AUTH_URL",
+            "region_name_env": "OS_REGION_NAME",
+            "application_credential_id_env": "OS_APPLICATION_CREDENTIAL_ID",
+            "application_credential_secret_env": "OS_APPLICATION_CREDENTIAL_SECRET",
+            "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
+        },
+        notes="Remote MCP endpoint fuer einen OpenStack MCP Server.",
+    )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
+    upsert_module(module)
+    console.print(Panel.fit(f"OpenStack MCP-Modul registriert: {module_id}", title="Module"))
+
+
+@module_app.command("add-openstack-local-mcp")
+def module_add_openstack_local_mcp(
+    module_id: str = typer.Argument("openstack"),
+    name: str = typer.Option("OpenStack MCP"),
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
+    timeout_seconds: float = typer.Option(30.0),
+    auth_url: str = typer.Option("", help="OpenStack Auth URL"),
+    auth_url_env: str = typer.Option("OS_AUTH_URL"),
+    region_name: str = typer.Option("", help="OpenStack Region"),
+    region_name_env: str = typer.Option("OS_REGION_NAME"),
+    application_credential_id: str = typer.Option("", help="OpenStack Application Credential ID"),
+    application_credential_id_env: str = typer.Option("OS_APPLICATION_CREDENTIAL_ID"),
+    application_credential_secret: str = typer.Option("", help="OpenStack Application Credential Secret"),
+    application_credential_secret_env: str = typer.Option("OS_APPLICATION_CREDENTIAL_SECRET"),
+) -> None:
+    """Register a local OpenStack MCP server managed by Harbor."""
+    module = ModuleConfig(
+        id=module_id,
+        name=name,
+        type="openstack_mcp",
+        provider="openstack-mcp-server",
+        transport="local",
+        remote_protocol="mcp",
+        host=host,
+        port=port,
+        timeout_seconds=timeout_seconds,
+        tool_names=["list_servers", "list_projects", "list_images", "list_flavors", "list_networks"],
+        test_action="discover",
+        settings={
+            "auth_type": "v3applicationcredential",
+            "auth_url": auth_url,
+            "auth_url_env": auth_url_env,
+            "region_name": region_name,
+            "region_name_env": region_name_env,
+            "application_credential_id": application_credential_id,
+            "application_credential_id_env": application_credential_id_env,
+            "application_credential_secret": application_credential_secret,
+            "application_credential_secret_env": application_credential_secret_env,
+            "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
+        },
+        notes="Harbor startet den lokalen OpenStack MCP Worker und exponiert /mcp sowie /health.",
+    )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
+    upsert_module(module)
+    console.print(Panel.fit(f"Lokales OpenStack MCP-Modul registriert: {module_id}", title="Module"))
+
+
 @module_app.command("set")
 def module_set(
     module_id: str,

@@ -7,11 +7,13 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 
@@ -27,10 +29,18 @@ from .config import (
     module_sources,
     resolve_module_source_path,
 )
-from .search import ensure_index, load_index, search_index
+from .search import SearchIndexMeta, ensure_index, load_index, load_index_meta, search_index
 
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+QUERY_CACHE_TTL_SECONDS = 45.0
+
+
+_QUERY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_REINDEX_LOCK = threading.Lock()
+_REINDEX_THREADS: dict[str, threading.Thread] = {}
+_HEALTH_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
+HEALTH_CACHE_TTL_SECONDS = 2.5
 
 
 def module_url(module: ModuleConfig) -> str:
@@ -50,8 +60,41 @@ def _netbox_settings(module: ModuleConfig) -> tuple[str, str]:
     return netbox_url, netbox_token
 
 
+def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
+    def _resolve(primary_key: str, env_key: str) -> str:
+        direct = str(module.settings.get(primary_key, "")).strip()
+        if direct:
+            return direct
+        env_name = str(module.settings.get(env_key, "")).strip()
+        if env_name:
+            return os.getenv(env_name, "").strip()
+        return ""
+
+    return {
+        "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
+        "OS_REGION_NAME": _resolve("region_name", "region_name_env"),
+        "OS_INTERFACE": _resolve("interface", "interface_env"),
+        "OS_AUTH_TYPE": _resolve("auth_type", "auth_type_env") or "v3applicationcredential",
+        "OS_APPLICATION_CREDENTIAL_ID": _resolve("application_credential_id", "application_credential_id_env"),
+        "OS_APPLICATION_CREDENTIAL_SECRET": _resolve("application_credential_secret", "application_credential_secret_env"),
+        "OS_USERNAME": _resolve("username", "username_env"),
+        "OS_PASSWORD": _resolve("password", "password_env"),
+        "OS_PROJECT_NAME": _resolve("project_name", "project_name_env"),
+        "OS_USER_DOMAIN_NAME": _resolve("user_domain_name", "user_domain_name_env"),
+        "OS_PROJECT_DOMAIN_NAME": _resolve("project_domain_name", "project_domain_name_env"),
+    }
+
+
 def _is_local_mcp_module(module: ModuleConfig) -> bool:
-    return module.type == "netbox_mcp"
+    return module.type in {"netbox_mcp", "openstack_mcp"}
+
+
+def _local_mcp_server_name(module: ModuleConfig) -> str:
+    if module.type == "netbox_mcp":
+        return "netbox-mcp-server"
+    if module.type == "openstack_mcp":
+        return "openstack-mcp-server"
+    return ""
 
 
 def module_pid_path(module_id: str) -> Path:
@@ -105,6 +148,9 @@ def _runtime_defaults(module_id: str) -> dict[str, Any]:
         "last_index_document_count": 0,
         "last_index_inventory_count": 0,
         "last_index_error": "",
+        "index_job_active": False,
+        "index_job_id": "",
+        "index_job_status": "",
         "restart_count": 0,
     }
 
@@ -195,7 +241,7 @@ def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> b
             return False
         payload = response.json()
         if _is_local_mcp_module(module):
-            ok = bool(payload.get("ok")) and str(payload.get("server", "")).strip() == "netbox-mcp-server"
+            ok = bool(payload.get("ok")) and str(payload.get("server", "")).strip() == _local_mcp_server_name(module)
         else:
             ok = str(payload.get("module_id", "")) == module.id
         if ok:
@@ -203,6 +249,30 @@ def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> b
         return ok
     except Exception:
         return False
+
+
+def _module_health(module: ModuleConfig, *, timeout: float = 2.5) -> dict[str, Any] | None:
+    cache_key = module.id
+    cached = _HEALTH_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < HEALTH_CACHE_TTL_SECONDS:
+        return cached[1]
+    health: dict[str, Any] | None = None
+    if module.transport == "local" and module.port > 0:
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.get(_local_netbox_health_url(module) if _is_local_mcp_module(module) else f"{module_url(module)}/health")
+                response.raise_for_status()
+                payload = response.json()
+                if _is_local_mcp_module(module):
+                    if bool(payload.get("ok")) and str(payload.get("server", "")).strip() == _local_mcp_server_name(module):
+                        health = payload
+                elif str(payload.get("module_id", "")) == module.id:
+                    health = payload
+        except Exception:
+            health = None
+    _HEALTH_CACHE[cache_key] = (now, health)
+    return health
 
 
 def _ensure_startable_port(module: ModuleConfig) -> ModuleConfig:
@@ -244,6 +314,15 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
             module.id,
             str(module.port),
         ]
+    if module.type == "openstack_mcp":
+        env.update({key: value for key, value in _openstack_settings(module).items() if value})
+        command = [
+            python_executable,
+            "-m",
+            "app.worker_openstack",
+            module.id,
+            str(module.port),
+        ]
     _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         return subprocess.Popen(
@@ -282,7 +361,7 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     errors: list[str] = []
     if not module.id.strip():
         errors.append("Module ID fehlt.")
-    if module.type not in {"docs", "maildir", "mcp_http", "netbox_mcp"}:
+    if module.type not in {"docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp"}:
         errors.append(f"Unbekannter Modultyp: {module.type}")
     if module.transport not in {"local", "remote"}:
         errors.append(f"Ungueltiger Transport: {module.transport}")
@@ -334,6 +413,22 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
                 errors.append(f"NetBox URL ungueltig: {netbox_url}")
         if not netbox_token:
             errors.append("NetBox Token fehlt.")
+        if module.port < 0 or module.port > 65535:
+            errors.append(f"Port ungueltig: {module.port}")
+    if module.type == "openstack_mcp":
+        if module.transport != "local":
+            errors.append("openstack_mcp muss lokal sein.")
+        openstack = _openstack_settings(module)
+        if not openstack["OS_AUTH_URL"]:
+            errors.append("OpenStack Auth URL fehlt.")
+        else:
+            parsed = urlparse(openstack["OS_AUTH_URL"])
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                errors.append(f"OpenStack Auth URL ungueltig: {openstack['OS_AUTH_URL']}")
+        has_app_creds = bool(openstack["OS_APPLICATION_CREDENTIAL_ID"] and openstack["OS_APPLICATION_CREDENTIAL_SECRET"])
+        has_password_creds = bool(openstack["OS_USERNAME"] and openstack["OS_PASSWORD"])
+        if not has_app_creds and not has_password_creds:
+            errors.append("OpenStack Credentials fehlen.")
         if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
     return errors
@@ -414,28 +509,19 @@ def read_module_pid(module_id: str) -> int | None:
     return pid
 
 
+def _index_meta_payload(module_id: str) -> SearchIndexMeta | None:
+    return load_index_meta(module_index_path(module_id))
+
+
 def module_status(module: ModuleConfig) -> dict[str, Any]:
     current_modules = load_modules()
     all_errors = validation_errors_by_module(current_modules)
     pid = read_module_pid(module.id)
-    health: dict[str, Any] | None = None
-    if module.transport == "local" and module.port > 0:
-        try:
-            with httpx.Client(timeout=2.5) as client:
-                response = client.get(_local_netbox_health_url(module) if _is_local_mcp_module(module) else f"{module_url(module)}/health")
-                response.raise_for_status()
-                payload = response.json()
-                if _is_local_mcp_module(module):
-                    if bool(payload.get("ok")) and str(payload.get("server", "")).strip() == "netbox-mcp-server":
-                        health = payload
-                elif str(payload.get("module_id", "")) == module.id:
-                    health = payload
-        except Exception:
-            health = None
+    health = _module_health(module)
     running = pid is not None or health is not None
     sources = module_sources(module, enabled_only=False)
     runtime_state = load_module_runtime_state(module.id)
-    index = load_index(module_index_path(module.id)) if module.type in {"docs", "maildir"} else None
+    index = _index_meta_payload(module.id) if module.type in {"docs", "maildir"} else None
     validation_errors = all_errors.get(module.id, [])
     return {
         "id": module.id,
@@ -481,6 +567,9 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         }
         if module.type in {"docs", "maildir"}
         else None,
+        "cache": {
+            "query_entries": _module_query_cache_count(module.id) if module.type in {"docs", "maildir"} else 0,
+        },
         "runtime_state": runtime_state,
         "validation_errors": validation_errors,
     }
@@ -541,7 +630,7 @@ def health_check_module(module_id: str) -> dict[str, Any]:
         "status": status,
     }
     if module.type in {"docs", "maildir"}:
-        index = load_index(module_index_path(module.id))
+        index = _index_meta_payload(module.id)
         payload["index"] = {
             "exists": index is not None,
             "built_at": index.built_at if index else "",
@@ -551,7 +640,7 @@ def health_check_module(module_id: str) -> dict[str, Any]:
         discovery = discover_remote_module(module)
         payload["remote"] = discovery
         payload["ok"] = payload["ok"] and bool(discovery.get("ok"))
-    if module.type == "netbox_mcp" and not errors:
+    if module.type in {"netbox_mcp", "openstack_mcp"} and not errors:
         payload["local"] = status.get("health")
         discovery = discover_standard_mcp_module(module)
         payload["remote"] = discovery
@@ -571,7 +660,7 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
         "log_path": str(module_log_path(module_id)),
         "log_tail": _read_module_log_tail(module_id, lines=log_lines),
     }
-    if module.type in {"mcp_http", "netbox_mcp"}:
+    if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"}:
         remote = discover_remote_module(module)
         payload["remote"] = remote
         payload["ok"] = payload["ok"] and bool(remote.get("ok"))
@@ -595,7 +684,7 @@ def _default_test_config(module: ModuleConfig) -> tuple[str, dict[str, Any], lis
                 return module.tool_names[0], {}, []
             return "discover", {}, []
         return "health", {}, []
-    if module.type == "netbox_mcp":
+    if module.type in {"netbox_mcp", "openstack_mcp"}:
         if module.tool_names:
             return module.tool_names[0], {}, []
         return "discover", {}, []
@@ -625,7 +714,7 @@ def module_test(module_id: str) -> dict[str, Any]:
     meaningful_output = False
     output_summary = ""
     try:
-        if module.type in {"mcp_http", "netbox_mcp"} and action == "discover":
+        if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"} and action == "discover":
             result = discover_remote_module(module)
             connected = bool(result.get("ok"))
             tools = result.get("tools") or result.get("actions") or []
@@ -642,7 +731,7 @@ def module_test(module_id: str) -> dict[str, Any]:
             elif module.type in {"docs", "maildir"} and action == "stats":
                 meaningful_output = int(result_data.get("document_count", 0) or result_data.get("messages", 0) or 0) >= 0
                 output_summary = json.dumps(result_data, ensure_ascii=False)
-            elif module.type in {"mcp_http", "netbox_mcp"}:
+            elif module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"}:
                 output_summary = json.dumps(result_data, ensure_ascii=False)
                 meaningful_output = bool(output_summary.strip() and output_summary not in {"{}", "[]", '""'})
             else:
@@ -698,7 +787,7 @@ def module_test(module_id: str) -> dict[str, Any]:
 
 
 def _mcp_endpoint(module: ModuleConfig) -> str:
-    if module.type == "netbox_mcp":
+    if _is_local_mcp_module(module):
         return f"{module_url(module)}/mcp"
     return module.base_url.rstrip("/")
 
@@ -764,7 +853,7 @@ def _call_mcp_tool(module: ModuleConfig, tool_name: str, arguments: dict[str, An
 
 
 def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
-    if module.type == "netbox_mcp":
+    if _is_local_mcp_module(module):
         return discover_standard_mcp_module(module)
     if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
         return discover_standard_mcp_module(module)
@@ -926,7 +1015,7 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
             "ok": False,
             "base_url": endpoint,
             "protocol": "mcp",
-            "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _netbox_settings(module)[1])),
+            "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and (_netbox_settings(module)[1] if module.type == "netbox_mcp" else _openstack_settings(module).get("OS_AUTH_URL")))),
             "session_id": session_id or "",
             "tools": [],
             "attempts": attempts,
@@ -943,7 +1032,7 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
         "ok": True,
         "base_url": endpoint,
         "protocol": "mcp",
-        "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _netbox_settings(module)[1])),
+        "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and (_netbox_settings(module)[1] if module.type == "netbox_mcp" else _openstack_settings(module).get("OS_AUTH_URL")))),
         "session_id": session_id or "",
         "tools": deduped_tools,
         "capabilities": ["tools"],
@@ -1036,9 +1125,9 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
 
-    if module.type in {"mcp_http", "netbox_mcp"}:
+    if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"}:
         try:
-            if module.type == "netbox_mcp" or module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
+            if _is_local_mcp_module(module) or module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
                 if action == "health":
                     return {"ok": True, "data": health_check_module(module_id)}
                 if action in {"discover", "capabilities", "tools/list", "list_tools"}:
@@ -1089,6 +1178,87 @@ def worker_health(module: ModuleConfig) -> dict[str, Any]:
     }
 
 
+def _query_cache_key(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str) -> str:
+    return json.dumps(
+        {
+            "module_id": module.id,
+            "action": action,
+            "payload": payload,
+            "index_built_at": index_built_at,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _query_cache_get(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str) -> dict[str, Any] | None:
+    key = _query_cache_key(module, action, payload, index_built_at)
+    cached = _QUERY_CACHE.get(key)
+    if cached is None:
+        return None
+    cached_at, result = cached
+    if time.monotonic() - cached_at > QUERY_CACHE_TTL_SECONDS:
+        _QUERY_CACHE.pop(key, None)
+        return None
+    return json.loads(json.dumps(result, ensure_ascii=False))
+
+
+def _query_cache_set(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str, result: dict[str, Any]) -> None:
+    key = _query_cache_key(module, action, payload, index_built_at)
+    _QUERY_CACHE[key] = (time.monotonic(), json.loads(json.dumps(result, ensure_ascii=False)))
+
+
+def _clear_module_query_cache(module_id: str) -> None:
+    prefix = f'"module_id":"{module_id}"'
+    for key in list(_QUERY_CACHE):
+        if prefix in key:
+            _QUERY_CACHE.pop(key, None)
+
+
+def _module_query_cache_count(module_id: str) -> int:
+    prefix = f'"module_id":"{module_id}"'
+    return sum(1 for key in _QUERY_CACHE if prefix in key)
+
+
+def _run_reindex_job(module: ModuleConfig, kind: str, roots: list[tuple[str, str, Path]], index_path: Path, index_timeout: float | None, job_id: str) -> None:
+    started_at = time.monotonic()
+    update_module_runtime_state(
+        module.id,
+        last_index_started_at=_timestamp(),
+        last_index_error="",
+        index_job_active=True,
+        index_job_id=job_id,
+        index_job_status="running",
+    )
+    try:
+        index, _rebuilt = ensure_index(kind, roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
+        _clear_module_query_cache(module.id)
+        update_module_runtime_state(
+            module.id,
+            last_index_completed_at=_timestamp(),
+            last_index_duration_seconds=round(time.monotonic() - started_at, 3),
+            last_index_document_count=index.document_count,
+            last_index_inventory_count=index.inventory_count,
+            last_index_error="",
+            index_job_active=False,
+            index_job_status="completed",
+            index_job_id=job_id,
+        )
+    except Exception as exc:
+        update_module_runtime_state(
+            module.id,
+            last_index_error=str(exc),
+            last_error=str(exc),
+            index_job_active=False,
+            index_job_status="failed",
+            index_job_id=job_id,
+        )
+    finally:
+        with _REINDEX_LOCK:
+            _REINDEX_THREADS.pop(module.id, None)
+
+
 def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -> dict[str, Any]:
     roots = [
         (source.id, source.display_name(), resolve_module_source_path(source))
@@ -1115,8 +1285,9 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             }
         if action == "reindex":
             started_at = time.monotonic()
-            update_module_runtime_state(module.id, last_index_started_at=_timestamp(), last_index_error="")
+            update_module_runtime_state(module.id, last_index_started_at=_timestamp(), last_index_error="", index_job_active=False, index_job_status="")
             index, _rebuilt = ensure_index("docs", roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
+            _clear_module_query_cache(module.id)
             update_module_runtime_state(
                 module.id,
                 last_index_completed_at=_timestamp(),
@@ -1136,21 +1307,58 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "roots": index.roots,
                 },
             }
+        if action == "reindex_async":
+            with _REINDEX_LOCK:
+                existing = _REINDEX_THREADS.get(module.id)
+                if existing is not None and existing.is_alive():
+                    state = load_module_runtime_state(module.id)
+                    return {"ok": True, "data": {"job_running": True, "job_id": state.get("index_job_id", ""), "status": state.get("index_job_status", "running")}}
+                job_id = str(uuid4())
+                thread = threading.Thread(
+                    target=_run_reindex_job,
+                    args=(module, "docs", roots, index_path, index_timeout, job_id),
+                    daemon=True,
+                    name=f"reindex-{module.id}",
+                )
+                _REINDEX_THREADS[module.id] = thread
+                thread.start()
+            return {"ok": True, "data": {"job_running": True, "job_id": job_id, "status": "started"}}
+        if action == "reindex_status":
+            state = load_module_runtime_state(module.id)
+            return {
+                "ok": True,
+                "data": {
+                    "job_running": bool(state.get("index_job_active")),
+                    "job_id": state.get("index_job_id", ""),
+                    "status": state.get("index_job_status", ""),
+                    "last_index_started_at": state.get("last_index_started_at", ""),
+                    "last_index_completed_at": state.get("last_index_completed_at", ""),
+                    "last_index_error": state.get("last_index_error", ""),
+                },
+            }
         if action == "search":
             query = str(payload.get("query", "")).strip()
             index, rebuilt = ensure_index("docs", roots, index_path, timeout_seconds=index_timeout)
+            cached = _query_cache_get(module, action, {"query": query, "top_k": top_k}, index.built_at)
+            if cached is not None:
+                cached["data"]["cache_hit"] = True
+                cached["data"]["rebuilt"] = rebuilt
+                return cached
             hits = search_index(index, query, top_k)
-            return {
+            result = {
                 "ok": True,
                 "data": {
                     "query": query,
                     "hits": [asdict(hit) for hit in hits],
                     "documents": index.document_count,
                     "rebuilt": rebuilt,
+                    "cache_hit": False,
                     "index_built_at": index.built_at,
                     "roots": index.roots,
                 },
             }
+            _query_cache_set(module, action, {"query": query, "top_k": top_k}, index.built_at, result)
+            return result
         raise ValueError(f"Aktion fuer docs nicht bekannt: {action}")
     if module.type == "maildir":
         index_path = module_index_path(module.id)
@@ -1171,8 +1379,9 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             }
         if action == "reindex":
             started_at = time.monotonic()
-            update_module_runtime_state(module.id, last_index_started_at=_timestamp(), last_index_error="")
+            update_module_runtime_state(module.id, last_index_started_at=_timestamp(), last_index_error="", index_job_active=False, index_job_status="")
             index, _rebuilt = ensure_index("maildir", roots, index_path, force_rebuild=True, timeout_seconds=index_timeout)
+            _clear_module_query_cache(module.id)
             update_module_runtime_state(
                 module.id,
                 last_index_completed_at=_timestamp(),
@@ -1192,21 +1401,58 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                     "roots": index.roots,
                 },
             }
+        if action == "reindex_async":
+            with _REINDEX_LOCK:
+                existing = _REINDEX_THREADS.get(module.id)
+                if existing is not None and existing.is_alive():
+                    state = load_module_runtime_state(module.id)
+                    return {"ok": True, "data": {"job_running": True, "job_id": state.get("index_job_id", ""), "status": state.get("index_job_status", "running")}}
+                job_id = str(uuid4())
+                thread = threading.Thread(
+                    target=_run_reindex_job,
+                    args=(module, "maildir", roots, index_path, index_timeout, job_id),
+                    daemon=True,
+                    name=f"reindex-{module.id}",
+                )
+                _REINDEX_THREADS[module.id] = thread
+                thread.start()
+            return {"ok": True, "data": {"job_running": True, "job_id": job_id, "status": "started"}}
+        if action == "reindex_status":
+            state = load_module_runtime_state(module.id)
+            return {
+                "ok": True,
+                "data": {
+                    "job_running": bool(state.get("index_job_active")),
+                    "job_id": state.get("index_job_id", ""),
+                    "status": state.get("index_job_status", ""),
+                    "last_index_started_at": state.get("last_index_started_at", ""),
+                    "last_index_completed_at": state.get("last_index_completed_at", ""),
+                    "last_index_error": state.get("last_index_error", ""),
+                },
+            }
         if action == "search":
             query = str(payload.get("query", "")).strip()
             index, rebuilt = ensure_index("maildir", roots, index_path, timeout_seconds=index_timeout)
+            cached = _query_cache_get(module, action, {"query": query, "top_k": top_k}, index.built_at)
+            if cached is not None:
+                cached["data"]["cache_hit"] = True
+                cached["data"]["rebuilt"] = rebuilt
+                return cached
             hits = search_index(index, query, top_k)
-            return {
+            result = {
                 "ok": True,
                 "data": {
                     "query": query,
                     "hits": [asdict(hit) for hit in hits],
                     "messages": index.document_count,
                     "rebuilt": rebuilt,
+                    "cache_hit": False,
                     "index_built_at": index.built_at,
                     "roots": index.roots,
                 },
             }
+            _query_cache_set(module, action, {"query": query, "top_k": top_k}, index.built_at, result)
+            return result
         raise ValueError(f"Aktion fuer maildir nicht bekannt: {action}")
     raise ValueError(f"Worker-Typ nicht unterstuetzt: {module.type}")
 

@@ -12,6 +12,7 @@ from app.modules import discover_standard_mcp_module, execute_module, module_tes
 from app.worker import create_worker_app
 from app.worker_netbox import create_worker_app as create_netbox_worker_app
 from app.worker_netbox import run_worker as run_netbox_worker
+from app.worker_openstack import create_worker_app as create_openstack_worker_app
 
 
 class FakeResponse:
@@ -171,6 +172,34 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 59999)
         self.assertEqual(signal_patch.call_count, 4)
+
+    def test_create_openstack_worker_app_uses_env_credentials(self) -> None:
+        module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
+        captured: dict[str, object] = {}
+
+        def fake_create_app(credentials: dict[str, str]):
+            captured["credentials"] = credentials
+            return object()
+
+        with (
+            patch("app.worker_openstack.find_module", return_value=module),
+            patch("app.worker_openstack.create_app", side_effect=fake_create_app),
+            patch.dict(
+                "os.environ",
+                {
+                    "OS_AUTH_URL": "https://openstack.example/v3",
+                    "OS_APPLICATION_CREDENTIAL_ID": "abc",
+                    "OS_APPLICATION_CREDENTIAL_SECRET": "def",
+                },
+                clear=False,
+            ),
+        ):
+            app = create_openstack_worker_app("openstack")
+
+        self.assertIsNotNone(app)
+        credentials = captured["credentials"]
+        self.assertEqual(credentials["OS_AUTH_URL"], "https://openstack.example/v3")
+        self.assertEqual(credentials["OS_APPLICATION_CREDENTIAL_ID"], "abc")
 
     def test_validation_errors_by_module_detects_duplicate_ports(self) -> None:
         with tempfile.TemporaryDirectory() as first_dir, tempfile.TemporaryDirectory() as second_dir:

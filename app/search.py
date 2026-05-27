@@ -38,6 +38,8 @@ IndexKind = Literal["docs", "maildir"]
 logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 25
 PROGRESS_LOG_INTERVAL_SECONDS = 2.0
+INDEX_STALE_CHECK_TTL_SECONDS = 15.0
+MAX_PREPARED_SEARCH_CACHE = 8
 
 
 @dataclass
@@ -73,6 +75,36 @@ class SearchIndex:
     documents: list[IndexedDocument]
 
 
+@dataclass
+class SearchIndexMeta:
+    kind: IndexKind
+    root: str
+    roots: list[str]
+    built_at: str
+    document_count: int
+    inventory_count: int
+    inventory_signature: str
+
+
+@dataclass
+class CachedIndexEntry:
+    index: SearchIndex
+    file_signature: str
+    roots_signature: str
+    stale_checked_at: float
+
+
+@dataclass
+class PreparedSearchIndex:
+    doc_tokens: list[list[str]]
+    document_frequency: dict[str, int]
+    cached_at: float
+
+
+_INDEX_CACHE: dict[str, CachedIndexEntry] = {}
+_PREPARED_SEARCH_CACHE: dict[str, PreparedSearchIndex] = {}
+
+
 def tokenize(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text)]
 
@@ -91,15 +123,22 @@ def _snippet(text: str, query_terms: list[str], limit: int = 260) -> str:
     return normalized[:limit].strip()
 
 
-def score_documents(documents: list[IndexedDocument], query: str, top_k: int) -> list[SearchHit]:
-    query_terms = tokenize(query)
-    if not query_terms:
-        return []
+def _prepare_search_documents(documents: list[IndexedDocument]) -> PreparedSearchIndex:
     doc_tokens = [tokenize(document.title + "\n" + document.text) for document in documents]
     document_frequency: dict[str, int] = {}
     for tokens in doc_tokens:
         for token in set(tokens):
             document_frequency[token] = document_frequency.get(token, 0) + 1
+    return PreparedSearchIndex(doc_tokens=doc_tokens, document_frequency=document_frequency, cached_at=time.monotonic())
+
+
+def score_documents(documents: list[IndexedDocument], query: str, top_k: int, prepared: PreparedSearchIndex | None = None) -> list[SearchHit]:
+    query_terms = tokenize(query)
+    if not query_terms:
+        return []
+    prepared_index = prepared or _prepare_search_documents(documents)
+    doc_tokens = prepared_index.doc_tokens
+    document_frequency = prepared_index.document_frequency
     hits: list[SearchHit] = []
     corpus_size = max(len(doc_tokens), 1)
     for document, tokens in zip(documents, doc_tokens, strict=False):
@@ -333,6 +372,17 @@ def save_index(index: SearchIndex, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(index)
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    meta_path = target.with_suffix(target.suffix + ".meta")
+    meta = {
+        "kind": index.kind,
+        "root": index.root,
+        "roots": index.roots,
+        "built_at": index.built_at,
+        "document_count": index.document_count,
+        "inventory_count": index.inventory_count,
+        "inventory_signature": index.inventory_signature,
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def load_index(path: Path) -> SearchIndex | None:
@@ -353,6 +403,71 @@ def load_index(path: Path) -> SearchIndex | None:
         inventory_signature=str(payload.get("inventory_signature", "")),
         documents=documents,
     )
+
+
+def load_index_meta(path: Path) -> SearchIndexMeta | None:
+    meta_path = path.with_suffix(path.suffix + ".meta")
+    if meta_path.exists():
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            return SearchIndexMeta(
+                kind=str(payload.get("kind", "docs")),
+                root=str(payload.get("root", "")),
+                roots=[str(item) for item in payload.get("roots", [])] or ([str(payload.get("root", ""))] if payload.get("root") else []),
+                built_at=str(payload.get("built_at", "")),
+                document_count=int(payload.get("document_count", 0)),
+                inventory_count=int(payload.get("inventory_count", 0)),
+                inventory_signature=str(payload.get("inventory_signature", "")),
+            )
+    index = load_index(path)
+    if index is None:
+        return None
+    return SearchIndexMeta(
+        kind=index.kind,
+        root=index.root,
+        roots=index.roots,
+        built_at=index.built_at,
+        document_count=index.document_count,
+        inventory_count=index.inventory_count,
+        inventory_signature=index.inventory_signature,
+    )
+
+
+def _cache_key_for_path(path: Path) -> str:
+    return str(path.expanduser().resolve())
+
+
+def _roots_signature_for_cache(roots: list[tuple[str, str, Path]]) -> str:
+    return "|".join(f"{source_id}:{source_label}:{root.expanduser().resolve()}" for source_id, source_label, root in roots)
+
+
+def _file_signature(path: Path) -> str:
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def _prepared_cache_key(index: SearchIndex) -> str:
+    return f"{index.kind}|{index.built_at}|{index.document_count}|{index.inventory_count}|{index.root}"
+
+
+def _prepared_search_index(index: SearchIndex) -> PreparedSearchIndex:
+    key = _prepared_cache_key(index)
+    cached = _PREPARED_SEARCH_CACHE.get(key)
+    if cached is not None:
+        cached.cached_at = time.monotonic()
+        return cached
+    prepared = _prepare_search_documents(index.documents)
+    _PREPARED_SEARCH_CACHE[key] = prepared
+    if len(_PREPARED_SEARCH_CACHE) > MAX_PREPARED_SEARCH_CACHE:
+        oldest_key = min(_PREPARED_SEARCH_CACHE, key=lambda item: _PREPARED_SEARCH_CACHE[item].cached_at)
+        _PREPARED_SEARCH_CACHE.pop(oldest_key, None)
+    return prepared
 
 
 def index_is_stale(
@@ -385,13 +500,37 @@ def ensure_index(
     force_rebuild: bool = False,
     timeout_seconds: float | None = None,
 ) -> tuple[SearchIndex, bool]:
-    current = None if force_rebuild else load_index(target)
-    if current is not None and not index_is_stale(current, roots, timeout_seconds=timeout_seconds):
-        return current, False
+    cache_key = _cache_key_for_path(target)
+    roots_signature = _roots_signature_for_cache(roots)
+    file_signature = _file_signature(target)
+    now = time.monotonic()
+    current = None
+    if not force_rebuild:
+        cached = _INDEX_CACHE.get(cache_key)
+        if cached is not None and cached.file_signature == file_signature and cached.roots_signature == roots_signature:
+            current = cached.index
+            if now - cached.stale_checked_at < INDEX_STALE_CHECK_TTL_SECONDS:
+                return current, False
+        if current is None:
+            current = load_index(target)
+        if current is not None and not index_is_stale(current, roots, timeout_seconds=timeout_seconds):
+            _INDEX_CACHE[cache_key] = CachedIndexEntry(
+                index=current,
+                file_signature=file_signature,
+                roots_signature=roots_signature,
+                stale_checked_at=now,
+            )
+            return current, False
     rebuilt = build_index(kind, roots, timeout_seconds=timeout_seconds)
     save_index(rebuilt, target)
+    _INDEX_CACHE[cache_key] = CachedIndexEntry(
+        index=rebuilt,
+        file_signature=_file_signature(target),
+        roots_signature=roots_signature,
+        stale_checked_at=now,
+    )
     return rebuilt, True
 
 
 def search_index(index: SearchIndex, query: str, top_k: int) -> list[SearchHit]:
-    return score_documents(index.documents, query, top_k)
+    return score_documents(index.documents, query, top_k, prepared=_prepared_search_index(index))

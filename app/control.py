@@ -3,7 +3,9 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 from pathlib import Path
 from textwrap import dedent
@@ -270,6 +272,14 @@ def _chat_page_html(settings: HarborSettings) -> str:
               display: grid;
               gap: 12px;
             }}
+            .field {{
+              display: grid;
+              gap: 6px;
+            }}
+            .field label {{
+              color: var(--muted);
+              font-size: 0.92rem;
+            }}
             textarea {{
               width: 100%;
               min-height: 120px;
@@ -324,6 +334,10 @@ def _chat_page_html(settings: HarborSettings) -> str:
               </div>
             </section>
             <form id="chatForm">
+              <div class="field">
+                <label for="modules">Module optional erzwingen (kommaseparierte IDs, z. B. `netbox`)</label>
+                <input id="modules" name="modules" placeholder="Leer lassen fuer Auto-Auswahl">
+              </div>
               <textarea id="message" name="message" placeholder="Frage eingeben..." required></textarea>
               <div class="controls">
                 <div id="status"></div>
@@ -334,6 +348,7 @@ def _chat_page_html(settings: HarborSettings) -> str:
           <script>
             const chatForm = document.getElementById("chatForm");
             const messageInput = document.getElementById("message");
+            const modulesInput = document.getElementById("modules");
             const chatLog = document.getElementById("chatLog");
             const sendButton = document.getElementById("sendButton");
             const statusNode = document.getElementById("status");
@@ -355,10 +370,14 @@ def _chat_page_html(settings: HarborSettings) -> str:
               statusNode.textContent = "Antwort wird geladen...";
               sendButton.disabled = true;
               try {{
+                const modules = modulesInput.value
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean);
                 const response = await fetch("/api/chat", {{
                   method: "POST",
                   headers: {{ "Content-Type": "application/json" }},
-                  body: JSON.stringify({{ message }})
+                  body: JSON.stringify({{ message, modules }})
                 }});
                 const payload = await response.json().catch(() => ({{ detail: "Ungueltige Server-Antwort." }}));
                 if (!response.ok) {{
@@ -680,6 +699,7 @@ def _admin_page_html(settings: HarborSettings) -> str:
               <div class="actions">
                 <button id="refreshButton" type="button" class="secondary">Aktualisieren</button>
                 <button id="newNetboxButton" type="button" class="secondary">NetBox MCP Vorlage</button>
+                <button id="newOpenstackButton" type="button" class="secondary">OpenStack MCP Vorlage</button>
               </div>
               <div id="status"></div>
             </div>
@@ -695,6 +715,7 @@ def _admin_page_html(settings: HarborSettings) -> str:
                         <option value="docs">docs</option>
                         <option value="maildir">maildir</option>
                         <option value="mcp_http">mcp_http</option>
+                        <option value="openstack_mcp">openstack_mcp</option>
                       </select>
                     </div>
                     <div class="field"><label for="create-provider">Provider</label><input id="create-provider" name="provider" placeholder="generic oder netbox-mcp-server"></div>
@@ -746,6 +767,7 @@ def _admin_page_html(settings: HarborSettings) -> str:
             const detailPanel = document.getElementById("detailPanel");
             const createForm = document.getElementById("createForm");
             const newNetboxButton = document.getElementById("newNetboxButton");
+            const newOpenstackButton = document.getElementById("newOpenstackButton");
 
             function esc(value) {{
               return String(value ?? "")
@@ -823,6 +845,7 @@ def _admin_page_html(settings: HarborSettings) -> str:
               const discoveryFailures = enabledModules.filter((item) => item.transport === "remote" && item.runtime_state?.last_discovery_at && !item.runtime_state?.last_discovery_ok);
               const testFailures = enabledModules.filter((item) => item.runtime_state?.last_test_at && !item.runtime_state?.last_test_ok);
               const neverTested = enabledModules.filter((item) => !item.runtime_state?.last_test_at);
+              const indexJobs = enabledModules.filter((item) => item.runtime_state?.index_job_active);
               const summary = {{
                 total: modules.length,
                 enabled: enabledModules.length,
@@ -831,7 +854,10 @@ def _admin_page_html(settings: HarborSettings) -> str:
                 remote: modules.filter((item) => item.transport === "remote").length,
                 running: enabledModules.filter((item) => item.running).length,
                 invalid: enabledModules.filter((item) => item.validation_errors?.length).length,
-                netbox: modules.filter((item) => item.provider === "netbox-mcp-server").length
+                netbox: modules.filter((item) => item.type === "netbox_mcp" || item.provider === "netbox-mcp-server" || item.id === "netbox").length,
+                openstack: modules.filter((item) => item.type === "openstack_mcp" || item.provider === "openstack-mcp-server" || item.id === "openstack").length,
+                queryCacheEntries: modules.reduce((sum, item) => sum + Number(item.status?.cache?.query_entries || 0), 0),
+                indexJobs: indexJobs.length
               }};
               overviewNode.innerHTML = `
                 <article class="metric"><span>Module gesamt</span><strong>${{summary.total}}</strong></article>
@@ -842,6 +868,9 @@ def _admin_page_html(settings: HarborSettings) -> str:
                 <article class="metric"><span>Running</span><strong>${{summary.running}}</strong></article>
                 <article class="metric"><span>Invalid</span><strong>${{summary.invalid}}</strong></article>
                 <article class="metric"><span>NetBox MCP</span><strong>${{summary.netbox}}</strong></article>
+                <article class="metric"><span>OpenStack MCP</span><strong>${{summary.openstack}}</strong></article>
+                <article class="metric"><span>Index Jobs</span><strong>${{summary.indexJobs}}</strong></article>
+                <article class="metric"><span>Query Cache</span><strong>${{summary.queryCacheEntries}}</strong></article>
               `;
               const pills = [];
               if (!enabledModules.length) {{
@@ -861,6 +890,9 @@ def _admin_page_html(settings: HarborSettings) -> str:
               }}
               if (neverTested.length) {{
                 pills.push(`<span class="summary-pill warn">${{neverTested.length}} aktive Module noch nicht getestet</span>`);
+              }}
+              if (indexJobs.length) {{
+                pills.push(`<span class="summary-pill info">${{indexJobs.length}} Index-Jobs laufen gerade</span>`);
               }}
               if (!runtimeFailures.length && !discoveryFailures.length && !testFailures.length && enabledModules.length) {{
                 pills.push('<span class="summary-pill ok">Keine aktiven Stoerungen im Runtime/Discovery/Test-Ueberblick</span>');
@@ -888,6 +920,14 @@ def _admin_page_html(settings: HarborSettings) -> str:
                 const testSignal = state.last_test_ok
                   ? "ok"
                   : (state.last_test_at ? (state.last_test_connected ? "warn" : "fail") : "warn");
+                const maintenanceActions = ["docs", "maildir"].includes(module.type)
+                  ? `
+                      <button type="button" data-action="stats">Stats</button>
+                      <button type="button" data-action="reindex">Reindex</button>
+                      <button type="button" data-action="reindex_async">Reindex Async</button>
+                      <button type="button" data-action="reindex_status">Index Status</button>
+                    `
+                  : "";
                 return `
                   <article class="card" data-module-id="${{esc(module.id)}}">
                     <div class="card-head">
@@ -911,6 +951,8 @@ def _admin_page_html(settings: HarborSettings) -> str:
                       <dt>Last Start</dt><dd>${{esc(state.last_started_at || "-")}}</dd>
                       <dt>Last Discovery</dt><dd>${{esc(state.last_discovery_at || "-")}}</dd>
                       <dt>Last Test</dt><dd>${{esc(state.last_test_at || "-")}}</dd>
+                      <dt>Index Job</dt><dd>${{esc(state.index_job_status || "-")}}</dd>
+                      <dt>Query Cache</dt><dd>${{esc(module.status?.cache?.query_entries || 0)}}</dd>
                       <dt>Last Error</dt><dd>${{esc(state.last_error || "-")}}</dd>
                     </dl>
                     ${{errors}}
@@ -918,6 +960,7 @@ def _admin_page_html(settings: HarborSettings) -> str:
                       <button type="button" data-action="start">Start</button>
                       <button type="button" data-action="stop">Stop</button>
                       <button type="button" data-action="restart">Restart</button>
+                      ${{maintenanceActions}}
                       <button type="button" data-action="test">Test</button>
                       <button type="button" data-action="discover">Discover</button>
                       <button type="button" data-action="diagnose">Diagnose</button>
@@ -1015,6 +1058,12 @@ def _admin_page_html(settings: HarborSettings) -> str:
                   response = await fetch(`/api/modules/${{encodeURIComponent(moduleId)}}/diagnose`);
                 }} else if (action === "test") {{
                   response = await fetch(`/api/modules/${{encodeURIComponent(moduleId)}}/test`, {{ method: "POST" }});
+                }} else if (action === "stats" || action === "reindex" || action === "reindex_async" || action === "reindex_status") {{
+                  response = await fetch(`/api/modules/${{encodeURIComponent(moduleId)}}/execute`, {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ action, payload: {{}} }})
+                  }});
                 }} else if (action === "delete") {{
                   response = await fetch(`/api/modules/${{encodeURIComponent(moduleId)}}`, {{ method: "DELETE" }});
                 }} else {{
@@ -1024,7 +1073,7 @@ def _admin_page_html(settings: HarborSettings) -> str:
                 if (!response.ok) {{
                   throw new Error(payload.detail || `Aktion ${{action}} fehlgeschlagen.`);
                 }}
-                if (action === "discover" || action === "diagnose" || action === "test") {{
+                if (action === "discover" || action === "diagnose" || action === "test" || action === "stats" || action === "reindex" || action === "reindex_async" || action === "reindex_status") {{
                   detailPanel.textContent = pretty(payload);
                 }}
                 statusNode.textContent = payload.message || `${{moduleId}}: ${{action}} ok`;
@@ -1070,6 +1119,36 @@ def _admin_page_html(settings: HarborSettings) -> str:
                   upstream_repo: "https://github.com/netboxlabs/netbox-mcp-server"
                 }},
                 notes: "HTTP MCP endpoint des netbox-mcp-server auf /mcp",
+                enabled: true
+              }});
+            }});
+
+            newOpenstackButton.addEventListener("click", () => {{
+              populateForm(createForm, {{
+                id: "openstack",
+                name: "OpenStack MCP",
+                type: "openstack_mcp",
+                provider: "openstack-mcp-server",
+                transport: "local",
+                remote_protocol: "mcp",
+                base_url: "",
+                host: "127.0.0.1",
+                port: 0,
+                timeout_seconds: 30,
+                top_k: 5,
+                tool_names: ["list_servers", "list_projects", "list_images", "list_flavors", "list_networks"],
+                test_action: "discover",
+                test_payload: {{}},
+                test_expect_contains: ["list_servers"],
+                settings: {{
+                  auth_type: "v3applicationcredential",
+                  auth_url_env: "OS_AUTH_URL",
+                  region_name_env: "OS_REGION_NAME",
+                  application_credential_id_env: "OS_APPLICATION_CREDENTIAL_ID",
+                  application_credential_secret_env: "OS_APPLICATION_CREDENTIAL_SECRET",
+                  upstream_repo: "https://github.com/dragomiralin/openstack-mcp-server"
+                }},
+                notes: "Harbor startet den lokalen OpenStack MCP Worker und exponiert /mcp sowie /health.",
                 enabled: true
               }});
             }});
@@ -1121,23 +1200,280 @@ def _context_for_chat(message: str, selected_modules: list[str] | None) -> tuple
     selected = set(selected_modules or [])
     snippets: list[dict[str, Any]] = []
     used_modules: list[str] = []
-    for module in load_modules():
-        if not module.enabled:
-            continue
-        if selected and module.id not in selected:
-            continue
-        if module.type not in {"docs", "maildir"}:
-            continue
+    modules = [module for module in load_modules() if module.enabled and (not selected or module.id in selected)]
+    if not modules:
+        return snippets, used_modules
+    module_order = {module.id: index for index, module in enumerate(modules)}
+    max_workers = min(8, max(1, len(modules)))
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="harbor-chat-context") as executor:
+        future_map = {executor.submit(_context_for_module, module, message, selected): module for module in modules}
+        for future in as_completed(future_map):
+            module = future_map[future]
+            try:
+                context = future.result()
+            except Exception:
+                continue
+            if not context:
+                continue
+            snippets.append(context)
+            used_modules.append(module.id)
+    snippets.sort(key=lambda item: module_order.get(str(item.get("module", "")), 0))
+    used_modules.sort(key=lambda item: module_order.get(item, 0))
+    return snippets, used_modules
+
+
+def _context_for_module(module: ModuleConfig, message: str, selected_modules: set[str]) -> dict[str, Any] | None:
+    if module.type in {"docs", "maildir"}:
         try:
             result = execute_module(module.id, "search", {"query": message, "top_k": module.top_k})
         except Exception:
-            continue
+            return None
         hits = result.get("data", {}).get("hits", [])
         if not hits:
+            return None
+        return {"module": module.id, "kind": module.type, "hits": hits[:3], "cache_hit": bool(result.get("data", {}).get("cache_hit"))}
+    if _is_openstack_module(module) and _should_use_openstack(message, selected_modules, module):
+        openstack_context = _query_openstack_context(module, message)
+        if not openstack_context:
+            return None
+        return {"module": module.id, "kind": "openstack", **openstack_context}
+    if not _is_netbox_module(module) or not _should_use_netbox(message, selected_modules, module):
+        return None
+    netbox_context = _query_netbox_context(module, message)
+    if not netbox_context:
+        return None
+    return {"module": module.id, "kind": "netbox", **netbox_context}
+
+
+def _is_netbox_module(module: ModuleConfig) -> bool:
+    provider = str(module.provider or "").strip().lower()
+    return module.type == "netbox_mcp" or provider == "netbox-mcp-server" or module.id.strip().lower() == "netbox"
+
+
+def _is_openstack_module(module: ModuleConfig) -> bool:
+    provider = str(module.provider or "").strip().lower()
+    return module.type == "openstack_mcp" or provider == "openstack-mcp-server" or module.id.strip().lower() == "openstack"
+
+
+def _should_use_netbox(message: str, selected_modules: set[str], module: ModuleConfig) -> bool:
+    if selected_modules:
+        return module.id in selected_modules
+    lower = message.lower()
+    token_patterns = (
+        r"\bnetbox\b",
+        r"\bip(?:v4|v6)?\b",
+        r"\bprefix(?:es)?\b",
+        r"\bsubnet\b",
+        r"\bcidr\b",
+        r"\binterface(?:s)?\b",
+        r"\bport(?:s)?\b",
+        r"\bdevice(?:s)?\b",
+        r"\bserver\b",
+        r"\bhost(?:name)?s?\b",
+        r"\bsite(?:s)?\b",
+        r"\bstandort(?:e)?\b",
+        r"\brack(?:s)?\b",
+        r"\btenant(?:s)?\b",
+        r"\bcluster(?:s)?\b",
+        r"\bvm(?:s)?\b",
+        r"\bvirtual machine(?:s)?\b",
+    )
+    return any(re.search(pattern, lower) for pattern in token_patterns) or bool(
+        re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?\b", lower)
+    )
+
+
+def _should_use_openstack(message: str, selected_modules: set[str], module: ModuleConfig) -> bool:
+    if selected_modules:
+        return module.id in selected_modules
+    lower = message.lower()
+    token_patterns = (
+        r"\bopenstack\b",
+        r"\bserver(?:s)?\b",
+        r"\binstance(?:s)?\b",
+        r"\bproject(?:s)?\b",
+        r"\bimage(?:s)?\b",
+        r"\bflavor(?:s)?\b",
+        r"\bnetwork(?:s)?\b",
+        r"\bsubnet(?:s)?\b",
+        r"\bport(?:s)?\b",
+        r"\brouter(?:s)?\b",
+        r"\btenant(?:s)?\b",
+        r"\bfloating ip(?:s)?\b",
+    )
+    return any(re.search(pattern, lower) for pattern in token_patterns)
+
+
+def _extract_netbox_query(message: str) -> str:
+    quoted = re.findall(r'"([^"]+)"', message)
+    if quoted:
+        return quoted[0].strip()
+    ip_matches = re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?\b", message)
+    if ip_matches:
+        return ip_matches[0].strip()
+    tokens = re.findall(r"[a-zA-Z0-9_.:/-]+", message)
+    stop_words = {
+        "bitte",
+        "zeige",
+        "such",
+        "suche",
+        "finde",
+        "welche",
+        "welcher",
+        "welches",
+        "gibt",
+        "es",
+        "in",
+        "der",
+        "die",
+        "das",
+        "mit",
+        "aus",
+        "von",
+        "zu",
+        "und",
+        "oder",
+        "netbox",
+        "server",
+        "host",
+        "hostname",
+        "maschine",
+        "geraet",
+        "device",
+        "devices",
+        "objekt",
+        "objekte",
+        "vm",
+        "virtual",
+        "machine",
+        "machines",
+    }
+    likely_asset_tokens = [
+        token
+        for token in tokens
+        if len(token) > 2
+        and token.lower() not in stop_words
+        and ("." in token or "-" in token or "_" in token or any(character.isdigit() for character in token))
+    ]
+    if likely_asset_tokens:
+        return " ".join(likely_asset_tokens[:2]).strip()
+    filtered = [token for token in tokens if len(token) > 2 and token.lower() not in stop_words]
+    return " ".join(filtered[:3]).strip()
+
+
+def _guess_netbox_object_types(message: str) -> list[str]:
+    lower = message.lower()
+    candidates: list[str] = []
+    if "prefix" in lower or "subnet" in lower or "cidr" in lower:
+        candidates.extend(["ipam.prefixes", "ipam.ip-addresses"])
+    elif "ip" in lower or re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}", lower):
+        candidates.extend(["ipam.ip-addresses", "dcim.interfaces", "dcim.devices", "virtualization.virtual-machines"])
+    elif "interface" in lower or "port" in lower:
+        candidates.extend(["dcim.interfaces", "dcim.devices"])
+    elif "site" in lower or "standort" in lower or "az " in f" {lower} ":
+        candidates.extend(["dcim.sites", "virtualization.clusters", "dcim.devices"])
+    elif "rack" in lower:
+        candidates.extend(["dcim.racks", "dcim.devices"])
+    elif "tenant" in lower or "kunde" in lower:
+        candidates.extend(["tenancy.tenants", "dcim.devices", "virtualization.virtual-machines"])
+    elif "cluster" in lower:
+        candidates.extend(["virtualization.clusters", "virtualization.virtual-machines", "dcim.devices"])
+    elif "virtual machine" in lower or " vm " in f" {lower} " or "virtuelle maschine" in lower:
+        candidates.extend(["virtualization.virtual-machines", "dcim.devices"])
+    elif any(token in lower for token in {"server", "host", "hostname", "appliance", "node", "device", "maschine", "system"}):
+        candidates.extend(["dcim.devices", "virtualization.virtual-machines", "ipam.ip-addresses"])
+    else:
+        candidates.extend(["dcim.devices", "virtualization.virtual-machines", "ipam.ip-addresses", "dcim.interfaces"])
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
+def _extract_netbox_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    data = result.get("data", {})
+    if not isinstance(data, dict):
+        return []
+    structured = data.get("structuredContent", {})
+    if not isinstance(structured, dict):
+        return []
+    payload = structured.get("data", {})
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("results", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _query_netbox_context(module: ModuleConfig, message: str) -> dict[str, Any] | None:
+    query = _extract_netbox_query(message)
+    filters: dict[str, Any] = {"limit": 5}
+    if query:
+        filters["q"] = query
+    last_error = ""
+    for object_type in _guess_netbox_object_types(message)[:4]:
+        try:
+            result = execute_module(
+                module.id,
+                "get_objects",
+                {"object_type": object_type, "filters": filters, "limit": 5, "fetch_all": False},
+            )
+        except Exception:
+            last_error = f"NetBox-Abfrage fuer {object_type} fehlgeschlagen."
             continue
-        snippets.append({"module": module.id, "hits": hits[:3]})
-        used_modules.append(module.id)
-    return snippets, used_modules
+        rows = _extract_netbox_rows(result)
+        if rows:
+            return {"object_type": object_type, "results": rows[:5]}
+        if result.get("ok") is False:
+            last_error = f"NetBox lieferte keinen gueltigen Inhalt fuer {object_type}."
+    if last_error:
+        return {"object_type": "unknown", "results": [], "note": last_error}
+    return {"object_type": "unknown", "results": [], "note": "NetBox: keine passenden Objekte gefunden."}
+
+
+def _guess_openstack_tool(message: str) -> str:
+    lower = message.lower()
+    if "project" in lower or "tenant" in lower:
+        return "list_projects"
+    if "image" in lower:
+        return "list_images"
+    if "flavor" in lower:
+        return "list_flavors"
+    if "network" in lower:
+        return "list_networks"
+    if "subnet" in lower:
+        return "list_subnets"
+    if "router" in lower:
+        return "list_routers"
+    if "port" in lower:
+        return "list_ports"
+    return "list_servers"
+
+
+def _query_openstack_context(module: ModuleConfig, message: str) -> dict[str, Any] | None:
+    tool_name = _guess_openstack_tool(message)
+    query = _extract_netbox_query(message)
+    arguments: dict[str, Any] = {"limit": 5}
+    if query:
+        if tool_name in {"list_servers", "list_projects", "list_images", "list_flavors", "list_networks", "list_subnets", "list_routers"}:
+            arguments["name"] = query
+    try:
+        result = execute_module(module.id, tool_name, arguments)
+    except Exception as exc:
+        return {"tool": tool_name, "results": [], "note": f"OpenStack-Abfrage fehlgeschlagen: {exc}"}
+    data = result.get("data", {})
+    if not isinstance(data, dict):
+        return {"tool": tool_name, "results": [], "note": "OpenStack lieferte kein gueltiges Ergebnis."}
+    structured = data.get("structuredContent", {})
+    if not isinstance(structured, dict):
+        return {"tool": tool_name, "results": [], "note": "OpenStack lieferte kein strukturiertes Ergebnis."}
+    payload = structured.get("data")
+    rows = payload if isinstance(payload, list) else payload if isinstance(payload, dict) else []
+    if isinstance(rows, dict):
+        return {"tool": tool_name, "results": [rows], "note": ""}
+    if isinstance(rows, list) and rows:
+        return {"tool": tool_name, "results": rows[:5], "note": ""}
+    return {"tool": tool_name, "results": [], "note": "OpenStack: keine passenden Objekte gefunden."}
 
 
 def _build_messages(settings: HarborSettings, message: str, selected_modules: list[str] | None) -> tuple[list[dict[str, str]], list[str]]:
