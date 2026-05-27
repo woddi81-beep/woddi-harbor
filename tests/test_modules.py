@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.config import ModuleConfig
 from app import cli
-from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module
+from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module, worker_execute
 from app.worker import create_worker_app
 from app.worker_netbox import create_worker_app as create_netbox_worker_app
 from app.worker_netbox import run_worker as run_netbox_worker
@@ -210,6 +210,22 @@ class ModuleTests(unittest.TestCase):
             errors = validation_errors_by_module(modules)
         self.assertIn("Port-Konflikt", " ".join(errors["docs-a"]))
         self.assertIn("Port-Konflikt", " ".join(errors["docs-b"]))
+
+    def test_worker_execute_uses_query_cache_for_repeated_docs_searches(self) -> None:
+        with tempfile.TemporaryDirectory() as docs_dir:
+            module = ModuleConfig(id="docs-cache", type="docs", transport="local", path=docs_dir, port=41004, top_k=5)
+            with open(f"{docs_dir}/readme.md", "w", encoding="utf-8") as handle:
+                handle.write("router alpha beta\n")
+
+            first = worker_execute(module, "search", {"query": "router", "top_k": 5})
+            self.assertTrue(first["ok"])
+            self.assertFalse(first["data"]["cache_hit"])
+
+            with patch("app.modules.search_index", side_effect=AssertionError("search_index should not run on cache hit")):
+                second = worker_execute(module, "search", {"query": "router", "top_k": 5})
+
+            self.assertTrue(second["ok"])
+            self.assertTrue(second["data"]["cache_hit"])
 
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
     @patch("app.modules.httpx.Client", FakeMcpClient)

@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict
+from hashlib import sha1
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -34,6 +35,8 @@ from .search import SearchIndexMeta, ensure_index, load_index, load_index_meta, 
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 QUERY_CACHE_TTL_SECONDS = 45.0
+PERSISTENT_QUERY_CACHE_TTL_SECONDS = 600.0
+WARMUP_INTERVAL_SECONDS = 20.0
 
 
 _QUERY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -113,6 +116,10 @@ def module_runtime_path(module_id: str) -> Path:
     return RUNTIME_DIR / "state" / f"{module_id}.json"
 
 
+def module_query_cache_dir(module_id: str) -> Path:
+    return RUNTIME_DIR / "query_cache" / module_id
+
+
 def _auth_headers(module: ModuleConfig, *, force_auth: bool = False) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     secret = module_secret(module)
@@ -130,6 +137,10 @@ def _runtime_defaults(module_id: str) -> dict[str, Any]:
         "last_started_at": "",
         "last_stopped_at": "",
         "last_health_ok_at": "",
+        "last_health_checked_at": "",
+        "last_health_latency_ms": 0.0,
+        "health_checks": 0,
+        "health_cache_hits": 0,
         "last_test_at": "",
         "last_test_ok": False,
         "last_test_connected": False,
@@ -151,6 +162,11 @@ def _runtime_defaults(module_id: str) -> dict[str, Any]:
         "index_job_active": False,
         "index_job_id": "",
         "index_job_status": "",
+        "query_cache_hits": 0,
+        "query_cache_disk_hits": 0,
+        "query_cache_misses": 0,
+        "query_cache_writes": 0,
+        "last_query_duration_ms": 0.0,
         "restart_count": 0,
     }
 
@@ -256,8 +272,15 @@ def _module_health(module: ModuleConfig, *, timeout: float = 2.5) -> dict[str, A
     cached = _HEALTH_CACHE.get(cache_key)
     now = time.monotonic()
     if cached is not None and now - cached[0] < HEALTH_CACHE_TTL_SECONDS:
+        state = load_module_runtime_state(module.id)
+        update_module_runtime_state(
+            module.id,
+            health_cache_hits=int(state.get("health_cache_hits", 0)) + 1,
+            last_health_checked_at=_timestamp(),
+        )
         return cached[1]
     health: dict[str, Any] | None = None
+    started_at = time.monotonic()
     if module.transport == "local" and module.port > 0:
         try:
             with httpx.Client(timeout=timeout) as client:
@@ -272,6 +295,15 @@ def _module_health(module: ModuleConfig, *, timeout: float = 2.5) -> dict[str, A
         except Exception:
             health = None
     _HEALTH_CACHE[cache_key] = (now, health)
+    state = load_module_runtime_state(module.id)
+    updates: dict[str, Any] = {
+        "last_health_checked_at": _timestamp(),
+        "last_health_latency_ms": round((time.monotonic() - started_at) * 1000.0, 2),
+        "health_checks": int(state.get("health_checks", 0)) + 1,
+    }
+    if health is not None:
+        updates["last_health_ok_at"] = _timestamp()
+    update_module_runtime_state(module.id, **updates)
     return health
 
 
@@ -1192,21 +1224,58 @@ def _query_cache_key(module: ModuleConfig, action: str, payload: dict[str, Any],
     )
 
 
+def _query_cache_disk_path(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str) -> Path:
+    key = _query_cache_key(module, action, payload, index_built_at)
+    digest = sha1(key.encode("utf-8")).hexdigest()
+    return module_query_cache_dir(module.id) / f"{digest}.json"
+
+
 def _query_cache_get(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str) -> dict[str, Any] | None:
     key = _query_cache_key(module, action, payload, index_built_at)
     cached = _QUERY_CACHE.get(key)
     if cached is None:
+        disk_path = _query_cache_disk_path(module, action, payload, index_built_at)
+        if disk_path.exists():
+            try:
+                raw = json.loads(disk_path.read_text(encoding="utf-8"))
+            except Exception:
+                raw = None
+            if isinstance(raw, dict):
+                cached_at = float(raw.get("cached_at", 0.0))
+                if time.time() - cached_at <= PERSISTENT_QUERY_CACHE_TTL_SECONDS:
+                    result = raw.get("result")
+                    if isinstance(result, dict):
+                        _QUERY_CACHE[key] = (time.monotonic(), result)
+                        state = load_module_runtime_state(module.id)
+                        update_module_runtime_state(
+                            module.id,
+                            query_cache_hits=int(state.get("query_cache_hits", 0)) + 1,
+                            query_cache_disk_hits=int(state.get("query_cache_disk_hits", 0)) + 1,
+                        )
+                        return json.loads(json.dumps(result, ensure_ascii=False))
+                else:
+                    disk_path.unlink(missing_ok=True)
+        state = load_module_runtime_state(module.id)
+        update_module_runtime_state(module.id, query_cache_misses=int(state.get("query_cache_misses", 0)) + 1)
         return None
     cached_at, result = cached
     if time.monotonic() - cached_at > QUERY_CACHE_TTL_SECONDS:
         _QUERY_CACHE.pop(key, None)
         return None
+    state = load_module_runtime_state(module.id)
+    update_module_runtime_state(module.id, query_cache_hits=int(state.get("query_cache_hits", 0)) + 1)
     return json.loads(json.dumps(result, ensure_ascii=False))
 
 
 def _query_cache_set(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str, result: dict[str, Any]) -> None:
     key = _query_cache_key(module, action, payload, index_built_at)
-    _QUERY_CACHE[key] = (time.monotonic(), json.loads(json.dumps(result, ensure_ascii=False)))
+    serialized = json.loads(json.dumps(result, ensure_ascii=False))
+    _QUERY_CACHE[key] = (time.monotonic(), serialized)
+    disk_path = _query_cache_disk_path(module, action, payload, index_built_at)
+    disk_path.parent.mkdir(parents=True, exist_ok=True)
+    disk_path.write_text(json.dumps({"cached_at": time.time(), "result": serialized}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    state = load_module_runtime_state(module.id)
+    update_module_runtime_state(module.id, query_cache_writes=int(state.get("query_cache_writes", 0)) + 1)
 
 
 def _clear_module_query_cache(module_id: str) -> None:
@@ -1214,11 +1283,37 @@ def _clear_module_query_cache(module_id: str) -> None:
     for key in list(_QUERY_CACHE):
         if prefix in key:
             _QUERY_CACHE.pop(key, None)
+    shutil.rmtree(module_query_cache_dir(module_id), ignore_errors=True)
 
 
 def _module_query_cache_count(module_id: str) -> int:
     prefix = f'"module_id":"{module_id}"'
-    return sum(1 for key in _QUERY_CACHE if prefix in key)
+    memory_entries = sum(1 for key in _QUERY_CACHE if prefix in key)
+    disk_entries = 0
+    cache_dir = module_query_cache_dir(module_id)
+    if cache_dir.exists():
+        try:
+            disk_entries = sum(1 for path in cache_dir.iterdir() if path.is_file())
+        except OSError:
+            disk_entries = 0
+    return max(memory_entries, disk_entries)
+
+
+def warm_module_runtime_caches() -> dict[str, Any]:
+    warmed = 0
+    checked = 0
+    for module in load_modules():
+        if not module.enabled:
+            continue
+        checked += 1
+        try:
+            if module.type in {"docs", "maildir"}:
+                _index_meta_payload(module.id)
+            _module_health(module, timeout=1.5)
+            warmed += 1
+        except Exception:
+            continue
+    return {"checked": checked, "warmed": warmed, "timestamp": _timestamp()}
 
 
 def _run_reindex_job(module: ModuleConfig, kind: str, roots: list[tuple[str, str, Path]], index_path: Path, index_timeout: float | None, job_id: str) -> None:
@@ -1338,11 +1433,13 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             }
         if action == "search":
             query = str(payload.get("query", "")).strip()
+            started_at = time.monotonic()
             index, rebuilt = ensure_index("docs", roots, index_path, timeout_seconds=index_timeout)
             cached = _query_cache_get(module, action, {"query": query, "top_k": top_k}, index.built_at)
             if cached is not None:
                 cached["data"]["cache_hit"] = True
                 cached["data"]["rebuilt"] = rebuilt
+                update_module_runtime_state(module.id, last_query_duration_ms=round((time.monotonic() - started_at) * 1000.0, 2))
                 return cached
             hits = search_index(index, query, top_k)
             result = {
@@ -1358,6 +1455,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                 },
             }
             _query_cache_set(module, action, {"query": query, "top_k": top_k}, index.built_at, result)
+            update_module_runtime_state(module.id, last_query_duration_ms=round((time.monotonic() - started_at) * 1000.0, 2))
             return result
         raise ValueError(f"Aktion fuer docs nicht bekannt: {action}")
     if module.type == "maildir":
@@ -1432,11 +1530,13 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             }
         if action == "search":
             query = str(payload.get("query", "")).strip()
+            started_at = time.monotonic()
             index, rebuilt = ensure_index("maildir", roots, index_path, timeout_seconds=index_timeout)
             cached = _query_cache_get(module, action, {"query": query, "top_k": top_k}, index.built_at)
             if cached is not None:
                 cached["data"]["cache_hit"] = True
                 cached["data"]["rebuilt"] = rebuilt
+                update_module_runtime_state(module.id, last_query_duration_ms=round((time.monotonic() - started_at) * 1000.0, 2))
                 return cached
             hits = search_index(index, query, top_k)
             result = {
@@ -1452,6 +1552,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
                 },
             }
             _query_cache_set(module, action, {"query": query, "top_k": top_k}, index.built_at, result)
+            update_module_runtime_state(module.id, last_query_duration_ms=round((time.monotonic() - started_at) * 1000.0, 2))
             return result
         raise ValueError(f"Aktion fuer maildir nicht bekannt: {action}")
     raise ValueError(f"Worker-Typ nicht unterstuetzt: {module.type}")

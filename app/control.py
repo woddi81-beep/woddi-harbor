@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
@@ -32,12 +33,15 @@ from .modules import (
     start_module,
     stop_module,
     upsert_module,
+    warm_module_runtime_caches,
 )
 
 
 APP_STARTED_AT = time.time()
 RECENT_ACTIVITY: deque[dict[str, Any]] = deque(maxlen=25)
 DEFAULT_LOG_PATH = Path("~/.harbor/logs/harbor.log").expanduser()
+_WARMUP_STOP = threading.Event()
+_WARMUP_THREAD: threading.Thread | None = None
 
 
 class ExecuteRequest(BaseModel):
@@ -154,6 +158,13 @@ def _dashboard_payload() -> dict[str, Any]:
     llm = _llm_health(settings)
     active_modules = [module for module in modules if module["running"]]
     invalid_modules = [module for module in modules if module["validation_errors"]]
+    query_cache_hits = sum(int(module["status"].get("runtime_state", {}).get("query_cache_hits", 0)) for module in modules)
+    query_cache_disk_hits = sum(int(module["status"].get("runtime_state", {}).get("query_cache_disk_hits", 0)) for module in modules)
+    query_cache_misses = sum(int(module["status"].get("runtime_state", {}).get("query_cache_misses", 0)) for module in modules)
+    health_checks = sum(int(module["status"].get("runtime_state", {}).get("health_checks", 0)) for module in modules)
+    health_cache_hits = sum(int(module["status"].get("runtime_state", {}).get("health_cache_hits", 0)) for module in modules)
+    query_cache_total = query_cache_hits + query_cache_misses
+    health_cache_total = health_checks + health_cache_hits
     return {
         "app": {
             "name": settings.name,
@@ -167,6 +178,15 @@ def _dashboard_payload() -> dict[str, Any]:
             "enabled": len([module for module in modules if module["enabled"]]),
             "invalid": len(invalid_modules),
             "items": modules,
+            "metrics": {
+                "query_cache_hits": query_cache_hits,
+                "query_cache_disk_hits": query_cache_disk_hits,
+                "query_cache_misses": query_cache_misses,
+                "query_cache_hit_rate": round(query_cache_hits / query_cache_total, 4) if query_cache_total else 0.0,
+                "health_checks": health_checks,
+                "health_cache_hits": health_cache_hits,
+                "health_cache_hit_rate": round(health_cache_hits / health_cache_total, 4) if health_cache_total else 0.0,
+            },
         },
         "activity": list(RECENT_ACTIVITY),
         "stats": _system_stats(),
@@ -180,6 +200,16 @@ def _read_harbor_log() -> dict[str, Any]:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             return {"path": str(path), "content": "\n".join(lines[-200:])}
     return {"path": str(DEFAULT_LOG_PATH), "content": "Logdatei nicht gefunden."}
+
+
+def _warmup_loop() -> None:
+    while not _WARMUP_STOP.is_set():
+        try:
+            result = warm_module_runtime_caches()
+            _record_activity("warmup", "module-runtime-caches", json.dumps(result, ensure_ascii=False))
+        except Exception as exc:
+            _record_activity("warmup", "module-runtime-caches", str(exc))
+        _WARMUP_STOP.wait(20.0)
 
 
 def _chat_page_html(settings: HarborSettings) -> str:
@@ -846,6 +876,10 @@ def _admin_page_html(settings: HarborSettings) -> str:
               const testFailures = enabledModules.filter((item) => item.runtime_state?.last_test_at && !item.runtime_state?.last_test_ok);
               const neverTested = enabledModules.filter((item) => !item.runtime_state?.last_test_at);
               const indexJobs = enabledModules.filter((item) => item.runtime_state?.index_job_active);
+              const queryCacheHits = modules.reduce((sum, item) => sum + Number(item.runtime_state?.query_cache_hits || 0), 0);
+              const queryCacheMisses = modules.reduce((sum, item) => sum + Number(item.runtime_state?.query_cache_misses || 0), 0);
+              const healthCacheHits = modules.reduce((sum, item) => sum + Number(item.runtime_state?.health_cache_hits || 0), 0);
+              const healthChecks = modules.reduce((sum, item) => sum + Number(item.runtime_state?.health_checks || 0), 0);
               const summary = {{
                 total: modules.length,
                 enabled: enabledModules.length,
@@ -857,7 +891,9 @@ def _admin_page_html(settings: HarborSettings) -> str:
                 netbox: modules.filter((item) => item.type === "netbox_mcp" || item.provider === "netbox-mcp-server" || item.id === "netbox").length,
                 openstack: modules.filter((item) => item.type === "openstack_mcp" || item.provider === "openstack-mcp-server" || item.id === "openstack").length,
                 queryCacheEntries: modules.reduce((sum, item) => sum + Number(item.status?.cache?.query_entries || 0), 0),
-                indexJobs: indexJobs.length
+                indexJobs: indexJobs.length,
+                queryCacheHitRate: queryCacheHits + queryCacheMisses ? queryCacheHits / (queryCacheHits + queryCacheMisses) : 0,
+                healthCacheHitRate: healthChecks + healthCacheHits ? healthCacheHits / (healthChecks + healthCacheHits) : 0
               }};
               overviewNode.innerHTML = `
                 <article class="metric"><span>Module gesamt</span><strong>${{summary.total}}</strong></article>
@@ -871,6 +907,8 @@ def _admin_page_html(settings: HarborSettings) -> str:
                 <article class="metric"><span>OpenStack MCP</span><strong>${{summary.openstack}}</strong></article>
                 <article class="metric"><span>Index Jobs</span><strong>${{summary.indexJobs}}</strong></article>
                 <article class="metric"><span>Query Cache</span><strong>${{summary.queryCacheEntries}}</strong></article>
+                <article class="metric"><span>Query Hit Rate</span><strong>${{(summary.queryCacheHitRate * 100).toFixed(0)}}%</strong></article>
+                <article class="metric"><span>Health Hit Rate</span><strong>${{(summary.healthCacheHitRate * 100).toFixed(0)}}%</strong></article>
               `;
               const pills = [];
               if (!enabledModules.length) {{
@@ -953,6 +991,10 @@ def _admin_page_html(settings: HarborSettings) -> str:
                       <dt>Last Test</dt><dd>${{esc(state.last_test_at || "-")}}</dd>
                       <dt>Index Job</dt><dd>${{esc(state.index_job_status || "-")}}</dd>
                       <dt>Query Cache</dt><dd>${{esc(module.status?.cache?.query_entries || 0)}}</dd>
+                      <dt>Query Hits</dt><dd>${{esc(state.query_cache_hits || 0)}} / ${{esc(state.query_cache_misses || 0)}} misses</dd>
+                      <dt>Health Cache</dt><dd>${{esc(state.health_cache_hits || 0)}} hits / ${{esc(state.health_checks || 0)}} checks</dd>
+                      <dt>Last Query ms</dt><dd>${{esc(state.last_query_duration_ms || 0)}}</dd>
+                      <dt>Health ms</dt><dd>${{esc(state.last_health_latency_ms || 0)}}</dd>
                       <dt>Last Error</dt><dd>${{esc(state.last_error || "-")}}</dd>
                     </dl>
                     ${{errors}}
@@ -1526,6 +1568,19 @@ def _request_to_module(body: ModuleUpsertRequest) -> ModuleConfig:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Harbor", version="0.1.0")
+
+    @app.on_event("startup")
+    def startup_warmup() -> None:
+        global _WARMUP_THREAD
+        _WARMUP_STOP.clear()
+        if _WARMUP_THREAD is not None and _WARMUP_THREAD.is_alive():
+            return
+        _WARMUP_THREAD = threading.Thread(target=_warmup_loop, daemon=True, name="harbor-warmup")
+        _WARMUP_THREAD.start()
+
+    @app.on_event("shutdown")
+    def shutdown_warmup() -> None:
+        _WARMUP_STOP.set()
 
     @app.get("/", response_class=RedirectResponse)
     def home() -> RedirectResponse:
