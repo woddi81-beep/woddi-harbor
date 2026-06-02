@@ -65,10 +65,10 @@
       "notes": "NetBox MCP server for infrastructure documentation",
       "sources": [],
       "settings": {
-        "netbox_url": "",
-        "netbox_url_env": "NETBOX_URL",
+        "netbox_url": "https://netbox-test.global.cloud.sap",
+        "netbox_url_env": "",
         "netbox_token": "",
-        "netbox_token_env": "NETBOX_TOKEN"
+        "netbox_token_env": ""
       }
     }
   ]
