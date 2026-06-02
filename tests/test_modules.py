@@ -155,6 +155,19 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(response, {"ok": True, "data": {"pong": True}})
         execute_patch.assert_called_once_with(module, "health", {})
 
+    def test_create_worker_app_execute_endpoint_is_available_at_root(self) -> None:
+        module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
+        with (
+            patch("app.worker.find_module", return_value=module),
+            patch("app.worker.worker_execute", return_value={"ok": True, "data": {"hits": []}}) as execute_patch,
+        ):
+            app = create_worker_app("docs-local")
+            response = TestClient(app).post("/execute", json={"action": "search", "payload": {"query": "test"}})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "data": {"hits": []}})
+        execute_patch.assert_called_once_with(module, "search", {"query": "test"})
+
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
     @patch("app.modules.httpx.Client", FakeWorkerHealthClient)
     def test_module_health_reachable_requires_execute_endpoint_for_local_worker(self) -> None:
