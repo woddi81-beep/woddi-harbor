@@ -70,6 +70,26 @@
         "netbox_token": "",
         "netbox_token_env": ""
       }
+    },
+    {
+      "id": "sap_docs",
+      "type": "sap_docs_mcp",
+      "enabled": true,
+      "name": "SAP Cloud Infrastructure Docs",
+      "transport": "local",
+      "path": "",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 59285,
+      "timeout_seconds": 120.0,
+      "top_k": 10,
+      "notes": "SAP Help Portal MCP server",
+      "sources": [],
+      "settings": {
+        "docs_url": "https://help.sap.com/docs/SAP_Cloud_Infrastructure"
+      }
     }
   ]
 }
