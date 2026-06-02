@@ -253,13 +253,19 @@ def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> b
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.get(_local_netbox_health_url(module) if _is_local_mcp_module(module) else f"{module_url(module)}/health")
-        if response.status_code != 200:
-            return False
-        payload = response.json()
-        if _is_local_mcp_module(module):
-            ok = bool(payload.get("ok")) and str(payload.get("server", "")).strip() == _local_mcp_server_name(module)
-        else:
-            ok = str(payload.get("module_id", "")) == module.id
+            if response.status_code != 200:
+                return False
+            payload = response.json()
+            if _is_local_mcp_module(module):
+                ok = bool(payload.get("ok")) and str(payload.get("server", "")).strip() == _local_mcp_server_name(module)
+            else:
+                ok = str(payload.get("module_id", "")) == module.id
+                if ok:
+                    execute_response = client.post(
+                        f"{module_url(module)}/execute",
+                        json={"action": "health", "payload": {}},
+                    )
+                    ok = execute_response.status_code == 200
         if ok:
             update_module_runtime_state(module.id, last_health_ok_at=_timestamp())
         return ok

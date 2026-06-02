@@ -6,10 +6,11 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app import modules as modules_module
 from app.config import ModuleConfig
 from app import cli
 from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module, worker_execute
-from app.worker import create_worker_app
+from app.worker import ExecuteRequest, create_worker_app
 from app.worker_netbox import create_worker_app as create_netbox_worker_app
 from app.worker_netbox import run_worker as run_netbox_worker
 from app.worker_openstack import create_worker_app as create_openstack_worker_app
@@ -82,6 +83,27 @@ class FakeMcpClient:
         raise AssertionError(f"Unexpected MCP method: {method}")
 
 
+class FakeWorkerHealthClient:
+    execute_status_code = 200
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.calls: list[dict] = []
+
+    def __enter__(self) -> FakeWorkerHealthClient:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def get(self, url: str) -> FakeResponse:
+        self.calls.append({"method": "GET", "url": url})
+        return FakeResponse({"module_id": "10", "ready": True})
+
+    def post(self, url: str, *, json: dict | None = None) -> FakeResponse:
+        self.calls.append({"method": "POST", "url": url, "json": json or {}})
+        return FakeResponse({"ok": self.execute_status_code == 200}, status_code=self.execute_status_code)
+
+
 class ModuleTests(unittest.TestCase):
     def test_worker_health_endpoint_does_not_call_module_status(self) -> None:
         module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
@@ -118,6 +140,31 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["module_id"], "docs-local")
         self.assertTrue(response.json()["ready"])
+
+    def test_create_worker_app_execute_endpoint_accepts_action_payload_body(self) -> None:
+        module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
+        with (
+            patch("app.worker.find_module", return_value=module),
+            patch("app.worker.worker_execute", return_value={"ok": True, "data": {"pong": True}}) as execute_patch,
+        ):
+            app = create_worker_app("docs-local")
+            execute_route = next(route for route in app.routes if route.path == "/execute")
+            self.assertIn("POST", execute_route.methods)
+            response = execute_route.endpoint(ExecuteRequest(action=" health ", payload={}))
+
+        self.assertEqual(response, {"ok": True, "data": {"pong": True}})
+        execute_patch.assert_called_once_with(module, "health", {})
+
+    @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
+    @patch("app.modules.httpx.Client", FakeWorkerHealthClient)
+    def test_module_health_reachable_requires_execute_endpoint_for_local_worker(self) -> None:
+        module = ModuleConfig(id="10", type="docs", transport="local", host="127.0.0.1", port=41001)
+        FakeWorkerHealthClient.execute_status_code = 404
+
+        self.assertFalse(modules_module._module_health_reachable(module))
+
+        FakeWorkerHealthClient.execute_status_code = 200
+        self.assertTrue(modules_module._module_health_reachable(module))
 
     def test_create_netbox_worker_app_uses_env_credentials(self) -> None:
         module = ModuleConfig(id="netbox", type="netbox_mcp", transport="local", port=41002)

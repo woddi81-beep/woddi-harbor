@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from typing import Any
+
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
 import uvicorn
 
 from .config import find_module
 from .modules import worker_execute, worker_health
+
+
+class ExecuteRequest(BaseModel):
+    action: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_worker_app(module_id: str) -> FastAPI:
@@ -19,12 +27,8 @@ def create_worker_app(module_id: str) -> FastAPI:
         return worker_health(module)
 
     @api.post("/execute")
-    def execute(body: dict) -> dict:
-        action = str(body.get("action", "")).strip()
-        payload = body.get("payload") or {}
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="payload muss ein JSON-Objekt sein.")
-        return worker_execute(module, action, payload)
+    def execute(body: ExecuteRequest) -> dict:
+        return worker_execute(module, body.action.strip(), body.payload)
 
     return api
 
