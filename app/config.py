@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-ModuleType = Literal["docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp"]
+ModuleType = Literal["docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"]
 ServiceKind = Literal["harbor", "module"]
 UserRole = Literal["admin", "operator", "viewer"]
 

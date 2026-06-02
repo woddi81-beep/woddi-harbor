@@ -14,6 +14,7 @@ from app.worker import ExecuteRequest, create_worker_app
 from app.worker_netbox import create_worker_app as create_netbox_worker_app
 from app.worker_netbox import run_worker as run_netbox_worker
 from app.worker_openstack import create_worker_app as create_openstack_worker_app
+from app.worker_sap_docs import create_worker_app as create_sap_docs_worker_app
 
 
 class FakeResponse:
@@ -233,6 +234,23 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 59999)
         self.assertEqual(signal_patch.call_count, 4)
+
+    def test_create_sap_docs_worker_app_uses_configured_base_url(self) -> None:
+        module = ModuleConfig(id="sap_docs", type="sap_docs_mcp", transport="local", port=41005, settings={"base_url": "https://help.example"})
+        captured: dict[str, str] = {}
+
+        def fake_create_app(*, base_url: str = ""):
+            captured["base_url"] = base_url
+            return object()
+
+        with (
+            patch("app.worker_sap_docs.find_module", return_value=module),
+            patch("app.worker_sap_docs.create_sap_docs_app", side_effect=fake_create_app),
+        ):
+            app = create_sap_docs_worker_app("sap_docs")
+
+        self.assertIsNotNone(app)
+        self.assertEqual(captured["base_url"], "https://help.example")
 
     def test_create_openstack_worker_app_uses_env_credentials(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)

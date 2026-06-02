@@ -407,6 +407,40 @@ def module_add_netbox_mcp(
     console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
 
 
+@module_app.command("add-sap-docs-mcp")
+def module_add_sap_docs_mcp(
+    module_id: str = typer.Argument("sap_docs"),
+    name: str = typer.Option("SAP Docs MCP"),
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
+    timeout_seconds: float = typer.Option(30.0),
+    base_url: str = typer.Option("", help="Optionale SAP Help Basis-URL"),
+) -> None:
+    """Register a local SAP documentation MCP server managed by Harbor."""
+    settings = {"base_url": base_url} if base_url else {}
+    module = ModuleConfig(
+        id=module_id,
+        name=name,
+        type="sap_docs_mcp",
+        provider="sap-docs-mcp-server",
+        transport="local",
+        remote_protocol="mcp",
+        host=host,
+        port=port,
+        timeout_seconds=timeout_seconds,
+        tool_names=["search_sap_docs"],
+        test_action="discover",
+        test_expect_contains=["search_sap_docs"],
+        settings=settings,
+        notes="Harbor startet den lokalen SAP Docs MCP Worker und exponiert /mcp sowie /health.",
+    )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
+    upsert_module(module)
+    console.print(Panel.fit(f"SAP Docs MCP-Modul registriert: {module_id}", title="Module"))
+
+
 @module_app.command("add-openstack-mcp")
 def module_add_openstack_mcp(
     module_id: str = typer.Argument("openstack"),

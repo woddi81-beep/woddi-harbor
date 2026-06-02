@@ -1,0 +1,116 @@
+{
+  "modules": [
+    {
+      "id": "10",
+      "type": "docs",
+      "enabled": true,
+      "name": "OPS Doku",
+      "transport": "local",
+      "path": "/opt/woddi-ai/doku/documentation-operation-main",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 36481,
+      "timeout_seconds": 120.0,
+      "top_k": 10,
+      "notes": "",
+      "sources": [
+        {
+          "id": "10-source-1",
+          "path": "/opt/woddi-ai/doku/documentation-operation-main",
+          "label": "OPS Documentation",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "11",
+      "type": "docs",
+      "enabled": true,
+      "name": "Customer Doku",
+      "transport": "local",
+      "path": "/opt/woddi-ai/doku/documentation-customer-main",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 37249,
+      "timeout_seconds": 120.0,
+      "top_k": 10,
+      "notes": "",
+      "sources": [
+        {
+          "id": "11-source-1",
+          "path": "/opt/woddi-ai/doku/documentation-customer-main",
+          "label": "Customer Documentation",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "netbox",
+      "type": "netbox_mcp",
+      "enabled": true,
+      "name": "NetBox MCP",
+      "provider": "netbox-mcp-server",
+      "transport": "local",
+      "remote_protocol": "mcp",
+      "path": "",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 59183,
+      "timeout_seconds": 30.0,
+      "top_k": 5,
+      "notes": "Harbor startet den lokalen NetBox MCP Worker und exponiert /mcp sowie /health.",
+      "tool_names": [
+        "get_objects",
+        "get_object_by_id",
+        "get_changelogs"
+      ],
+      "test_action": "discover",
+      "test_payload": {},
+      "test_expect_contains": [
+        "get_objects"
+      ],
+      "settings": {
+        "netbox_url": "",
+        "netbox_url_env": "NETBOX_URL",
+        "netbox_token": "",
+        "netbox_token_env": "NETBOX_TOKEN",
+        "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server"
+      },
+      "sources": []
+    },
+    {
+      "id": "sap_docs",
+      "type": "sap_docs_mcp",
+      "enabled": true,
+      "name": "SAP Docs MCP",
+      "provider": "sap-docs-mcp-server",
+      "transport": "local",
+      "remote_protocol": "mcp",
+      "path": "",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 59184,
+      "timeout_seconds": 30.0,
+      "top_k": 5,
+      "notes": "Harbor startet den lokalen SAP Docs MCP Worker und exponiert /mcp sowie /health.",
+      "tool_names": [
+        "search_sap_docs"
+      ],
+      "test_action": "discover",
+      "test_payload": {},
+      "test_expect_contains": [
+        "search_sap_docs"
+      ],
+      "settings": {},
+      "sources": []
+    }
+  ]
+}
