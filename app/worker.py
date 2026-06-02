@@ -26,7 +26,7 @@ def create_worker_app(module_id: str) -> FastAPI:
     def health() -> dict:
         return worker_health(module)
 
-    @api.post("/execute")
+    @api.post("/execute", name="direct-execute")
     def execute(body: ExecuteRequest) -> dict:
         return worker_execute(module, body.action.strip(), body.payload)
 

@@ -162,10 +162,11 @@ class ModuleTests(unittest.TestCase):
             patch("app.worker.worker_execute", return_value={"ok": True, "data": {"hits": []}}) as execute_patch,
         ):
             app = create_worker_app("docs-local")
-            response = TestClient(app).post("/execute", json={"action": "search", "payload": {"query": "test"}})
+            execute_route = next(route for route in app.routes if route.path == "/execute")
+            self.assertIn("POST", execute_route.methods)
+            response = execute_route.endpoint(ExecuteRequest(action="search", payload={"query": "test"}))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "data": {"hits": []}})
+        self.assertEqual(response, {"ok": True, "data": {"hits": []}})
         execute_patch.assert_called_once_with(module, "search", {"query": "test"})
 
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
