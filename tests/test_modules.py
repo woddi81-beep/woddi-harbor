@@ -9,11 +9,13 @@ from fastapi.testclient import TestClient
 from app import modules as modules_module
 from app.config import ModuleConfig
 from app import cli
+from app.mcp.netbox import NetBoxBackend
 from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module, worker_execute
 from app.worker import ExecuteRequest, create_worker_app
 from app.worker_netbox import create_worker_app as create_netbox_worker_app
 from app.worker_netbox import run_worker as run_netbox_worker
 from app.worker_openstack import create_worker_app as create_openstack_worker_app
+from app.worker_sap_docs import create_worker_app as create_sap_docs_worker_app
 
 
 class FakeResponse:
@@ -200,6 +202,42 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(captured["netbox_url"], "https://netbox.example")
         self.assertEqual(captured["netbox_token"], "secret")
 
+    def test_netbox_module_validation_allows_empty_token(self) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            transport="local",
+            port=41002,
+            settings={"netbox_url": "https://netbox.example", "netbox_token": ""},
+        )
+
+        self.assertEqual(modules_module.validate_module_config(module), [])
+
+    def test_create_netbox_worker_app_allows_empty_token(self) -> None:
+        module = ModuleConfig(id="netbox", type="netbox_mcp", transport="local", port=41002)
+        captured: dict[str, object] = {}
+
+        def fake_create_app(*, netbox_url: str, netbox_token: str):
+            captured["netbox_url"] = netbox_url
+            captured["netbox_token"] = netbox_token
+            return object()
+
+        with (
+            patch("app.worker_netbox.find_module", return_value=module),
+            patch("app.worker_netbox.create_app", side_effect=fake_create_app),
+            patch.dict("os.environ", {"NETBOX_URL": "https://netbox.example", "NETBOX_TOKEN": ""}, clear=True),
+        ):
+            app = create_netbox_worker_app("netbox")
+
+        self.assertIsNotNone(app)
+        self.assertEqual(captured["netbox_url"], "https://netbox.example")
+        self.assertEqual(captured["netbox_token"], "")
+
+    def test_netbox_backend_omits_authorization_header_without_token(self) -> None:
+        backend = NetBoxBackend(netbox_url="https://netbox.example", netbox_token="")
+
+        self.assertNotIn("Authorization", backend._headers())
+
     def test_run_netbox_worker_uses_uvicorn_server_with_signal_handlers(self) -> None:
         module = ModuleConfig(id="netbox", type="netbox_mcp", transport="local", host="127.0.0.1", port=41002)
         captured: dict[str, object] = {}
@@ -233,6 +271,34 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 59999)
         self.assertEqual(signal_patch.call_count, 4)
+
+    def test_create_sap_docs_worker_app_uses_configured_docs_url(self) -> None:
+        module = ModuleConfig(id="sap_docs", type="sap_docs_mcp", transport="local", port=41005, settings={"docs_url": "https://help.example"})
+        captured: dict[str, str] = {}
+
+        def fake_create_app(*, base_url: str = ""):
+            captured["base_url"] = base_url
+            return object()
+
+        with (
+            patch("app.worker_sap_docs.find_module", return_value=module),
+            patch("app.worker_sap_docs.create_sap_docs_app", side_effect=fake_create_app),
+        ):
+            app = create_sap_docs_worker_app("sap_docs")
+
+        self.assertIsNotNone(app)
+        self.assertEqual(captured["base_url"], "https://help.example")
+
+    def test_sap_docs_module_validation_requires_only_docs_url(self) -> None:
+        module = ModuleConfig(
+            id="sap_docs",
+            type="sap_docs_mcp",
+            transport="local",
+            port=41005,
+            settings={"docs_url": "https://help.sap.com/docs/SAP_Cloud_Infrastructure"},
+        )
+
+        self.assertEqual(modules_module.validate_module_config(module), [])
 
     def test_create_openstack_worker_app_uses_env_credentials(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)

@@ -57,7 +57,10 @@ def _local_netbox_health_url(module: ModuleConfig) -> str:
 def _netbox_settings(module: ModuleConfig) -> tuple[str, str]:
     netbox_url = str(module.settings.get("netbox_url", "")).strip()
     netbox_token = str(module.settings.get("netbox_token", "")).strip()
+    url_env = str(module.settings.get("netbox_url_env", "")).strip()
     token_env = str(module.settings.get("netbox_token_env", "")).strip()
+    if not netbox_url and url_env:
+        netbox_url = os.getenv(url_env, "").strip()
     if not netbox_token and token_env:
         netbox_token = os.getenv(token_env, "").strip()
     return netbox_url, netbox_token
@@ -88,8 +91,12 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
     }
 
 
+def _sap_docs_url(module: ModuleConfig) -> str:
+    return str(module.settings.get("docs_url", "")).strip()
+
+
 def _is_local_mcp_module(module: ModuleConfig) -> bool:
-    return module.type in {"netbox_mcp", "openstack_mcp"}
+    return module.type in {"netbox_mcp", "openstack_mcp", "sap_docs_mcp"}
 
 
 def _local_mcp_server_name(module: ModuleConfig) -> str:
@@ -97,7 +104,17 @@ def _local_mcp_server_name(module: ModuleConfig) -> str:
         return "netbox-mcp-server"
     if module.type == "openstack_mcp":
         return "openstack-mcp-server"
+    if module.type == "sap_docs_mcp":
+        return "sap-docs-mcp-server"
     return ""
+
+
+def _local_mcp_auth_configured(module: ModuleConfig) -> bool:
+    if module.type == "netbox_mcp":
+        return bool(_netbox_settings(module)[1])
+    if module.type == "openstack_mcp":
+        return bool(_openstack_settings(module).get("OS_AUTH_URL"))
+    return False
 
 
 def module_pid_path(module_id: str) -> Path:
@@ -361,6 +378,14 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
             module.id,
             str(module.port),
         ]
+    if module.type == "sap_docs_mcp":
+        command = [
+            python_executable,
+            "-m",
+            "app.worker_sap_docs",
+            module.id,
+            str(module.port),
+        ]
     _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         return subprocess.Popen(
@@ -399,7 +424,7 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     errors: list[str] = []
     if not module.id.strip():
         errors.append("Module ID fehlt.")
-    if module.type not in {"docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp"}:
+    if module.type not in {"docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
         errors.append(f"Unbekannter Modultyp: {module.type}")
     if module.transport not in {"local", "remote"}:
         errors.append(f"Ungueltiger Transport: {module.transport}")
@@ -442,15 +467,13 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     if module.type == "netbox_mcp":
         if module.transport != "local":
             errors.append("netbox_mcp muss lokal sein.")
-        netbox_url, netbox_token = _netbox_settings(module)
+        netbox_url, _netbox_token = _netbox_settings(module)
         if not netbox_url:
             errors.append("NetBox URL fehlt.")
         else:
             parsed = urlparse(netbox_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 errors.append(f"NetBox URL ungueltig: {netbox_url}")
-        if not netbox_token:
-            errors.append("NetBox Token fehlt.")
         if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
     if module.type == "openstack_mcp":
@@ -467,6 +490,18 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
         has_password_creds = bool(openstack["OS_USERNAME"] and openstack["OS_PASSWORD"])
         if not has_app_creds and not has_password_creds:
             errors.append("OpenStack Credentials fehlen.")
+        if module.port < 0 or module.port > 65535:
+            errors.append(f"Port ungueltig: {module.port}")
+    if module.type == "sap_docs_mcp":
+        if module.transport != "local":
+            errors.append("sap_docs_mcp muss lokal sein.")
+        docs_url = _sap_docs_url(module)
+        if not docs_url:
+            errors.append("SAP Docs URL fehlt.")
+        else:
+            parsed = urlparse(docs_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                errors.append(f"SAP Docs URL ungueltig: {docs_url}")
         if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
     return errors
@@ -678,7 +713,7 @@ def health_check_module(module_id: str) -> dict[str, Any]:
         discovery = discover_remote_module(module)
         payload["remote"] = discovery
         payload["ok"] = payload["ok"] and bool(discovery.get("ok"))
-    if module.type in {"netbox_mcp", "openstack_mcp"} and not errors:
+    if module.type in {"netbox_mcp", "openstack_mcp", "sap_docs_mcp"} and not errors:
         payload["local"] = status.get("health")
         discovery = discover_standard_mcp_module(module)
         payload["remote"] = discovery
@@ -698,7 +733,7 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
         "log_path": str(module_log_path(module_id)),
         "log_tail": _read_module_log_tail(module_id, lines=log_lines),
     }
-    if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"}:
+    if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
         remote = discover_remote_module(module)
         payload["remote"] = remote
         payload["ok"] = payload["ok"] and bool(remote.get("ok"))
@@ -722,7 +757,7 @@ def _default_test_config(module: ModuleConfig) -> tuple[str, dict[str, Any], lis
                 return module.tool_names[0], {}, []
             return "discover", {}, []
         return "health", {}, []
-    if module.type in {"netbox_mcp", "openstack_mcp"}:
+    if module.type in {"netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
         if module.tool_names:
             return module.tool_names[0], {}, []
         return "discover", {}, []
@@ -752,7 +787,7 @@ def module_test(module_id: str) -> dict[str, Any]:
     meaningful_output = False
     output_summary = ""
     try:
-        if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"} and action == "discover":
+        if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"} and action == "discover":
             result = discover_remote_module(module)
             connected = bool(result.get("ok"))
             tools = result.get("tools") or result.get("actions") or []
@@ -769,7 +804,7 @@ def module_test(module_id: str) -> dict[str, Any]:
             elif module.type in {"docs", "maildir"} and action == "stats":
                 meaningful_output = int(result_data.get("document_count", 0) or result_data.get("messages", 0) or 0) >= 0
                 output_summary = json.dumps(result_data, ensure_ascii=False)
-            elif module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"}:
+            elif module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
                 output_summary = json.dumps(result_data, ensure_ascii=False)
                 meaningful_output = bool(output_summary.strip() and output_summary not in {"{}", "[]", '""'})
             else:
@@ -1053,7 +1088,7 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
             "ok": False,
             "base_url": endpoint,
             "protocol": "mcp",
-            "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and (_netbox_settings(module)[1] if module.type == "netbox_mcp" else _openstack_settings(module).get("OS_AUTH_URL")))),
+            "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _local_mcp_auth_configured(module))),
             "session_id": session_id or "",
             "tools": [],
             "attempts": attempts,
@@ -1070,7 +1105,7 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
         "ok": True,
         "base_url": endpoint,
         "protocol": "mcp",
-        "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and (_netbox_settings(module)[1] if module.type == "netbox_mcp" else _openstack_settings(module).get("OS_AUTH_URL")))),
+        "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _local_mcp_auth_configured(module))),
         "session_id": session_id or "",
         "tools": deduped_tools,
         "capabilities": ["tools"],
@@ -1163,7 +1198,7 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
 
-    if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp"}:
+    if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
         try:
             if _is_local_mcp_module(module) or module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
                 if action == "health":

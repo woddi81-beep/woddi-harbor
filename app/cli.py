@@ -378,8 +378,6 @@ def module_add_netbox_mcp(
     """Register a local NetBox MCP server managed by Harbor."""
     if api_key and api_key_env:
         raise typer.BadParameter("Nutze entweder --api-key oder --api-key-env.")
-    if not api_key and not api_key_env:
-        raise typer.BadParameter("NetBox API-Token fehlt. Nutze --api-key oder --api-key-env.")
     module = ModuleConfig(
         id=module_id,
         name=name,
@@ -405,6 +403,39 @@ def module_add_netbox_mcp(
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
     console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
+
+
+@module_app.command("add-sap-docs-mcp")
+def module_add_sap_docs_mcp(
+    module_id: str = typer.Argument("sap_docs"),
+    name: str = typer.Option("SAP Docs MCP"),
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
+    timeout_seconds: float = typer.Option(30.0),
+    docs_url: str = typer.Option(..., help="SAP Help Dokumentations-URL"),
+) -> None:
+    """Register a local SAP documentation MCP server managed by Harbor."""
+    module = ModuleConfig(
+        id=module_id,
+        name=name,
+        type="sap_docs_mcp",
+        provider="sap-docs-mcp-server",
+        transport="local",
+        remote_protocol="mcp",
+        host=host,
+        port=port,
+        timeout_seconds=timeout_seconds,
+        tool_names=["search_sap_docs"],
+        test_action="discover",
+        test_expect_contains=["search_sap_docs"],
+        settings={"docs_url": docs_url},
+        notes="Harbor startet den lokalen SAP Docs MCP Worker und exponiert /mcp sowie /health.",
+    )
+    errors = validate_module_config(module)
+    if errors:
+        raise typer.BadParameter(" ".join(errors))
+    upsert_module(module)
+    console.print(Panel.fit(f"SAP Docs MCP-Modul registriert: {module_id}", title="Module"))
 
 
 @module_app.command("add-openstack-mcp")

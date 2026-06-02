@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import signal
 import sys
 
@@ -8,24 +7,17 @@ from fastapi import FastAPI
 import uvicorn
 
 from .config import find_module
-from .mcp.netbox import create_app
-
-
-def _netbox_credentials() -> tuple[str, str]:
-    netbox_url = os.getenv("NETBOX_URL", "").strip()
-    netbox_token = os.getenv("NETBOX_TOKEN", "").strip()
-    if not netbox_url:
-        raise ValueError("NETBOX_URL fehlt.")
-    return netbox_url, netbox_token
+from .mcp.sap_docs import create_sap_docs_app
 
 
 def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
-
-    netbox_url, netbox_token = _netbox_credentials()
-    return create_app(netbox_url=netbox_url, netbox_token=netbox_token)
+    docs_url = str(module.settings.get("docs_url", "")).strip() or str(module.settings.get("base_url", "")).strip()
+    if docs_url:
+        return create_sap_docs_app(base_url=docs_url)
+    return create_sap_docs_app()
 
 
 def _install_signal_handlers(server: uvicorn.Server) -> dict[int, signal.Handlers]:
@@ -51,7 +43,6 @@ def run_worker(module_id: str, port: int) -> None:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
-
     api = create_worker_app(module_id)
     config = uvicorn.Config(api, host=module.host, port=port, log_level="warning")
     server = uvicorn.Server(config)
@@ -64,7 +55,7 @@ def run_worker(module_id: str, port: int) -> None:
 
 def main() -> None:
     if len(sys.argv) != 3:
-        raise SystemExit("Usage: python -m app.worker_netbox MODULE_ID PORT")
+        raise SystemExit("Usage: python -m app.worker_sap_docs MODULE_ID PORT")
     run_worker(sys.argv[1], int(sys.argv[2]))
 
 

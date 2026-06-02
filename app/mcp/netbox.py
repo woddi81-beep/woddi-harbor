@@ -134,11 +134,13 @@ class NetBoxBackend:
         self._discovery_cache: DiscoveryCache | None = None
 
     def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.token}",
+        headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
     def _request(
         self,
