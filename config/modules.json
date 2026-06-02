@@ -53,9 +53,9 @@
       "type": "netbox_mcp",
       "enabled": true,
       "name": "NetBox",
-      "transport": "mcp",
+      "transport": "local",
       "path": "",
-      "base_url": "http://127.0.0.1:59183",
+      "base_url": "",
       "api_key": "",
       "api_key_env": "",
       "host": "127.0.0.1",
@@ -63,24 +63,13 @@
       "timeout_seconds": 120.0,
       "top_k": 10,
       "notes": "NetBox MCP server for infrastructure documentation",
-      "sources": []
-    },
-    {
-      "id": "sap_docs",
-      "type": "sap_docs_mcp",
-      "enabled": true,
-      "name": "SAP Cloud Infrastructure Docs",
-      "transport": "mcp",
-      "path": "",
-      "base_url": "http://127.0.0.1:59285",
-      "api_key": "",
-      "api_key_env": "",
-      "host": "127.0.0.1",
-      "port": 59285,
-      "timeout_seconds": 120.0,
-      "top_k": 10,
-      "notes": "SAP Help Portal MCP server",
-      "sources": []
+      "sources": [],
+      "settings": {
+        "netbox_url": "",
+        "netbox_url_env": "NETBOX_URL",
+        "netbox_token": "",
+        "netbox_token_env": "NETBOX_TOKEN"
+      }
     }
   ]
 }
