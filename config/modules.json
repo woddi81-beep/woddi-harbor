@@ -1,0 +1,52 @@
+{
+  "modules": [
+    {
+      "id": "10",
+      "type": "docs",
+      "enabled": true,
+      "name": "OPS Doku",
+      "transport": "local",
+      "path": "/opt/woddi-ai/doku/documentation-operation-main",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 36481,
+      "timeout_seconds": 120.0,
+      "top_k": 10,
+      "notes": "",
+      "sources": [
+        {
+          "id": "10-source-1",
+          "path": "/opt/woddi-ai/doku/documentation-operation-main",
+          "label": "OPS Documentation",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "11",
+      "type": "docs",
+      "enabled": true,
+      "name": "Customer Doku",
+      "transport": "local",
+      "path": "/opt/woddi-ai/doku/documentation-customer-main",
+      "base_url": "",
+      "api_key": "",
+      "api_key_env": "",
+      "host": "127.0.0.1",
+      "port": 37249,
+      "timeout_seconds": 120.0,
+      "top_k": 10,
+      "notes": "",
+      "sources": [
+        {
+          "id": "11-source-1",
+          "path": "/opt/woddi-ai/doku/documentation-customer-main",
+          "label": "Customer Documentation",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}
