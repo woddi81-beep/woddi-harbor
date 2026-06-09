@@ -5,8 +5,10 @@
       "type": "docs",
       "enabled": true,
       "name": "OPS Doku",
+      "provider": "",
       "transport": "local",
-      "path": "/opt/woddi-ai/doku/documentation-operation-main",
+      "remote_protocol": "auto",
+      "path": "/srv/http/woddi-harbor/data/sources/documentation-operation",
       "base_url": "",
       "api_key": "",
       "api_key_env": "",
@@ -15,10 +17,15 @@
       "timeout_seconds": 120.0,
       "top_k": 10,
       "notes": "",
+      "tool_names": [],
+      "test_action": "",
+      "test_payload": {},
+      "test_expect_contains": [],
+      "settings": {},
       "sources": [
         {
           "id": "10-source-1",
-          "path": "/opt/woddi-ai/doku/documentation-operation-main",
+          "path": "/srv/http/woddi-harbor/data/sources/documentation-operation",
           "label": "OPS Documentation",
           "enabled": true
         }
@@ -29,8 +36,10 @@
       "type": "docs",
       "enabled": true,
       "name": "Customer Doku",
+      "provider": "",
       "transport": "local",
-      "path": "/opt/woddi-ai/doku/documentation-customer-main",
+      "remote_protocol": "auto",
+      "path": "/srv/http/woddi-harbor/data/sources/documentation-customer",
       "base_url": "",
       "api_key": "",
       "api_key_env": "",
@@ -39,10 +48,15 @@
       "timeout_seconds": 120.0,
       "top_k": 10,
       "notes": "",
+      "tool_names": [],
+      "test_action": "",
+      "test_payload": {},
+      "test_expect_contains": [],
+      "settings": {},
       "sources": [
         {
           "id": "11-source-1",
-          "path": "/opt/woddi-ai/doku/documentation-customer-main",
+          "path": "/srv/http/woddi-harbor/data/sources/documentation-customer",
           "label": "Customer Documentation",
           "enabled": true
         }
@@ -76,7 +90,7 @@
         "get_objects"
       ],
       "settings": {
-        "netbox_url": "",
+        "netbox_url": "https://netbox-dev.global.cloud.sap/api",
         "netbox_url_env": "NETBOX_URL",
         "netbox_token": "",
         "netbox_token_env": "NETBOX_TOKEN",

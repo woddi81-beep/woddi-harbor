@@ -5,9 +5,12 @@ __pycache__/
 *.egg-info/
 
 config/harbor.local.json
+config/users.local.json
 config/harbor.json
 config/modules.json
 config/services.json
 config/system_prompt.txt
 data/logs/
 data/runtime/
+data/
+config/*.lock

@@ -23,6 +23,34 @@ Der Name passt bewusst zum Zielbild:
 - CLI mit Rich-Ausgabe fuer Status, Konfiguration und Modulsteuerung
 - FastAPI-Control-Plane fuer spaetere Oberflaechen und Automatisierung
 - jeder lokale Modul-Dienst ist einzeln start-, stopp- und restartbar
+- fail-closed Benutzer- und Rollenmodell mit Modul-/Tool-Allowlisten
+- SQLite-Control-State im WAL-Modus mit Audit-Log, Chat-Sessions und Jobs
+- SSE-Streaming fuer Chat-Antworten
+- manifestbasierte MCP-Pakete und Instanzen mit Upgrade/Rollback
+- Prometheus-Metriken, Online-Backup/Restore und Production-Preflight
+
+## Produktionsstatus
+
+Harbor blockiert geschuetzte Endpunkte, solange kein initialer Admin existiert:
+
+```bash
+./harbor.sh cli init-admin --username admin
+```
+
+Vor einem Rollout:
+
+```bash
+./harbor.sh cli production-check
+./harbor.sh cli backup create --label pre-release
+```
+
+Ein externer Bind ist nur hinter einem TLS-Reverse-Proxy vorgesehen. Lokale Worker
+werden mit einem automatisch erzeugten internen Bearer-Token abgesichert.
+
+Architektur und Betrieb:
+
+- `docs/ARCHITECTURE.md`
+- `docs/OPERATIONS.md`
 
 ## Struktur
 
@@ -275,6 +303,35 @@ Erwarteter Upstream laut Projekt-README:
 Mehr Details zum Upstream-Projekt:
 
 - https://github.com/netboxlabs/netbox-mcp-server
+
+## Eigene MCP-Pakete
+
+Ein lokales Paket enthaelt `mcp-package.json`:
+
+```json
+{
+  "id": "example-mcp",
+  "version": "1.0.0",
+  "driver": "process",
+  "command": ["bin/example-mcp"],
+  "tools": ["search"]
+}
+```
+
+Lifecycle:
+
+```bash
+woddi-harbor mcp install /path/to/example-mcp
+woddi-harbor mcp create example --package-id example-mcp --version 1.0.0
+woddi-harbor mcp start example
+woddi-harbor mcp upgrade example --version 1.1.0
+woddi-harbor mcp rollback example
+woddi-harbor mcp stop example
+```
+
+Die Registry kennt `http`, `process`, `systemd` und `container`. Direkt lokal
+ausgefuehrt werden derzeit `http` und `process`; `systemd` und `container`
+benoetigen freigegebene Betriebsprofile.
 
 Chat:
 

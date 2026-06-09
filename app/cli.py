@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import getpass
+import secrets
 import shutil
 import sys
 from dataclasses import replace
@@ -15,10 +16,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .auth import hash_password
+from .backup import create_backup, restore_backup
 from .config import (
     HarborUser,
     HarborSettings,
     ModuleConfig,
+    SECRETS_DIR,
     ensure_layout,
     find_module,
     load_modules,
@@ -31,6 +34,7 @@ from .config import (
 )
 from .console import run_console
 from .control import create_app
+from .mcp_lifecycle import create_instance, install_package, lifecycle_overview, restart_instance, rollback_instance, start_instance, stop_instance, upgrade_instance
 from .modules import (
     discover_remote_module,
     execute_module,
@@ -49,6 +53,7 @@ from .modules import (
     validate_module_config,
     validation_errors_by_module,
 )
+from .preflight import production_check
 from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
 from .worker import run_worker
 
@@ -58,10 +63,14 @@ module_app = typer.Typer(no_args_is_help=True)
 llm_app = typer.Typer(no_args_is_help=True)
 service_app = typer.Typer(no_args_is_help=True)
 user_app = typer.Typer(no_args_is_help=True)
+mcp_app = typer.Typer(no_args_is_help=True)
+backup_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
 app.add_typer(service_app, name="service")
 app.add_typer(user_app, name="user")
+app.add_typer(mcp_app, name="mcp")
+app.add_typer(backup_app, name="backup")
 console = Console()
 
 
@@ -130,6 +139,67 @@ def init() -> None:
     console.print(Panel.fit("woddi-harbor initialisiert unter /srv/http/woddi-harbor", title="Ready"))
 
 
+@mcp_app.command("list")
+def mcp_list() -> None:
+    console.print_json(json.dumps(lifecycle_overview(), ensure_ascii=False))
+
+
+@mcp_app.command("install")
+def mcp_install(source: str = typer.Argument(...)) -> None:
+    console.print_json(json.dumps(install_package(source, actor="cli"), ensure_ascii=False))
+
+
+@mcp_app.command("create")
+def mcp_create(
+    instance_id: str = typer.Argument(...),
+    package_id: str = typer.Option(...),
+    version: str = typer.Option(...),
+    config_json: str = typer.Option("{}"),
+) -> None:
+    config = parse_json_payload(config_json)
+    console.print_json(
+        json.dumps(create_instance(instance_id, package_id, version, config, actor="cli"), ensure_ascii=False)
+    )
+
+
+@mcp_app.command("start")
+def mcp_start(instance_id: str) -> None:
+    console.print_json(json.dumps(start_instance(instance_id, actor="cli"), ensure_ascii=False))
+
+
+@mcp_app.command("stop")
+def mcp_stop(instance_id: str) -> None:
+    console.print_json(json.dumps(stop_instance(instance_id, actor="cli"), ensure_ascii=False))
+
+
+@mcp_app.command("restart")
+def mcp_restart(instance_id: str) -> None:
+    console.print_json(json.dumps(restart_instance(instance_id, actor="cli"), ensure_ascii=False))
+
+
+@mcp_app.command("upgrade")
+def mcp_upgrade(instance_id: str, version: str = typer.Option(...)) -> None:
+    console.print_json(json.dumps(upgrade_instance(instance_id, version, actor="cli"), ensure_ascii=False))
+
+
+@mcp_app.command("rollback")
+def mcp_rollback(instance_id: str) -> None:
+    console.print_json(json.dumps(rollback_instance(instance_id, actor="cli"), ensure_ascii=False))
+
+
+@backup_app.command("create")
+def backup_create(label: str = typer.Option("manual")) -> None:
+    console.print(str(create_backup(label)))
+
+
+@backup_app.command("restore")
+def backup_restore(source: str = typer.Argument(...), yes: bool = typer.Option(False, "--yes")) -> None:
+    if not yes:
+        raise typer.BadParameter("Restore ist destruktiv. Bestaetige explizit mit --yes.")
+    safety_backup = restore_backup(source)
+    console.print(f"Restore abgeschlossen. Safety-Backup: {safety_backup}")
+
+
 @app.command()
 def onboard(
     llm_base_url: str = typer.Option("", help="OpenAI-compatible /v1 base URL"),
@@ -163,17 +233,32 @@ def onboard(
 def init_admin(
     username: str = typer.Option("admin"),
     role: str = typer.Option("admin"),
+    generate: bool = typer.Option(False, "--generate", help="Generate a strong bootstrap password"),
 ) -> None:
     """Create the first local admin user."""
     ensure_layout()
     if load_users():
         raise typer.BadParameter("Benutzer existieren bereits. Nutze `woddi-harbor user add`.")
-    password = getpass.getpass("Password: ")
-    password_confirm = getpass.getpass("Confirm Password: ")
-    if password != password_confirm:
-        raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+    if generate:
+        password = secrets.token_urlsafe(32)
+    else:
+        password = getpass.getpass("Password: ")
+        password_confirm = getpass.getpass("Confirm Password: ")
+        if password != password_confirm:
+            raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
     save_users([HarborUser(username=username, password_hash=hash_password(password), role=role, enabled=True)])
-    console.print(Panel.fit(f"Initialer Benutzer angelegt: {username}", title="Auth"))
+    if generate:
+        password_path = SECRETS_DIR / "bootstrap-admin-password"
+        password_path.write_text(password + "\n", encoding="utf-8")
+        password_path.chmod(0o600)
+        console.print(
+            Panel.fit(
+                f"Initialer Benutzer angelegt: {username}\nBootstrap-Passwort: {password_path}",
+                title="Auth",
+            )
+        )
+    else:
+        console.print(Panel.fit(f"Initialer Benutzer angelegt: {username}", title="Auth"))
 
 
 @app.command("check-prerequisites")
@@ -190,6 +275,15 @@ def check_prerequisites() -> None:
     _check("git", shutil.which("git") is not None, shutil.which("git") or "git missing")
     _check("systemctl", shutil.which("systemctl") is not None, shutil.which("systemctl") or "optional")
     _check("layout", True, "config/, data/, logs/ are created by `woddi-harbor init`")
+
+
+@app.command("production-check")
+def production_check_command() -> None:
+    """Run the production readiness gate."""
+    result = production_check()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result["ok"]:
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -226,8 +320,13 @@ def tui() -> None:
 def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
     """Run the Harbor control API."""
     settings = load_settings()
-    api: FastAPI = create_app()
-    uvicorn.run(api, host=host or settings.host, port=port or settings.port)
+    uvicorn.run(
+        "app.control:create_app",
+        factory=True,
+        host=host or settings.host,
+        port=port or settings.port,
+        workers=settings.api_workers,
+    )
 
 
 @app.command()
@@ -567,6 +666,8 @@ def module_set(
         updated.base_url = base_url.strip()
     if path:
         updated.path = path.strip()
+        if len(updated.sources) == 1:
+            updated.sources[0].path = updated.path
     if host:
         updated.host = host.strip()
     if port >= 0:
@@ -770,6 +871,45 @@ def user_set_role(username: str, role: str) -> None:
         raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
     save_users(users)
     console.print(Panel.fit(f"Rolle gesetzt: {username} -> {role}", title="User"))
+
+
+@user_app.command("passwd")
+def user_password(username: str) -> None:
+    """Change a local user's password."""
+    users = load_users()
+    user = next((item for item in users if item.username == username), None)
+    if user is None:
+        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+    password = getpass.getpass("New password: ")
+    password_confirm = getpass.getpass("Confirm password: ")
+    if password != password_confirm:
+        raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+    user.password_hash = hash_password(password)
+    save_users(users)
+    bootstrap_path = SECRETS_DIR / "bootstrap-admin-password"
+    bootstrap_path.unlink(missing_ok=True)
+    console.print(Panel.fit(f"Passwort aktualisiert: {username}", title="User"))
+
+
+@user_app.command("set-permissions")
+def user_set_permissions(
+    username: str,
+    modules: str = typer.Option("*", help="Kommagetrennte Modul-IDs oder *"),
+    tools: str = typer.Option("*", help="Kommagetrennte Tool-Namen oder *"),
+) -> None:
+    """Set per-user module and tool allowlists."""
+    users = load_users()
+    changed = False
+    for user in users:
+        if user.username == username:
+            user.allowed_modules = [item.strip() for item in modules.split(",") if item.strip()]
+            user.allowed_tools = [item.strip() for item in tools.split(",") if item.strip()]
+            changed = True
+            break
+    if not changed:
+        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+    save_users(users)
+    console.print(Panel.fit(f"Berechtigungen aktualisiert: {username}", title="User"))
 
 
 @user_app.command("disable")

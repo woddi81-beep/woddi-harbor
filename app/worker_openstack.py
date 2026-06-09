@@ -8,6 +8,7 @@ import uvicorn
 
 from .config import find_module
 from .mcp.openstack import create_app
+from .worker_security import install_worker_auth
 
 
 def _openstack_credentials() -> dict[str, str]:
@@ -40,7 +41,7 @@ def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
-    return create_app(_openstack_credentials())
+    return install_worker_auth(create_app(_openstack_credentials()))
 
 
 def _install_signal_handlers(server: uvicorn.Server) -> dict[int, signal.Handlers]:

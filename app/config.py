@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
+import tempfile
 from dataclasses import asdict, dataclass, field
+from contextlib import contextmanager
+import fcntl
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +21,9 @@ DATA_DIR = BASE_DIR / "data"
 LOG_DIR = DATA_DIR / "logs"
 RUNTIME_DIR = DATA_DIR / "runtime"
 PID_DIR = RUNTIME_DIR / "pids"
+SECRETS_DIR = DATA_DIR / "secrets"
+INTERNAL_TOKEN_PATH = SECRETS_DIR / "worker.token"
+INTERNAL_ENV_PATH = SECRETS_DIR / "worker.env"
 
 
 @dataclass
@@ -34,6 +41,7 @@ class HarborSettings:
     name: str = "Harbor"
     host: str = "127.0.0.1"
     port: int = 9680
+    api_workers: int = 4
     system_prompt_path: str = "config/system_prompt.txt"
     onboarding_complete: bool = False
     llm: LlmSettings = field(default_factory=LlmSettings)
@@ -110,11 +118,14 @@ class HarborUser:
     password_hash: str
     role: UserRole = "viewer"
     enabled: bool = True
+    allowed_modules: list[str] = field(default_factory=lambda: ["*"])
+    allowed_tools: list[str] = field(default_factory=lambda: ["*"])
 
 
 def ensure_layout() -> None:
-    for directory in (CONFIG_DIR, DATA_DIR, LOG_DIR, RUNTIME_DIR, PID_DIR):
+    for directory in (CONFIG_DIR, DATA_DIR, LOG_DIR, RUNTIME_DIR, PID_DIR, SECRETS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
+    SECRETS_DIR.chmod(0o700)
 
     harbor_file = CONFIG_DIR / "harbor.json"
     modules_file = CONFIG_DIR / "modules.json"
@@ -140,14 +151,75 @@ def ensure_layout() -> None:
         services_file.write_text('{\n  "profiles": []\n}\n', encoding="utf-8")
     if not users_file.exists():
         users_file.write_text('{\n  "users": []\n}\n', encoding="utf-8")
+    users_file.chmod(0o600)
+    internal_worker_token()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    with _locked_path(path, exclusive=False):
+        return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    with _locked_path(path, exclusive=True):
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary_path.chmod(0o600 if path.name == "users.json" else 0o640)
+            os.replace(temporary_path, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    try:
+        from .state import snapshot_config
+
+        snapshot_config(path.name, payload)
+    except ImportError:
+        pass
+
+
+@contextmanager
+def _locked_path(path: Path, *, exclusive: bool):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def internal_worker_token() -> str:
+    configured = os.getenv("HARBOR_INTERNAL_WORKER_TOKEN", "").strip()
+    if configured:
+        return configured
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    SECRETS_DIR.chmod(0o700)
+    with _locked_path(INTERNAL_TOKEN_PATH, exclusive=True):
+        if INTERNAL_TOKEN_PATH.exists():
+            token = INTERNAL_TOKEN_PATH.read_text(encoding="utf-8").strip()
+            if token:
+                INTERNAL_TOKEN_PATH.chmod(0o600)
+                return token
+        token = secrets.token_urlsafe(48)
+        INTERNAL_TOKEN_PATH.write_text(token + "\n", encoding="utf-8")
+        INTERNAL_TOKEN_PATH.chmod(0o600)
+        return token
+
+
+def internal_worker_env_file() -> Path:
+    token = internal_worker_token()
+    content = f"HARBOR_INTERNAL_WORKER_TOKEN={token}\n"
+    if not INTERNAL_ENV_PATH.exists() or INTERNAL_ENV_PATH.read_text(encoding="utf-8") != content:
+        INTERNAL_ENV_PATH.write_text(content, encoding="utf-8")
+    INTERNAL_ENV_PATH.chmod(0o600)
+    return INTERNAL_ENV_PATH
 
 
 def resolve_path(raw_path: str, *, base_dir: Path | None = None) -> Path:
@@ -187,6 +259,7 @@ def load_settings() -> HarborSettings:
         name=str(payload.get("name", "Harbor")),
         host=str(payload.get("host", "127.0.0.1")),
         port=int(payload.get("port", 9680)),
+        api_workers=max(1, int(payload.get("api_workers", 4))),
         system_prompt_path=str(payload.get("system_prompt_path", "config/system_prompt.txt")),
         onboarding_complete=bool(payload.get("onboarding_complete", False)),
         llm=llm,
@@ -315,7 +388,8 @@ def find_service_profile(profile_id: str) -> ServiceProfile | None:
 
 def load_users() -> list[HarborUser]:
     ensure_layout()
-    payload = _load_json(CONFIG_DIR / "users.json")
+    local_path = CONFIG_DIR / "users.local.json"
+    payload = _load_json(local_path if local_path.exists() else CONFIG_DIR / "users.json")
     users: list[HarborUser] = []
     for raw in payload.get("users", []):
         users.append(
@@ -324,6 +398,8 @@ def load_users() -> list[HarborUser]:
                 password_hash=str(raw["password_hash"]),
                 role=str(raw.get("role", "viewer")),
                 enabled=bool(raw.get("enabled", True)),
+                allowed_modules=[str(item) for item in raw.get("allowed_modules", ["*"])],
+                allowed_tools=[str(item) for item in raw.get("allowed_tools", ["*"])],
             )
         )
     return users
@@ -331,7 +407,9 @@ def load_users() -> list[HarborUser]:
 
 def save_users(users: list[HarborUser]) -> None:
     ensure_layout()
-    _write_json(CONFIG_DIR / "users.json", {"users": [asdict(user) for user in users]})
+    path = CONFIG_DIR / "users.local.json"
+    _write_json(path, {"users": [asdict(user) for user in users]})
+    path.chmod(0o600)
 
 
 def find_user(username: str) -> HarborUser | None:

@@ -8,6 +8,7 @@ import uvicorn
 
 from .config import find_module
 from .modules import worker_execute, worker_health
+from .worker_security import install_worker_auth
 
 
 class ExecuteRequest(BaseModel):
@@ -30,7 +31,7 @@ def create_worker_app(module_id: str) -> FastAPI:
     def execute(body: ExecuteRequest) -> dict:
         return worker_execute(module, body.action.strip(), body.payload)
 
-    return api
+    return install_worker_auth(api)
 
 
 def run_worker(module_id: str) -> None:

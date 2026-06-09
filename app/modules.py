@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import shutil
 import signal
@@ -13,6 +14,7 @@ from dataclasses import asdict
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
+from contextlib import contextmanager
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -25,6 +27,7 @@ from .config import (
     RUNTIME_DIR,
     ModuleConfig,
     find_module,
+    internal_worker_token,
     load_modules,
     module_secret,
     module_sources,
@@ -37,6 +40,7 @@ MCP_PROTOCOL_VERSION = "2024-11-05"
 QUERY_CACHE_TTL_SECONDS = 45.0
 PERSISTENT_QUERY_CACHE_TTL_SECONDS = 600.0
 WARMUP_INTERVAL_SECONDS = 20.0
+MODULE_MUTATION_LOCK_PATH = RUNTIME_DIR / "locks" / "modules.lock"
 
 
 _QUERY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -147,6 +151,45 @@ def _auth_headers(module: ModuleConfig, *, force_auth: bool = False) -> dict[str
     return headers
 
 
+def _local_worker_headers() -> dict[str, str]:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {internal_worker_token()}",
+    }
+
+
+def _redact_mapping(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = key.lower()
+            if any(marker in normalized for marker in ("password", "secret", "token", "api_key", "credential")):
+                redacted[key] = "***" if item else ""
+            else:
+                redacted[key] = _redact_mapping(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_mapping(item) for item in value]
+    return value
+
+
+def _inline_secret_paths(value: Any, prefix: str = "") -> list[str]:
+    found: list[str] = []
+    if not isinstance(value, dict):
+        return found
+    for key, item in value.items():
+        path = f"{prefix}.{key}" if prefix else key
+        normalized = key.lower()
+        if normalized.endswith("_env"):
+            continue
+        if any(marker in normalized for marker in ("password", "secret", "token", "api_key", "credential")):
+            if isinstance(item, str) and item.strip():
+                found.append(path)
+        elif isinstance(item, dict):
+            found.extend(_inline_secret_paths(item, path))
+    return found
+
+
 def _runtime_defaults(module_id: str) -> dict[str, Any]:
     return {
         "module_id": module_id,
@@ -242,6 +285,17 @@ def _worker_python_executable() -> str:
     raise RuntimeError("Kein Python-Interpreter gefunden. Erwarte sys.executable oder python3 im PATH.")
 
 
+def module_worker_command(module: ModuleConfig) -> list[str]:
+    python_executable = _worker_python_executable()
+    if module.type == "netbox_mcp":
+        return [python_executable, "-m", "app.worker_netbox", module.id, str(module.port)]
+    if module.type == "openstack_mcp":
+        return [python_executable, "-m", "app.worker_openstack", module.id, str(module.port)]
+    if module.type == "sap_docs_mcp":
+        return [python_executable, "-m", "app.worker_sap_docs", module.id, str(module.port)]
+    return [python_executable, "-m", "app.worker", module.id]
+
+
 def _append_module_log(module_id: str, message: str) -> None:
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     with module_log_path(module_id).open("a", encoding="utf-8", buffering=1) as handle:
@@ -280,6 +334,7 @@ def _module_health_reachable(module: ModuleConfig, *, timeout: float = 1.0) -> b
                 if ok:
                     execute_response = client.post(
                         f"{module_url(module)}/execute",
+                        headers=_local_worker_headers(),
                         json={"action": "health", "payload": {}},
                     )
                     ok = execute_response.status_code == 200
@@ -352,40 +407,14 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
     log_path = module_log_path(module.id)
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    command = [
-        python_executable,
-        "-m",
-        "app.worker",
-        module.id,
-    ]
+    env["HARBOR_INTERNAL_WORKER_TOKEN"] = internal_worker_token()
+    command = module_worker_command(module)
     if module.type == "netbox_mcp":
         netbox_url, netbox_token = _netbox_settings(module)
         env["NETBOX_URL"] = netbox_url
         env["NETBOX_TOKEN"] = netbox_token
-        command = [
-            python_executable,
-            "-m",
-            "app.worker_netbox",
-            module.id,
-            str(module.port),
-        ]
     if module.type == "openstack_mcp":
         env.update({key: value for key, value in _openstack_settings(module).items() if value})
-        command = [
-            python_executable,
-            "-m",
-            "app.worker_openstack",
-            module.id,
-            str(module.port),
-        ]
-    if module.type == "sap_docs_mcp":
-        command = [
-            python_executable,
-            "-m",
-            "app.worker_sap_docs",
-            module.id,
-            str(module.port),
-        ]
     _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         return subprocess.Popen(
@@ -430,6 +459,14 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
         errors.append(f"Ungueltiger Transport: {module.transport}")
     if module.remote_protocol not in {"auto", "harbor_execute", "mcp"}:
         errors.append(f"Ungueltiges Remote-Protokoll: {module.remote_protocol}")
+    if module.api_key.strip():
+        errors.append("Inline API-Key ist nicht erlaubt; nutze api_key_env.")
+    inline_secret_paths = _inline_secret_paths(module.settings)
+    if inline_secret_paths:
+        errors.append(
+            "Inline-Secrets sind nicht erlaubt; nutze ENV-Referenzen: "
+            + ", ".join(sorted(inline_secret_paths))
+        )
     if module.type in {"docs", "maildir"}:
         if module.transport != "local":
             errors.append(f"{module.type} muss lokal sein.")
@@ -525,6 +562,17 @@ def validation_errors_by_module(modules: list[ModuleConfig] | None = None) -> di
     return errors
 
 
+@contextmanager
+def _module_mutation_lock():
+    MODULE_MUTATION_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with MODULE_MUTATION_LOCK_PATH.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def validate_or_raise(module: ModuleConfig) -> None:
     errors = validate_module_config(module)
     if errors:
@@ -532,32 +580,35 @@ def validate_or_raise(module: ModuleConfig) -> None:
 
 
 def upsert_module(module: ModuleConfig) -> ModuleConfig:
-    modules = load_modules()
-    replaced = False
-    for index, existing in enumerate(modules):
-        if existing.id == module.id:
-            modules[index] = module
-            replaced = True
-            break
-    if not replaced:
-        modules.append(module)
-    errors = validation_errors_by_module(modules).get(module.id, [])
-    if errors:
-        raise ValueError(" ".join(errors))
-    from .config import save_modules
+    with _module_mutation_lock():
+        modules = load_modules()
+        replaced = False
+        for index, existing in enumerate(modules):
+            if existing.id == module.id:
+                modules[index] = module
+                replaced = True
+                break
+        if not replaced:
+            modules.append(module)
+        errors = validation_errors_by_module(modules).get(module.id, [])
+        if errors:
+            raise ValueError(" ".join(errors))
+        from .config import save_modules
 
-    save_modules(modules)
+        save_modules(modules)
     return module
 
 
 def remove_module(module_id: str) -> bool:
-    modules = [module for module in load_modules() if module.id != module_id]
-    if len(modules) == len(load_modules()):
-        return False
-    from .config import save_modules
+    with _module_mutation_lock():
+        current_modules = load_modules()
+        modules = [module for module in current_modules if module.id != module_id]
+        if len(modules) == len(current_modules):
+            return False
+        from .config import save_modules
 
-    save_modules(modules)
-    return True
+        save_modules(modules)
+        return True
 
 
 def _pid_alive(pid: int) -> bool:
@@ -627,9 +678,9 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         "notes": module.notes,
         "tool_names": module.tool_names,
         "test_action": module.test_action,
-        "test_payload": module.test_payload,
+        "test_payload": _redact_mapping(module.test_payload),
         "test_expect_contains": module.test_expect_contains,
-        "settings": module.settings,
+        "settings": _redact_mapping(module.settings),
         "health": health,
         "index_path": str(module_index_path(module.id)) if module.type in {"docs", "maildir"} else "",
         "index": {
@@ -874,7 +925,7 @@ def _mcp_request(
     *,
     request_id: int | None,
 ) -> tuple[dict[str, Any], str | None]:
-    headers = _auth_headers(module)
+    headers = _local_worker_headers() if _is_local_mcp_module(module) else _auth_headers(module)
     if session_id:
         headers["mcp-session-id"] = session_id
     body: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -1231,6 +1282,7 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
     with httpx.Client(timeout=module.timeout_seconds) as client:
         response = client.post(
             f"{module_url(module)}/execute",
+            headers=_local_worker_headers(),
             json={"action": action, "payload": payload},
         )
         response.raise_for_status()

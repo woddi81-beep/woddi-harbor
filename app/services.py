@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 from pathlib import Path
 
 import httpx
 
-from .config import BASE_DIR, CONFIG_DIR, ModuleConfig, ServiceProfile, find_module, find_service_profile, load_settings, save_service_profiles, sync_service_profiles
-from .modules import health_check_module, module_url
+from .config import BASE_DIR, CONFIG_DIR, ModuleConfig, ServiceProfile, find_module, find_service_profile, internal_worker_env_file, load_settings, save_service_profiles, sync_service_profiles
+from .modules import health_check_module, module_url, module_worker_command
 
 
 SYSTEMD_DIR = BASE_DIR / "systemd"
@@ -71,6 +72,8 @@ def install_service(profile_id: str, mode: str) -> dict:
                 "__HARBOR_WORKDIR__": str(BASE_DIR),
                 "__HARBOR_MODULE_ID__": module.id,
                 "__HARBOR_MODULE_NAME__": module.display_name(),
+                "__HARBOR_MODULE_COMMAND__": shlex.join(module_worker_command(module)),
+                "__HARBOR_WORKER_ENV_FILE__": str(internal_worker_env_file()),
             },
         )
     target_path.write_text(rendered, encoding="utf-8")

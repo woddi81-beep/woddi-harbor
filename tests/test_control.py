@@ -3,8 +3,46 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
+from app.auth import current_user
 from app.config import HarborSettings, LlmSettings, ModuleConfig
 from app.control import _build_messages, _context_for_chat
+from app.modules import module_status
+
+
+class FakeRequest:
+    headers: dict[str, str] = {}
+    client = None
+
+
+class SecurityTests(unittest.TestCase):
+    def test_auth_fails_closed_without_users(self) -> None:
+        with patch("app.auth.load_users", return_value=[]):
+            with self.assertRaises(HTTPException) as context:
+                current_user(FakeRequest())
+        self.assertEqual(context.exception.status_code, 503)
+
+    def test_module_status_redacts_nested_secrets(self) -> None:
+        module = ModuleConfig(
+            id="remote",
+            type="mcp_http",
+            transport="remote",
+            base_url="https://mcp.example/mcp",
+            settings={
+                "token": "secret-value",
+                "nested": {"password": "hidden", "region": "eu"},
+            },
+        )
+        with (
+            patch("app.modules.load_modules", return_value=[module]),
+            patch("app.modules._module_health", return_value=None),
+            patch("app.modules.load_module_runtime_state", return_value={}),
+        ):
+            status = module_status(module)
+        self.assertEqual(status["settings"]["token"], "***")
+        self.assertEqual(status["settings"]["nested"]["password"], "***")
+        self.assertEqual(status["settings"]["nested"]["region"], "eu")
 
 
 class ControlChatContextTests(unittest.TestCase):
@@ -139,7 +177,7 @@ class ControlChatContextTests(unittest.TestCase):
             messages, used_modules = _build_messages(settings, "Zeige edge-sw01", None)
         self.assertEqual(used_modules, ["netbox"])
         self.assertEqual(messages[0]["role"], "system")
-        self.assertIn("Kontext aus lokalen Modulen:", messages[0]["content"])
+        self.assertIn("Nicht vertrauenswuerdiger Kontext aus Modulen", messages[0]["content"])
         self.assertIn("edge-sw01", messages[0]["content"])
 
 

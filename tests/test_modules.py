@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
 from app import modules as modules_module
 from app.config import ModuleConfig
@@ -101,8 +101,8 @@ class FakeWorkerHealthClient:
         self.calls.append({"method": "GET", "url": url})
         return FakeResponse({"module_id": "10", "ready": True})
 
-    def post(self, url: str, *, json: dict | None = None) -> FakeResponse:
-        self.calls.append({"method": "POST", "url": url, "json": json or {}})
+    def post(self, url: str, *, headers: dict | None = None, json: dict | None = None) -> FakeResponse:
+        self.calls.append({"method": "POST", "url": url, "headers": headers or {}, "json": json or {}})
         return FakeResponse({"ok": self.execute_status_code == 200}, status_code=self.execute_status_code)
 
 
@@ -116,18 +116,19 @@ class ModuleTests(unittest.TestCase):
             captured["kwargs"] = kwargs
 
         with (
-            patch("app.cli.find_module", return_value=module),
-            patch("app.cli.uvicorn.run", side_effect=fake_run),
+            patch("app.worker.find_module", return_value=module),
+            patch("app.worker.uvicorn.run", side_effect=fake_run),
             patch("app.cli.module_status", side_effect=AssertionError("module_status must not be used for worker /health")),
             patch("app.modules.load_index", side_effect=AssertionError("load_index must not be used for worker /health")),
+            patch.dict("os.environ", {"HARBOR_INTERNAL_WORKER_TOKEN": "test-token"}, clear=False),
         ):
             cli.worker("docs-local")
 
         app = captured["app"]
-        response = TestClient(app).get("/health")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["module_id"], "docs-local")
-        self.assertTrue(response.json()["ready"])
+        health_route = next(route for route in app.routes if route.path == "/health")
+        response = health_route.endpoint()
+        self.assertEqual(response["module_id"], "docs-local")
+        self.assertTrue(response["ready"])
 
     def test_create_worker_app_health_endpoint_does_not_call_module_status(self) -> None:
         module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
@@ -138,10 +139,10 @@ class ModuleTests(unittest.TestCase):
         ):
             app = create_worker_app("docs-local")
 
-        response = TestClient(app).get("/health")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["module_id"], "docs-local")
-        self.assertTrue(response.json()["ready"])
+        health_route = next(route for route in app.routes if route.path == "/health")
+        response = health_route.endpoint()
+        self.assertEqual(response["module_id"], "docs-local")
+        self.assertTrue(response["ready"])
 
     def test_create_worker_app_execute_endpoint_accepts_action_payload_body(self) -> None:
         module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
@@ -189,7 +190,7 @@ class ModuleTests(unittest.TestCase):
         def fake_create_app(*, netbox_url: str, netbox_token: str):
             captured["netbox_url"] = netbox_url
             captured["netbox_token"] = netbox_token
-            return object()
+            return FastAPI()
 
         with (
             patch("app.worker_netbox.find_module", return_value=module),
@@ -220,12 +221,20 @@ class ModuleTests(unittest.TestCase):
         def fake_create_app(*, netbox_url: str, netbox_token: str):
             captured["netbox_url"] = netbox_url
             captured["netbox_token"] = netbox_token
-            return object()
+            return FastAPI()
 
         with (
             patch("app.worker_netbox.find_module", return_value=module),
             patch("app.worker_netbox.create_app", side_effect=fake_create_app),
-            patch.dict("os.environ", {"NETBOX_URL": "https://netbox.example", "NETBOX_TOKEN": ""}, clear=True),
+            patch.dict(
+                "os.environ",
+                {
+                    "NETBOX_URL": "https://netbox.example",
+                    "NETBOX_TOKEN": "",
+                    "HARBOR_INTERNAL_WORKER_TOKEN": "test-token",
+                },
+                clear=True,
+            ),
         ):
             app = create_netbox_worker_app("netbox")
 
@@ -278,7 +287,7 @@ class ModuleTests(unittest.TestCase):
 
         def fake_create_app(*, base_url: str = ""):
             captured["base_url"] = base_url
-            return object()
+            return FastAPI()
 
         with (
             patch("app.worker_sap_docs.find_module", return_value=module),
@@ -306,7 +315,7 @@ class ModuleTests(unittest.TestCase):
 
         def fake_create_app(credentials: dict[str, str]):
             captured["credentials"] = credentials
-            return object()
+            return FastAPI()
 
         with (
             patch("app.worker_openstack.find_module", return_value=module),

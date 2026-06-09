@@ -96,7 +96,7 @@ class CachedIndexEntry:
 
 @dataclass
 class PreparedSearchIndex:
-    doc_tokens: list[list[str]]
+    term_counts: list[dict[str, int]]
     document_frequency: dict[str, int]
     cached_at: float
 
@@ -124,12 +124,16 @@ def _snippet(text: str, query_terms: list[str], limit: int = 260) -> str:
 
 
 def _prepare_search_documents(documents: list[IndexedDocument]) -> PreparedSearchIndex:
-    doc_tokens = [tokenize(document.title + "\n" + document.text) for document in documents]
+    term_counts: list[dict[str, int]] = []
     document_frequency: dict[str, int] = {}
-    for tokens in doc_tokens:
-        for token in set(tokens):
+    for document in documents:
+        counts: dict[str, int] = {}
+        for token in tokenize(document.title + "\n" + document.text):
+            counts[token] = counts.get(token, 0) + 1
+        term_counts.append(counts)
+        for token in counts:
             document_frequency[token] = document_frequency.get(token, 0) + 1
-    return PreparedSearchIndex(doc_tokens=doc_tokens, document_frequency=document_frequency, cached_at=time.monotonic())
+    return PreparedSearchIndex(term_counts=term_counts, document_frequency=document_frequency, cached_at=time.monotonic())
 
 
 def score_documents(documents: list[IndexedDocument], query: str, top_k: int, prepared: PreparedSearchIndex | None = None) -> list[SearchHit]:
@@ -137,16 +141,13 @@ def score_documents(documents: list[IndexedDocument], query: str, top_k: int, pr
     if not query_terms:
         return []
     prepared_index = prepared or _prepare_search_documents(documents)
-    doc_tokens = prepared_index.doc_tokens
+    term_counts = prepared_index.term_counts
     document_frequency = prepared_index.document_frequency
     hits: list[SearchHit] = []
-    corpus_size = max(len(doc_tokens), 1)
-    for document, tokens in zip(documents, doc_tokens, strict=False):
-        if not tokens:
+    corpus_size = max(len(term_counts), 1)
+    for document, token_counts in zip(documents, term_counts, strict=False):
+        if not token_counts:
             continue
-        token_counts: dict[str, int] = {}
-        for token in tokens:
-            token_counts[token] = token_counts.get(token, 0) + 1
         score = 0.0
         for term in query_terms:
             tf = token_counts.get(term, 0)

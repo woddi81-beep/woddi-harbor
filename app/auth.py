@@ -4,6 +4,9 @@ import base64
 import hashlib
 import hmac
 import os
+import threading
+import time
+from collections import defaultdict, deque
 from typing import Literal
 
 from fastapi import Depends, HTTPException, Request, status
@@ -16,6 +19,10 @@ ROLE_LEVEL: dict[UserRole, int] = {
     "operator": 2,
     "admin": 3,
 }
+_AUTH_FAILURES: dict[str, deque[float]] = defaultdict(deque)
+_AUTH_LOCK = threading.Lock()
+AUTH_WINDOW_SECONDS = 300.0
+AUTH_MAX_FAILURES = 8
 
 
 def hash_password(password: str, *, salt: bytes | None = None, iterations: int = 240_000) -> str:
@@ -67,15 +74,35 @@ def authenticate_basic_header(header_value: str | None) -> HarborUser:
 
 def current_user(request: Request) -> HarborUser | None:
     if not any_users_exist():
-        return None
-    return authenticate_basic_header(request.headers.get("Authorization"))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Harbor ist gesperrt, bis ein initialer Admin per CLI angelegt wurde.",
+        )
+    client_key = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _AUTH_LOCK:
+        failures = _AUTH_FAILURES[client_key]
+        while failures and now - failures[0] > AUTH_WINDOW_SECONDS:
+            failures.popleft()
+        if len(failures) >= AUTH_MAX_FAILURES:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Zu viele fehlgeschlagene Login-Versuche.",
+            )
+    try:
+        user = authenticate_basic_header(request.headers.get("Authorization"))
+    except HTTPException:
+        with _AUTH_LOCK:
+            _AUTH_FAILURES[client_key].append(now)
+        raise
+    with _AUTH_LOCK:
+        _AUTH_FAILURES.pop(client_key, None)
+    return user
 
 
 def require_role(min_role: UserRole):
-    def dependency(request: Request) -> HarborUser | None:
+    def dependency(request: Request) -> HarborUser:
         user = current_user(request)
-        if user is None:
-            return None
         if ROLE_LEVEL[user.role] < ROLE_LEVEL[min_role]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rolle nicht ausreichend.")
         return user

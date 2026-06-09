@@ -8,6 +8,7 @@ import uvicorn
 
 from .config import find_module
 from .mcp.sap_docs import create_sap_docs_app
+from .worker_security import install_worker_auth
 
 
 def create_worker_app(module_id: str) -> FastAPI:
@@ -16,8 +17,8 @@ def create_worker_app(module_id: str) -> FastAPI:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
     docs_url = str(module.settings.get("docs_url", "")).strip() or str(module.settings.get("base_url", "")).strip()
     if docs_url:
-        return create_sap_docs_app(base_url=docs_url)
-    return create_sap_docs_app()
+        return install_worker_auth(create_sap_docs_app(base_url=docs_url))
+    return install_worker_auth(create_sap_docs_app())
 
 
 def _install_signal_handlers(server: uvicorn.Server) -> dict[int, signal.Handlers]:
