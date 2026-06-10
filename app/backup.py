@@ -11,8 +11,21 @@ from pathlib import Path
 from .config import CONFIG_DIR, DATA_DIR
 from .state import DATABASE_PATH, initialize_database, record_audit
 
-
 BACKUP_DIR = DATA_DIR / "backups"
+
+
+def list_backups() -> list[dict[str, object]]:
+    if not BACKUP_DIR.exists():
+        return []
+    return [
+        {
+            "name": path.name,
+            "path": str(path),
+            "bytes": path.stat().st_size,
+            "modified_at": path.stat().st_mtime,
+        }
+        for path in sorted(BACKUP_DIR.glob("harbor-*.tar.gz"), key=lambda item: item.stat().st_mtime, reverse=True)
+    ]
 
 
 def create_backup(label: str = "manual") -> Path:

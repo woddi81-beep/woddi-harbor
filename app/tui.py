@@ -15,12 +15,11 @@ from textual.widgets import Button, Footer, Header, Input, Label, ListItem, List
 from .config import (
     ModuleConfig,
     load_modules,
-    load_service_profiles,
     load_settings,
     save_settings,
     save_system_prompt,
-    system_prompt,
     sync_service_profiles,
+    system_prompt,
 )
 from .modules import (
     execute_module,
@@ -36,7 +35,7 @@ from .modules import (
     upsert_module,
     validate_module_config,
 )
-from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
+from .services import health_check_service, install_and_optionally_enable_service, service_action
 
 
 class ModuleItem(ListItem):

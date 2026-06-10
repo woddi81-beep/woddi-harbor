@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Woddi Harbor Administration</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <h1 class="brand">Harbor Admin</h1>
+      <p><a href="/chat">Zum Chat</a></p>
+      <nav id="nav" class="nav"></nav>
+    </aside>
+    <main class="main">
+      <div class="topbar"><h2 id="title">Übersicht</h2><button id="refresh">Aktualisieren</button></div>
+      <div id="notice" class="notice"></div>
+      <section id="content" class="stack"></section>
+    </main>
+  </div>
+  <dialog id="user-dialog">
+    <form id="user-form" class="stack">
+      <h3>Benutzer</h3>
+      <label>Name<input name="username" required></label>
+      <label>Passwort<input name="password" type="password" placeholder="Bei Änderung optional"></label>
+      <label>Rolle<select name="role"><option>viewer</option><option>operator</option><option>admin</option></select></label>
+      <label><span>Aktiv</span><input name="enabled" type="checkbox" checked></label>
+      <label>Module, kommasepariert<input name="allowed_modules" value="*"></label>
+      <label>Tools, kommasepariert<input name="allowed_tools" value="*"></label>
+      <div class="row"><button class="primary">Speichern</button><button type="button" id="user-cancel">Abbrechen</button></div>
+    </form>
+  </dialog>
+  <script src="/static/admin.js" defer></script>
+</body>
+</html>

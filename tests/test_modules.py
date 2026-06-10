@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 
+from app import cli
 from app import modules as modules_module
 from app.config import ModuleConfig
-from app import cli
 from app.mcp.netbox import NetBoxBackend
 from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module, worker_execute
 from app.worker import ExecuteRequest, create_worker_app
@@ -107,6 +107,11 @@ class FakeWorkerHealthClient:
 
 
 class ModuleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.worker_token = patch.dict("os.environ", {"HARBOR_INTERNAL_WORKER_TOKEN": "test-token"}, clear=False)
+        self.worker_token.start()
+        self.addCleanup(self.worker_token.stop)
+
     def test_worker_health_endpoint_does_not_call_module_status(self) -> None:
         module = ModuleConfig(id="docs-local", type="docs", transport="local", path="/tmp/docs", port=41001)
         captured: dict[str, object] = {}
@@ -119,7 +124,6 @@ class ModuleTests(unittest.TestCase):
             patch("app.worker.find_module", return_value=module),
             patch("app.worker.uvicorn.run", side_effect=fake_run),
             patch("app.cli.module_status", side_effect=AssertionError("module_status must not be used for worker /health")),
-            patch("app.modules.load_index", side_effect=AssertionError("load_index must not be used for worker /health")),
             patch.dict("os.environ", {"HARBOR_INTERNAL_WORKER_TOKEN": "test-token"}, clear=False),
         ):
             cli.worker("docs-local")
@@ -135,7 +139,6 @@ class ModuleTests(unittest.TestCase):
         with (
             patch("app.worker.find_module", return_value=module),
             patch("app.cli.module_status", side_effect=AssertionError("module_status must not be used for worker /health")),
-            patch("app.modules.load_index", side_effect=AssertionError("load_index must not be used for worker /health")),
         ):
             app = create_worker_app("docs-local")
 

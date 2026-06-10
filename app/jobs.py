@@ -1,31 +1,44 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+import socket
+import time
+from typing import Any
 
-from .state import create_job, update_job
+from .backup import create_backup
+from .modules import execute_module
+from .sources import sync_source
+from .state import claim_next_job, create_job, update_job
 
 
-MAX_JOB_WORKERS = max(2, min(16, (os.cpu_count() or 2) // 2))
-_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_JOB_WORKERS, thread_name_prefix="harbor-job")
+def submit_job(kind: str, target: str, payload: dict[str, Any] | None = None) -> str:
+    return create_job(kind, target, payload or {})
 
 
-def submit_job(
-    kind: str,
-    target: str,
-    payload: dict[str, Any],
-    operation: Callable[[], dict[str, Any]],
-) -> str:
-    job_id = create_job(kind, target, payload)
+def execute_job(job: dict[str, Any]) -> dict[str, Any]:
+    kind = job["kind"]
+    if kind == "module.reindex":
+        return execute_module(job["target"], "reindex", job["payload"])
+    if kind == "source.sync":
+        return sync_source(job["target"])
+    if kind == "backup.create":
+        path = create_backup(str(job["payload"].get("label", "scheduled")))
+        return {"ok": True, "path": str(path)}
+    raise ValueError(f"Unbekannter Job-Typ: {kind}")
 
-    def run() -> None:
-        update_job(job_id, "running")
+
+def run_job_worker(*, once: bool = False, poll_seconds: float = 1.0) -> None:
+    worker_id = f"{socket.gethostname()}:{os.getpid()}"
+    while True:
+        job = claim_next_job(worker_id)
+        if job is None:
+            if once:
+                return
+            time.sleep(max(0.1, poll_seconds))
+            continue
         try:
-            result = operation()
-            update_job(job_id, "completed", result=result)
+            update_job(job["id"], "completed", result=execute_job(job))
         except Exception as exc:
-            update_job(job_id, "failed", error=str(exc))
-
-    _EXECUTOR.submit(run)
-    return job_id
+            update_job(job["id"], "failed", error=str(exc))
+        if once:
+            return

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import getpass
+import json
 import secrets
 import shutil
 import sys
@@ -10,7 +10,6 @@ from typing import Optional
 
 import typer
 import uvicorn
-from fastapi import FastAPI
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -18,23 +17,30 @@ from rich.table import Table
 from .auth import hash_password
 from .backup import create_backup, restore_backup
 from .config import (
-    HarborUser,
-    HarborSettings,
-    ModuleConfig,
     SECRETS_DIR,
+    HarborUser,
+    ModuleConfig,
     ensure_layout,
     find_module,
     load_modules,
-    load_service_profiles,
     load_settings,
     load_users,
-    save_users,
     save_settings,
+    save_users,
     sync_service_profiles,
 )
 from .console import run_console
-from .control import create_app
-from .mcp_lifecycle import create_instance, install_package, lifecycle_overview, restart_instance, rollback_instance, start_instance, stop_instance, upgrade_instance
+from .jobs import run_job_worker
+from .mcp_lifecycle import (
+    create_instance,
+    install_package,
+    lifecycle_overview,
+    restart_instance,
+    rollback_instance,
+    start_instance,
+    stop_instance,
+    upgrade_instance,
+)
 from .modules import (
     discover_remote_module,
     execute_module,
@@ -45,8 +51,8 @@ from .modules import (
     module_test,
     parse_json_payload,
     remove_module,
-    restart_module,
     reserve_port,
+    restart_module,
     start_module,
     stop_module,
     upsert_module,
@@ -54,9 +60,9 @@ from .modules import (
     validation_errors_by_module,
 )
 from .preflight import production_check
-from .services import health_check_service, install_and_optionally_enable_service, install_service, service_action
+from .services import health_check_service, install_and_optionally_enable_service, service_action
+from .sources import source_overview, sync_source
 from .worker import run_worker
-
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 module_app = typer.Typer(no_args_is_help=True)
@@ -65,12 +71,14 @@ service_app = typer.Typer(no_args_is_help=True)
 user_app = typer.Typer(no_args_is_help=True)
 mcp_app = typer.Typer(no_args_is_help=True)
 backup_app = typer.Typer(no_args_is_help=True)
+source_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
 app.add_typer(service_app, name="service")
 app.add_typer(user_app, name="user")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(backup_app, name="backup")
+app.add_typer(source_app, name="source")
 console = Console()
 
 
@@ -198,6 +206,16 @@ def backup_restore(source: str = typer.Argument(...), yes: bool = typer.Option(F
         raise typer.BadParameter("Restore ist destruktiv. Bestaetige explizit mit --yes.")
     safety_backup = restore_backup(source)
     console.print(f"Restore abgeschlossen. Safety-Backup: {safety_backup}")
+
+
+@source_app.command("list")
+def source_list() -> None:
+    console.print_json(json.dumps({"sources": source_overview()}, ensure_ascii=False))
+
+
+@source_app.command("sync")
+def source_sync(source_id: str, reindex: bool = typer.Option(True, "--reindex/--no-reindex")) -> None:
+    console.print_json(json.dumps(sync_source(source_id, reindex=reindex), ensure_ascii=False))
 
 
 @app.command()
@@ -935,6 +953,12 @@ def worker(module_id: str) -> None:
         run_worker(module_id)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command("job-worker")
+def job_worker(once: bool = typer.Option(False, help="Process at most one queued job.")) -> None:
+    """Run the durable background job worker."""
+    run_job_worker(once=once)
 
 
 def main() -> None:

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import secrets
 import tempfile
-from dataclasses import asdict, dataclass, field
 from contextlib import contextmanager
-import fcntl
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
-
 
 ModuleType = Literal["docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"]
 ServiceKind = Literal["harbor", "module"]

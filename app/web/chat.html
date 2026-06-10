@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Woddi Harbor Chat</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <h1 class="brand">Woddi Harbor</h1>
+      <p class="muted">Persistenter, modularer KI-Arbeitsplatz</p>
+      <button id="new-chat" class="primary">Neuer Chat</button>
+      <div id="sessions" class="stack" style="margin-top:1rem"></div>
+      <p><a href="/admin">Administration</a></p>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h2 id="chat-title">Neuer Chat</h2>
+          <div id="module-state" class="meta">Module werden geladen</div>
+        </div>
+        <button id="stop" class="danger hidden">Antwort stoppen</button>
+      </div>
+      <section class="panel">
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <form id="composer" class="composer">
+          <textarea id="prompt" rows="2" maxlength="12000" placeholder="Frage an Harbor..." required></textarea>
+          <button class="primary" type="submit">Senden</button>
+        </form>
+        <div id="notice" class="notice"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/chat.js" defer></script>
+</body>
+</html>

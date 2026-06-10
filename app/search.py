@@ -12,7 +12,6 @@ from email import policy
 from pathlib import Path
 from typing import Literal
 
-
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./:-]{2,}")
 TEXT_EXTENSIONS = {
     ".txt",

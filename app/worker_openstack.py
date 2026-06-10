@@ -3,8 +3,8 @@ from __future__ import annotations
 import signal
 import sys
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 
 from .config import find_module
 from .mcp.openstack import create_app

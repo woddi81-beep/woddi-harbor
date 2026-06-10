@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import CONFIG_DIR, INTERNAL_TOKEN_PATH, load_modules, load_settings, load_users
 from .modules import validation_errors_by_module
+from .sources import source_overview
 from .state import DATABASE_PATH, initialize_database
 
 
@@ -40,6 +41,17 @@ def production_check() -> dict[str, Any]:
     validation = validation_errors_by_module(modules)
     invalid = {module_id: errors for module_id, errors in validation.items() if errors}
     add("modules", not invalid, f"{len(modules)} Module, {len(invalid)} ungueltig: {invalid}")
+    sources = source_overview()
+    unhealthy_sources = [
+        source["id"]
+        for source in sources
+        if source["enabled"] and (not source["exists"] or not (source["quality"] or {}).get("healthy", False))
+    ]
+    add(
+        "sources",
+        not unhealthy_sources,
+        f"{len(sources)} Quellen, ungesund: {unhealthy_sources}",
+    )
     add(
         "public_bind",
         settings.host in {"127.0.0.1", "::1", "localhost"},

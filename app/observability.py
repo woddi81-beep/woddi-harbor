@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import threading
-import time
 from collections import defaultdict
-from typing import Any
-
 
 _LOCK = threading.Lock()
 _REQUESTS: dict[tuple[str, str, int], int] = defaultdict(int)
 _DURATION_SUM: dict[tuple[str, str], float] = defaultdict(float)
+_DURATION_BUCKETS: dict[tuple[str, str, float], int] = defaultdict(int)
+_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
 _IN_FLIGHT = 0
 
 
@@ -25,6 +24,9 @@ def request_finished(method: str, path: str, status_code: int, duration: float) 
         _IN_FLIGHT = max(0, _IN_FLIGHT - 1)
         _REQUESTS[(method, route, status_code)] += 1
         _DURATION_SUM[(method, route)] += duration
+        for boundary in _BUCKETS:
+            if duration <= boundary:
+                _DURATION_BUCKETS[(method, route, boundary)] += 1
 
 
 def _normalize_path(path: str) -> str:
@@ -55,9 +57,29 @@ def prometheus_metrics() -> str:
             )
         lines.extend(
             [
-                "# HELP harbor_http_requests_in_flight Requests currently executing.",
-                "# TYPE harbor_http_requests_in_flight gauge",
-                f"harbor_http_requests_in_flight {_IN_FLIGHT}",
+                "# HELP harbor_http_request_duration_seconds HTTP request duration.",
+                "# TYPE harbor_http_request_duration_seconds histogram",
+            ]
+        )
+        route_counts: dict[tuple[str, str], int] = defaultdict(int)
+        for (method, route, _status), count in _REQUESTS.items():
+            route_counts[(method, route)] += count
+        for (method, route, boundary), count in sorted(_DURATION_BUCKETS.items()):
+            lines.append(
+                f'harbor_http_request_duration_seconds_bucket{{method="{method}",route="{route}",le="{boundary}"}} {count}'
+            )
+        for (method, route), count in sorted(route_counts.items()):
+            lines.append(
+                f'harbor_http_request_duration_seconds_bucket{{method="{method}",route="{route}",le="+Inf"}} {count}'
+            )
+            lines.append(
+                f'harbor_http_request_duration_seconds_count{{method="{method}",route="{route}"}} {count}'
+            )
+        lines.extend(
+            [
+                "# HELP harbor_http_requests_in_progress Requests currently executing.",
+                "# TYPE harbor_http_requests_in_progress gauge",
+                f"harbor_http_requests_in_progress {_IN_FLIGHT}",
             ]
         )
     return "\n".join(lines) + "\n"

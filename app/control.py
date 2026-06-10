@@ -6,22 +6,38 @@ import os
 import re
 import threading
 import time
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .auth import require_role
-from .config import HarborSettings, HarborUser, LOG_DIR, ModuleConfig, ModuleSource, find_module, load_modules, load_settings, load_users, system_prompt
-from .llm import complete_chat, extract_chat_content, stream_chat
+from .auth import hash_password, require_role
+from .backup import list_backups
+from .config import (
+    LOG_DIR,
+    HarborSettings,
+    HarborUser,
+    ModuleConfig,
+    ModuleSource,
+    find_module,
+    load_modules,
+    load_settings,
+    load_users,
+    save_users,
+    system_prompt,
+)
 from .jobs import submit_job
+from .llm import complete_chat, extract_chat_content, stream_chat
 from .mcp_lifecycle import (
     create_instance,
     install_package,
@@ -48,9 +64,19 @@ from .modules import (
     warm_module_runtime_caches,
 )
 from .observability import prometheus_metrics, request_finished, request_started
-from .state import initialize_database
-from .state import append_chat_message, create_chat_session, list_audit_events, list_jobs, load_chat_messages, record_audit
-
+from .services import health_check_service, list_service_profiles, service_action
+from .sources import source_overview
+from .state import (
+    append_chat_message,
+    create_chat_session,
+    delete_chat_session,
+    initialize_database,
+    list_audit_events,
+    list_chat_sessions,
+    list_jobs,
+    load_chat_messages,
+    record_audit,
+)
 
 APP_STARTED_AT = time.time()
 RECENT_ACTIVITY: deque[dict[str, Any]] = deque(maxlen=25)
@@ -111,6 +137,19 @@ class McpInstanceCreateRequest(BaseModel):
     package_id: str = Field(min_length=1, max_length=128)
     version: str = Field(min_length=1, max_length=128)
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class UserUpsertRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(default="", max_length=1024)
+    role: str = "viewer"
+    enabled: bool = True
+    allowed_modules: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+
+
+class BackupCreateRequest(BaseModel):
+    label: str = Field(default="manual", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
 
 
 def _record_activity(kind: str, label: str, detail: str = "") -> None:
@@ -1598,7 +1637,7 @@ def _allowed_modules(user: HarborUser, requested: list[str] | None) -> tuple[lis
         return requested, None
     allowed = set(user.allowed_modules)
     if requested is None:
-        return sorted(allowed)
+        return sorted(allowed), allowed
     denied = sorted(set(requested) - allowed)
     if denied:
         raise HTTPException(status_code=403, detail=f"Module nicht freigegeben: {', '.join(denied)}")
@@ -1650,7 +1689,19 @@ def _request_to_module(body: ModuleUpsertRequest) -> ModuleConfig:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Harbor", version="0.2.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        global _WARMUP_THREAD
+        _WARMUP_STOP.clear()
+        if _WARMUP_THREAD is None or not _WARMUP_THREAD.is_alive():
+            _WARMUP_THREAD = threading.Thread(target=_warmup_loop, daemon=True, name="harbor-warmup")
+            _WARMUP_THREAD.start()
+        yield
+        _WARMUP_STOP.set()
+
+    app = FastAPI(title="Harbor", version="0.2.0", lifespan=lifespan)
+    web_dir = Path(__file__).parent / "web"
+    app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
@@ -1679,30 +1730,17 @@ def create_app() -> FastAPI:
         response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
         return response
 
-    @app.on_event("startup")
-    def startup_warmup() -> None:
-        global _WARMUP_THREAD
-        _WARMUP_STOP.clear()
-        if _WARMUP_THREAD is not None and _WARMUP_THREAD.is_alive():
-            return
-        _WARMUP_THREAD = threading.Thread(target=_warmup_loop, daemon=True, name="harbor-warmup")
-        _WARMUP_THREAD.start()
-
-    @app.on_event("shutdown")
-    def shutdown_warmup() -> None:
-        _WARMUP_STOP.set()
-
     @app.get("/", response_class=RedirectResponse)
     def home() -> RedirectResponse:
         return RedirectResponse(url="/chat")
 
-    @app.get("/chat", response_class=HTMLResponse)
-    def chat_page(_user=require_role("viewer")) -> HTMLResponse:
-        return HTMLResponse(_chat_page_html(load_settings()))
+    @app.get("/chat")
+    def chat_page(_user=require_role("viewer")) -> FileResponse:
+        return FileResponse(web_dir / "chat.html")
 
-    @app.get("/admin", response_class=HTMLResponse)
-    def admin_page(_user=require_role("admin")) -> HTMLResponse:
-        return HTMLResponse(_admin_page_html(load_settings()))
+    @app.get("/admin")
+    def admin_page(_user=require_role("admin")) -> FileResponse:
+        return FileResponse(web_dir / "admin.html")
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -1852,16 +1890,111 @@ def create_app() -> FastAPI:
     def jobs(limit: int = 100, _user=require_role("operator")) -> dict[str, Any]:
         return {"jobs": list_jobs(limit)}
 
+    @app.get("/api/sources")
+    def sources(_user=require_role("viewer")) -> dict[str, Any]:
+        return {"sources": source_overview()}
+
+    @app.post("/api/sources/{source_id}/sync")
+    def source_sync(source_id: str, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
+        if not any(source["id"] == source_id for source in source_overview()):
+            raise HTTPException(status_code=404, detail="Quelle nicht gefunden.")
+        job_id = submit_job("source.sync", source_id)
+        record_audit("source.sync.queue", source_id, actor=_user.username, detail={"job_id": job_id})
+        return {"ok": True, "job_id": job_id, "status": "queued"}
+
+    @app.get("/api/users")
+    def users(_user=require_role("admin")) -> dict[str, Any]:
+        return {
+            "users": [
+                {
+                    "username": user.username,
+                    "role": user.role,
+                    "enabled": user.enabled,
+                    "allowed_modules": user.allowed_modules,
+                    "allowed_tools": user.allowed_tools,
+                }
+                for user in load_users()
+            ]
+        }
+
+    @app.post("/api/users")
+    def user_create(body: UserUpsertRequest, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        users = load_users()
+        username = body.username.strip()
+        if any(user.username == username for user in users):
+            raise HTTPException(status_code=409, detail="Benutzer existiert bereits.")
+        if body.role not in {"viewer", "operator", "admin"}:
+            raise HTTPException(status_code=400, detail="Ungueltige Rolle.")
+        if len(body.password) < 12:
+            raise HTTPException(status_code=400, detail="Passwort muss mindestens 12 Zeichen lang sein.")
+        users.append(
+            HarborUser(
+                username=username,
+                password_hash=hash_password(body.password),
+                role=body.role,
+                enabled=body.enabled,
+                allowed_modules=body.allowed_modules,
+                allowed_tools=body.allowed_tools,
+            )
+        )
+        save_users(users)
+        record_audit("user.create", username, actor=_user.username)
+        return {"ok": True}
+
+    @app.put("/api/users/{username}")
+    def user_update(username: str, body: UserUpsertRequest, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        users = load_users()
+        user = next((item for item in users if item.username == username), None)
+        if user is None:
+            raise HTTPException(status_code=404, detail="Benutzer nicht gefunden.")
+        if body.username != username:
+            raise HTTPException(status_code=400, detail="Benutzername kann nicht geaendert werden.")
+        if body.role not in {"viewer", "operator", "admin"}:
+            raise HTTPException(status_code=400, detail="Ungueltige Rolle.")
+        removes_active_admin = user.enabled and user.role == "admin" and (not body.enabled or body.role != "admin")
+        active_admins = sum(item.enabled and item.role == "admin" for item in users)
+        if removes_active_admin and active_admins <= 1:
+            raise HTTPException(status_code=400, detail="Der letzte aktive Admin kann nicht deaktiviert oder herabgestuft werden.")
+        user.role = body.role
+        user.enabled = body.enabled
+        user.allowed_modules = body.allowed_modules
+        user.allowed_tools = body.allowed_tools
+        if body.password:
+            if len(body.password) < 12:
+                raise HTTPException(status_code=400, detail="Passwort muss mindestens 12 Zeichen lang sein.")
+            user.password_hash = hash_password(body.password)
+        save_users(users)
+        record_audit("user.update", username, actor=_user.username)
+        return {"ok": True}
+
+    @app.get("/api/backups")
+    def backups(_user=require_role("admin")) -> dict[str, Any]:
+        return {"backups": list_backups()}
+
+    @app.post("/api/backups")
+    def backup_create(body: BackupCreateRequest, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        job_id = submit_job("backup.create", "harbor", {"label": body.label})
+        record_audit("backup.create.queue", body.label, actor=_user.username, detail={"job_id": job_id})
+        return {"ok": True, "job_id": job_id, "status": "queued"}
+
+    @app.get("/api/services")
+    def services(_user=require_role("admin")) -> dict[str, Any]:
+        return {"services": [asdict(profile) for profile in list_service_profiles()]}
+
+    @app.post("/api/services/{profile_id}/{action}")
+    def service_run(profile_id: str, action: str, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        try:
+            result = health_check_service(profile_id) if action == "check" else service_action(profile_id, action)
+            record_audit(f"service.{action}", profile_id, actor=_user.username, outcome="success" if result.get("ok") else "failure")
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/modules/{module_id}/reindex")
     def module_reindex(module_id: str, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         if find_module(module_id) is None:
             raise HTTPException(status_code=404, detail="Modul nicht gefunden.")
-        job_id = submit_job(
-            "module.reindex",
-            module_id,
-            {},
-            lambda: execute_module(module_id, "reindex", {}),
-        )
+        job_id = submit_job("module.reindex", module_id)
         record_audit("module.reindex.queue", module_id, actor=_user.username, detail={"job_id": job_id})
         return {"ok": True, "job_id": job_id, "status": "queued"}
 
@@ -1937,6 +2070,20 @@ def create_app() -> FastAPI:
         append_chat_message(session_id, "user", body.message)
         append_chat_message(session_id, "assistant", content, metadata={"used_modules": used_modules})
         return {"ok": True, "reply": content, "used_modules": used_modules, "session_id": session_id}
+
+    @app.get("/api/chat/sessions")
+    def chat_sessions(_user: HarborUser = require_role("viewer")) -> dict[str, Any]:
+        return {"sessions": list_chat_sessions(_user.username)}
+
+    @app.get("/api/chat/sessions/{session_id}")
+    def chat_session(session_id: str, _user: HarborUser = require_role("viewer")) -> dict[str, Any]:
+        return {"session_id": session_id, "messages": load_chat_messages(session_id, _user.username, 200)}
+
+    @app.delete("/api/chat/sessions/{session_id}")
+    def chat_session_delete(session_id: str, _user: HarborUser = require_role("viewer")) -> dict[str, Any]:
+        if not delete_chat_session(session_id, _user.username):
+            raise HTTPException(status_code=404, detail="Chat-Sitzung nicht gefunden.")
+        return {"ok": True}
 
     @app.post("/api/chat/stream")
     def chat_stream(body: ChatRequest, _user: HarborUser = require_role("viewer")) -> StreamingResponse:

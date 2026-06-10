@@ -1,17 +1,14 @@
 [Unit]
-Description=woddi-harbor AI Control Plane
-After=network-online.target
+Description=woddi-harbor durable job worker
+After=network-online.target woddi-harbor.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=__HARBOR_WORKDIR__
-ExecStart=__HARBOR_WORKDIR__/.venv/bin/woddi-harbor serve --host __HARBOR_HOST__ --port __HARBOR_PORT__
-Restart=on-failure
+ExecStart=__HARBOR_WORKDIR__/.venv/bin/woddi-harbor job-worker
+Restart=always
 RestartSec=2
-Environment=MALLOC_ARENA_MAX=8
-LimitNOFILE=65536
-TasksMax=4096
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

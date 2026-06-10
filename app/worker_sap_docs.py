@@ -3,8 +3,8 @@ from __future__ import annotations
 import signal
 import sys
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 
 from .config import find_module
 from .mcp.sap_docs import create_sap_docs_app

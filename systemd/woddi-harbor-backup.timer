@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily woddi-harbor backup
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15m
+Persistent=true
+Unit=woddi-harbor-backup.service
+
+[Install]
+WantedBy=timers.target

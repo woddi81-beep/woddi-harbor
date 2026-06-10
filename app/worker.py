@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
-import uvicorn
 
 from .config import find_module
 from .modules import worker_execute, worker_health

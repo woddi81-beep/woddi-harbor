@@ -4,17 +4,17 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
 from .config import RUNTIME_DIR
 
-
 DATABASE_PATH = RUNTIME_DIR / "harbor.db"
 _INIT_LOCK = threading.Lock()
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _connect() -> sqlite3.Connection:
@@ -40,6 +40,15 @@ def transaction() -> Iterator[sqlite3.Connection]:
         if connection.in_transaction:
             connection.execute("ROLLBACK")
         raise
+    finally:
+        connection.close()
+
+
+@contextmanager
+def read_connection() -> Iterator[sqlite3.Connection]:
+    connection = _connect()
+    try:
+        yield connection
     finally:
         connection.close()
 
@@ -134,7 +143,20 @@ def initialize_database() -> Path:
             if row is None or row["version"] is None:
                 connection.execute(
                     "INSERT INTO schema_meta(version, applied_at) VALUES (?, ?)",
-                    (SCHEMA_VERSION, time.time()),
+                    (1, time.time()),
+                )
+                current_version = 1
+            else:
+                current_version = int(row["version"])
+            if current_version < 2:
+                columns = {item["name"] for item in connection.execute("PRAGMA table_info(jobs)").fetchall()}
+                if "attempts" not in columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+                if "worker_id" not in columns:
+                    connection.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT NOT NULL DEFAULT ''")
+                connection.execute(
+                    "INSERT INTO schema_meta(version, applied_at) VALUES (?, ?)",
+                    (2, time.time()),
                 )
         finally:
             connection.close()
@@ -191,7 +213,7 @@ def record_audit(
 
 def list_audit_events(limit: int = 100) -> list[dict[str, Any]]:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         rows = connection.execute(
             "SELECT * FROM audit_events ORDER BY occurred_at DESC LIMIT ?",
             (max(1, min(limit, 1000)),),
@@ -241,7 +263,7 @@ def append_chat_message(
 
 def load_chat_messages(session_id: str, owner: str, limit: int = 30) -> list[dict[str, str]]:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         session = connection.execute(
             "SELECT id FROM chat_sessions WHERE id=? AND owner=?",
             (session_id, owner),
@@ -256,6 +278,34 @@ def load_chat_messages(session_id: str, owner: str, limit: int = 30) -> list[dic
             (session_id, max(1, min(limit, 200))),
         ).fetchall()
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+
+def list_chat_sessions(owner: str, limit: int = 50) -> list[dict[str, Any]]:
+    initialize_database()
+    with read_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count
+            FROM chat_sessions s
+            LEFT JOIN chat_messages m ON m.session_id=s.id
+            WHERE s.owner=?
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            """,
+            (owner, max(1, min(limit, 200))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_chat_session(session_id: str, owner: str) -> bool:
+    initialize_database()
+    with transaction() as connection:
+        cursor = connection.execute(
+            "DELETE FROM chat_sessions WHERE id=? AND owner=?",
+            (session_id, owner),
+        )
+    return cursor.rowcount > 0
 
 
 def upsert_mcp_package(package_id: str, version: str, manifest: dict[str, Any]) -> None:
@@ -275,7 +325,7 @@ def upsert_mcp_package(package_id: str, version: str, manifest: dict[str, Any]) 
 
 def list_mcp_packages() -> list[dict[str, Any]]:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         rows = connection.execute(
             "SELECT id, version, manifest_json, installed_at FROM mcp_packages ORDER BY id, version"
         ).fetchall()
@@ -292,7 +342,7 @@ def list_mcp_packages() -> list[dict[str, Any]]:
 
 def find_mcp_package(package_id: str, version: str) -> dict[str, Any] | None:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         row = connection.execute(
             "SELECT manifest_json FROM mcp_packages WHERE id=? AND version=?",
             (package_id, version),
@@ -351,7 +401,7 @@ def set_mcp_instance_state(instance_id: str, desired_state: str) -> None:
 
 def list_mcp_instances() -> list[dict[str, Any]]:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         rows = connection.execute(
             "SELECT * FROM mcp_instances ORDER BY id"
         ).fetchall()
@@ -399,7 +449,7 @@ def change_mcp_instance_version(instance_id: str, version: str) -> None:
 
 def previous_mcp_instance_version(instance_id: str) -> str | None:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         row = connection.execute(
             """
             SELECT from_version FROM mcp_deployment_history
@@ -454,9 +504,42 @@ def update_job(
         )
 
 
+def claim_next_job(worker_id: str, *, stale_after_seconds: float = 900.0) -> dict[str, Any] | None:
+    initialize_database()
+    now = time.time()
+    with transaction() as connection:
+        connection.execute(
+            """
+            UPDATE jobs SET status='queued', worker_id='', started_at=NULL
+            WHERE status='running' AND started_at < ?
+            """,
+            (now - stale_after_seconds,),
+        )
+        row = connection.execute(
+            "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        updated = connection.execute(
+            """
+            UPDATE jobs SET status='running', started_at=?, worker_id=?, attempts=attempts + 1
+            WHERE id=? AND status='queued'
+            """,
+            (now, worker_id, row["id"]),
+        )
+        if updated.rowcount != 1:
+            return None
+        claimed = connection.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone()
+    return {
+        **dict(claimed),
+        "payload": json.loads(claimed["payload_json"]),
+        "result": json.loads(claimed["result_json"]),
+    }
+
+
 def list_jobs(limit: int = 100) -> list[dict[str, Any]]:
     initialize_database()
-    with _connect() as connection:
+    with read_connection() as connection:
         rows = connection.execute(
             "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?",
             (max(1, min(limit, 1000)),),

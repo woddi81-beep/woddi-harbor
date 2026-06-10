@@ -7,12 +7,10 @@ import os
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Literal
 
 from fastapi import Depends, HTTPException, Request, status
 
 from .config import HarborUser, UserRole, find_user, load_users
-
 
 ROLE_LEVEL: dict[UserRole, int] = {
     "viewer": 1,
@@ -72,7 +70,7 @@ def authenticate_basic_header(header_value: str | None) -> HarborUser:
     return user
 
 
-def current_user(request: Request) -> HarborUser | None:
+def current_user(request: Request) -> HarborUser:
     if not any_users_exist():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

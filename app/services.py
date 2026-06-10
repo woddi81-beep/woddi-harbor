@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-import subprocess
 import shlex
+import subprocess
 from pathlib import Path
 
 import httpx
 
-from .config import BASE_DIR, CONFIG_DIR, ModuleConfig, ServiceProfile, find_module, find_service_profile, internal_worker_env_file, load_settings, save_service_profiles, sync_service_profiles
-from .modules import health_check_module, module_url, module_worker_command
-
+from .config import (
+    BASE_DIR,
+    ServiceProfile,
+    find_module,
+    find_service_profile,
+    internal_worker_env_file,
+    load_settings,
+    save_service_profiles,
+    sync_service_profiles,
+)
+from .modules import health_check_module, module_worker_command
 
 SYSTEMD_DIR = BASE_DIR / "systemd"
 HARBOR_TEMPLATE = SYSTEMD_DIR / "woddi-harbor.service.tpl"

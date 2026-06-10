@@ -26,7 +26,10 @@ Der Name passt bewusst zum Zielbild:
 - fail-closed Benutzer- und Rollenmodell mit Modul-/Tool-Allowlisten
 - SQLite-Control-State im WAL-Modus mit Audit-Log, Chat-Sessions und Jobs
 - SSE-Streaming fuer Chat-Antworten
+- eigenstaendige Chat- und Admin-Web-App mit persistenten Sitzungen
 - manifestbasierte MCP-Pakete und Instanzen mit Upgrade/Rollback
+- verwaltete lokale/Git-Dokumentquellen mit Qualitaets-Gate
+- persistente SQLite-Jobqueue mit separatem Worker
 - Prometheus-Metriken, Online-Backup/Restore und Production-Preflight
 
 ## Produktionsstatus
@@ -51,6 +54,13 @@ Architektur und Betrieb:
 
 - `docs/ARCHITECTURE.md`
 - `docs/OPERATIONS.md`
+- `docs/PRODUCT.md`
+- `docs/SLO.md`
+- `docs/SECURITY.md`
+- `docs/PRIVACY.md`
+- `docs/INSTALL.md`
+- `docs/UPGRADE.md`
+- `docs/RUNBOOK.md`
 
 ## Struktur
 

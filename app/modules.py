@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import fcntl
+import json
 import os
 import shutil
 import signal
@@ -10,11 +10,11 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
-from contextlib import contextmanager
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -33,8 +33,7 @@ from .config import (
     module_sources,
     resolve_module_source_path,
 )
-from .search import SearchIndexMeta, ensure_index, load_index, load_index_meta, search_index
-
+from .search import SearchIndexMeta, ensure_index, load_index_meta, search_index
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 QUERY_CACHE_TTL_SECONDS = 45.0

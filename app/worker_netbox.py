@@ -4,8 +4,8 @@ import os
 import signal
 import sys
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 
 from .config import find_module
 from .mcp.netbox import create_app

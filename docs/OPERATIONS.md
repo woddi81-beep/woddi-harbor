@@ -3,11 +3,13 @@
 ## Installation
 
 ```bash
-./harbor.sh install
-./harbor.sh cli init
-./harbor.sh cli init-admin --username admin
-./harbor.sh cli production-check
+scripts/install_production.sh user
+.venv/bin/woddi-harbor init-admin --username admin
+.venv/bin/woddi-harbor production-check
 ```
+
+Die API, der persistente Job-Worker und der Backup-Timer laufen als getrennte
+systemd-Units. TLS wird mit einer Vorlage unter `deploy/` terminiert.
 
 ## Backup und Restore
 
@@ -25,13 +27,15 @@ Vor Restore wird automatisch ein Safety-Backup erzeugt.
 - Prometheus: `GET /metrics`, Admin-Authentifizierung erforderlich
 - Audit: `GET /api/audit`
 - Jobs: `GET /api/jobs`
+- Quellen: `GET /api/sources`
 
 ## Lasttest
 
 ```bash
 .venv/bin/python tools/load_test.py \
   --url http://127.0.0.1:9680/api/health \
-  --requests 10000 --concurrency 64
+  --requests 10000 --concurrency 64 \
+  --max-error-rate 0.01 --max-p95-ms 100
 ```
 
 Chat- und MCP-Lasttests muessen gegen Test-Upstreams laufen, nicht gegen produktive

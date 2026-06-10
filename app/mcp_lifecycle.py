@@ -25,7 +25,6 @@ from .state import (
     upsert_mcp_package,
 )
 
-
 MCP_PACKAGE_DIR = DATA_DIR / "mcp" / "packages"
 ALLOWED_DRIVERS = {"http", "process", "systemd", "container"}
 
