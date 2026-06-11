@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade build
       - run: python -m build
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           body_path: docs/RELEASE_NOTES_v0.2.0.md
           files: dist/*
