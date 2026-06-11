@@ -59,8 +59,10 @@ Architektur und Betrieb:
 - `docs/SECURITY.md`
 - `docs/PRIVACY.md`
 - `docs/INSTALL.md`
+- `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
+- `docs/RELEASE_NOTES_v0.2.0.md`
 
 ## Struktur
 
