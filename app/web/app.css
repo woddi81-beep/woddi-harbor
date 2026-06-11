@@ -46,10 +46,17 @@ th, td { padding: .65rem; border-bottom: 1px solid var(--line); text-align: left
 .messages { height: calc(100vh - 235px); min-height: 380px; overflow: auto; display: flex; flex-direction: column; gap: .8rem; padding: .5rem; }
 .message { max-width: 78%; white-space: pre-wrap; line-height: 1.5; border-radius: 12px; padding: .8rem 1rem; background: var(--panel-2); }
 .message.user { align-self: flex-end; background: #184b43; }
-.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; margin-top: .8rem; }
+.message pre { padding: .75rem; border-radius: 8px; background: #081018; overflow: auto; }
+.copy-message { margin-top: .5rem; padding: .3rem .55rem; font-size: .78rem; }
+.composer { display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; gap: .65rem; margin-top: .8rem; align-items: end; }
+.module-picker select { min-height: 4.4rem; }
 .session { width: 100%; text-align: left; display: grid; gap: .2rem; margin-bottom: .4rem; }
 .session.active { border-color: var(--accent); }
+.session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem; }
+.session-delete { align-self: stretch; }
 .toolbar { display: flex; gap: .5rem; flex-wrap: wrap; }
+.form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
+details summary { cursor: pointer; color: var(--muted); margin-top: .65rem; }
 dialog { color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(620px, 92vw); }
 dialog::backdrop { background: rgba(0, 0, 0, .7); }
 label { display: grid; gap: .3rem; color: var(--muted); font-size: .88rem; }
@@ -58,4 +65,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #cce7df; }
   .shell { grid-template-columns: 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
   .messages { height: 55vh; }
+  .composer, .form-grid { grid-template-columns: 1fr; }
 }

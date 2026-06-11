@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -351,20 +352,26 @@ class ModuleTests(unittest.TestCase):
         self.assertIn("Port-Konflikt", " ".join(errors["docs-b"]))
 
     def test_worker_execute_uses_query_cache_for_repeated_docs_searches(self) -> None:
-        with tempfile.TemporaryDirectory() as docs_dir:
+        with tempfile.TemporaryDirectory() as docs_dir, tempfile.TemporaryDirectory() as runtime_dir:
             module = ModuleConfig(id="docs-cache", type="docs", transport="local", path=docs_dir, port=41004, top_k=5)
             with open(f"{docs_dir}/readme.md", "w", encoding="utf-8") as handle:
                 handle.write("router alpha beta\n")
 
-            first = worker_execute(module, "search", {"query": "router", "top_k": 5})
-            self.assertTrue(first["ok"])
-            self.assertFalse(first["data"]["cache_hit"])
+            with (
+                patch("app.modules.module_index_path", return_value=Path(runtime_dir) / "index.json"),
+                patch("app.modules.module_query_cache_dir", return_value=Path(runtime_dir) / "query-cache"),
+                patch("app.modules.load_module_runtime_state", return_value={}),
+                patch("app.modules.update_module_runtime_state", return_value={}),
+            ):
+                first = worker_execute(module, "search", {"query": "router", "top_k": 5})
+                self.assertTrue(first["ok"])
+                self.assertFalse(first["data"]["cache_hit"])
 
-            with patch("app.modules.search_index", side_effect=AssertionError("search_index should not run on cache hit")):
-                second = worker_execute(module, "search", {"query": "router", "top_k": 5})
+                with patch("app.modules.search_index", side_effect=AssertionError("search_index should not run on cache hit")):
+                    second = worker_execute(module, "search", {"query": "router", "top_k": 5})
 
-            self.assertTrue(second["ok"])
-            self.assertTrue(second["data"]["cache_hit"])
+                self.assertTrue(second["ok"])
+                self.assertTrue(second["data"]["cache_hit"])
 
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
     @patch("app.modules.httpx.Client", FakeMcpClient)

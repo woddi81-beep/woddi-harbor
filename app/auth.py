@@ -106,3 +106,16 @@ def require_role(min_role: UserRole):
         return user
 
     return Depends(dependency)
+
+
+def require_metrics_access(request: Request) -> HarborUser | None:
+    configured_token = os.getenv("HARBOR_METRICS_TOKEN", "").strip()
+    authorization = request.headers.get("Authorization", "")
+    if configured_token and authorization.startswith("Bearer "):
+        supplied_token = authorization.removeprefix("Bearer ").strip()
+        if hmac.compare_digest(configured_token, supplied_token):
+            return None
+    user = current_user(request)
+    if ROLE_LEVEL[user.role] < ROLE_LEVEL["admin"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rolle nicht ausreichend.")
+    return user

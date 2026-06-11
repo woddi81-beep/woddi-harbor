@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -27,11 +28,14 @@ INTERNAL_ENV_PATH = SECRETS_DIR / "worker.env"
 
 @dataclass
 class LlmSettings:
+    provider: str = "auto"
     base_url: str = ""
     model: str = ""
     api_key: str = ""
     api_key_env: str = ""
     timeout_seconds: float = 60.0
+    connect_timeout_seconds: float = 5.0
+    retry_attempts: int = 3
     max_tokens: int = 1200
 
 
@@ -150,7 +154,8 @@ def ensure_layout() -> None:
         services_file.write_text('{\n  "profiles": []\n}\n', encoding="utf-8")
     if not users_file.exists():
         users_file.write_text('{\n  "users": []\n}\n', encoding="utf-8")
-    users_file.chmod(0o600)
+    if users_file.stat().st_mode & 0o777 != 0o600:
+        users_file.chmod(0o600)
     internal_worker_token()
 
 
@@ -184,8 +189,10 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 @contextmanager
 def _locked_path(path: Path, *, exclusive: bool):
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_dir = RUNTIME_DIR / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    identity = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
+    lock_path = lock_dir / f"{path.name}-{identity}.lock"
     with lock_path.open("a+", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
         try:
@@ -247,11 +254,14 @@ def load_settings() -> HarborSettings:
         payload = _merge_dict(payload, _load_json(local_path))
     llm_payload = payload.get("llm", {})
     llm = LlmSettings(
+        provider=str(llm_payload.get("provider", "auto")),
         base_url=str(llm_payload.get("base_url", "")),
         model=str(llm_payload.get("model", "")),
         api_key=str(llm_payload.get("api_key", "")),
         api_key_env=str(llm_payload.get("api_key_env", "")),
         timeout_seconds=float(llm_payload.get("timeout_seconds", 60.0)),
+        connect_timeout_seconds=float(llm_payload.get("connect_timeout_seconds", 5.0)),
+        retry_attempts=max(1, min(5, int(llm_payload.get("retry_attempts", 3)))),
         max_tokens=int(llm_payload.get("max_tokens", 1200)),
     )
     return HarborSettings(
@@ -270,9 +280,16 @@ def save_settings(settings: HarborSettings) -> None:
     _write_json(CONFIG_DIR / "harbor.json", asdict(settings))
 
 
+def modules_config_path(*, for_write: bool = False) -> Path:
+    local_path = CONFIG_DIR / "modules.local.json"
+    if for_write or local_path.exists():
+        return local_path
+    return CONFIG_DIR / "modules.json"
+
+
 def load_modules() -> list[ModuleConfig]:
     ensure_layout()
-    payload = _load_json(CONFIG_DIR / "modules.json")
+    payload = _load_json(modules_config_path())
     modules: list[ModuleConfig] = []
     for raw in payload.get("modules", []):
         raw_sources = raw.get("sources", [])
@@ -332,7 +349,7 @@ def save_modules(modules: list[ModuleConfig]) -> None:
         payload = asdict(module)
         payload["path"] = module.local_sources()[0].path if module.local_sources() else module.path
         serialized.append(payload)
-    _write_json(CONFIG_DIR / "modules.json", {"modules": serialized})
+    _write_json(modules_config_path(for_write=True), {"modules": serialized})
     sync_service_profiles()
 
 

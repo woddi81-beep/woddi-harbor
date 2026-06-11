@@ -3,13 +3,16 @@
 ## Installation
 
 ```bash
-scripts/install_production.sh user
+scripts/install_production.sh manual
 .venv/bin/woddi-harbor init-admin --username admin
 .venv/bin/woddi-harbor production-check
+./harbor.sh start
 ```
 
-Die API, der persistente Job-Worker und der Backup-Timer laufen als getrennte
-systemd-Units. TLS wird mit einer Vorlage unter `deploy/` terminiert.
+Im Standardbetrieb werden keine systemd-Units installiert. API und Konsole werden
+mit `harbor.sh` gesteuert; `./harbor.sh stop` beendet auch Module, MCP-Prozesse und
+Monitoring. User- oder System-Units sowie TLS und Monitoring sind explizite
+Deployment-Optionen.
 
 ## Backup und Restore
 
@@ -39,7 +42,7 @@ Vor Restore wird automatisch ein Safety-Backup erzeugt.
 ```
 
 Chat- und MCP-Lasttests muessen gegen Test-Upstreams laufen, nicht gegen produktive
-NetBox-, OpenStack- oder LLM-Endpunkte.
+externe Dienste oder LLM-Endpunkte.
 
 ## Release Gate
 
@@ -49,4 +52,5 @@ Ein Release ist nur zulaessig, wenn:
 - Tests und Compile-Check erfolgreich sind,
 - Backup und Test-Restore geprueft wurden,
 - p95/p99-Latenzen und Fehlerrate die vereinbarten SLOs erfuellen,
-- Reverse-Proxy, TLS und Monitoring aktiv sind.
+- die fuer das konkrete Deployment freigegebenen TLS- und Monitoring-Optionen
+  geprueft wurden.

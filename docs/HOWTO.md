@@ -5,14 +5,16 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.2.0
-scripts/install_production.sh user
+git checkout v0.3.0
+scripts/install_production.sh manual
 ```
 
-Für systemweite Units wird das Skript mit ausreichenden Rechten und `system`
-aufgerufen:
+Die manuelle Installation richtet keine systemd-Units ein. Nur fuer einen bewusst
+gewaehlten Dauerbetrieb wird das Skript mit `user` oder mit ausreichenden Rechten
+und `system` aufgerufen:
 
 ```bash
+scripts/install_production.sh user
 sudo scripts/install_production.sh system
 ```
 
@@ -45,6 +47,19 @@ export HARBOR_LLM_API_KEY='...'
 ```
 
 ## 4. Dokumentquellen importieren
+
+Die mit dem Repository getesteten Harbor- und ASV-Referenzkorpora werden über eine
+explizite Allowlist aufgebaut:
+
+```bash
+.venv/bin/python tools/import_reference_docs.py
+.venv/bin/woddi-harbor source sync operation-docs
+.venv/bin/woddi-harbor source sync customer-docs
+```
+
+Der Importer erzeugt je Korpus ein `_SOURCE_MANIFEST.json` mit Herkunft, Größe und
+SHA-256-Prüfsumme. Private Uploads, Datenbanken, Secrets und Runtime-Daten werden
+nicht importiert.
 
 Lokale Inhalte in die konfigurierten Verzeichnisse kopieren:
 
@@ -111,6 +126,22 @@ Installation und Lifecycle:
 .venv/bin/woddi-harbor mcp stop example
 ```
 
+Das mitgelieferte eigene MCP kann ohne weitere Python-Abhaengigkeiten
+End-to-End betrieben werden:
+
+```bash
+.venv/bin/woddi-harbor mcp install examples/harbor-ops-mcp
+.venv/bin/woddi-harbor mcp create harbor-ops \
+  --package-id harbor-ops-mcp --version 1.0.0 \
+  --config-json '{"env":{"MCP_PORT":"61000"}}'
+.venv/bin/woddi-harbor mcp start harbor-ops
+.venv/bin/woddi-harbor module add-mcp harbor-ops-tools \
+  http://127.0.0.1:61000/mcp --remote-protocol mcp
+.venv/bin/woddi-harbor module discover harbor-ops-tools
+.venv/bin/woddi-harbor module call harbor-ops-tools harbor_echo \
+  --payload '{"message":"Harbor MCP E2E"}'
+```
+
 Upgrade und Rollback:
 
 ```bash
@@ -121,7 +152,8 @@ Upgrade und Rollback:
 
 ## 8. Services starten
 
-User-Installation:
+systemd ist optional. Fuer manuellen Betrieb genuegen `./harbor.sh start` und
+`./harbor.sh console`. Eine User-Installation fuer Dauerbetrieb:
 
 ```bash
 systemctl --user start woddi-harbor.service
@@ -137,10 +169,27 @@ systemctl --user status woddi-harbor-jobs.service
 .venv/bin/woddi-harbor service check harbor
 ```
 
+Alle Harbor-Komponenten beenden:
+
+```bash
+./harbor.sh stop
+```
+
+Alle von Harbor verwalteten User-Units, TLS und Monitoring entfernen, ohne
+Dokumente, Chats, Konfiguration oder Backups zu loeschen:
+
+```bash
+./harbor.sh uninstall-runtime
+```
+
 ## 9. TLS-Reverse-Proxy aktivieren
 
 In `deploy/nginx.conf.tpl` oder `deploy/Caddyfile` den Platzhalter
 `__HARBOR_HOSTNAME__` ersetzen. Harbor selbst bleibt auf `127.0.0.1:9680`.
+
+Ohne oeffentlichen DNS-Namen kann `deploy/Caddyfile.local` fuer
+`https://localhost:9443` verwendet werden. Es nutzt eine interne Caddy-CA; ohne
+lokal importierte CA zeigt der Browser erwartungsgemaess eine Zertifikatswarnung.
 
 Nach Aktivierung prüfen:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlparse
@@ -9,8 +10,14 @@ import httpx
 
 from .config import HarborSettings, llm_api_key
 
+RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
-def _uses_ollama(base_url: str) -> bool:
+
+def _uses_ollama(base_url: str, provider: str = "auto") -> bool:
+    if provider == "ollama":
+        return True
+    if provider == "openai":
+        return False
     parsed = urlparse(base_url.rstrip("/"))
     return parsed.path.endswith("/api") or parsed.port == 11434 or "ollama" in parsed.netloc.lower()
 
@@ -36,6 +43,67 @@ def extract_chat_content(response: dict[str, Any]) -> str:
     return ""
 
 
+def _timeout(settings: HarborSettings) -> httpx.Timeout:
+    return httpx.Timeout(
+        settings.llm.timeout_seconds,
+        connect=min(settings.llm.connect_timeout_seconds, settings.llm.timeout_seconds),
+    )
+
+
+def _retryable(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError)):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in RETRYABLE_STATUS_CODES
+
+
+def _attempts(settings: HarborSettings) -> int:
+    return max(1, min(5, settings.llm.retry_attempts))
+
+
+def _backoff(attempt: int) -> None:
+    time.sleep(min(2.0, 0.25 * (2**attempt)))
+
+
+def llm_health(settings: HarborSettings) -> dict[str, Any]:
+    if not settings.llm.base_url or not settings.llm.model:
+        return {"ok": False, "status": "unconfigured", "detail": "LLM ist nicht konfiguriert."}
+    base_url = settings.llm.base_url.rstrip("/")
+    headers: dict[str, str] = {}
+    secret = llm_api_key(settings)
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+    is_ollama = _uses_ollama(base_url, settings.llm.provider)
+    endpoint = "/api/tags" if is_ollama else "/models"
+    started = time.monotonic()
+    try:
+        with httpx.Client(timeout=_timeout(settings)) as client:
+            response = client.get(f"{base_url}{endpoint}", headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+        if is_ollama:
+            models = [str(item.get("name", "")) for item in payload.get("models", []) if isinstance(item, dict)]
+        else:
+            models = [str(item.get("id", "")) for item in payload.get("data", []) if isinstance(item, dict)]
+        model_available = not models or settings.llm.model in models
+        return {
+            "ok": model_available,
+            "status": "connected" if model_available else "model_missing",
+            "model": settings.llm.model,
+            "models": models,
+            "latency_ms": round((time.monotonic() - started) * 1000, 2),
+            "detail": "LLM erreichbar." if model_available else "Konfiguriertes Modell ist nicht verfuegbar.",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "model": settings.llm.model,
+            "models": [],
+            "latency_ms": round((time.monotonic() - started) * 1000, 2),
+            "detail": str(exc),
+        }
+
+
 def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> dict[str, Any]:
     if not settings.llm.base_url or not settings.llm.model:
         raise ValueError("LLM ist noch nicht konfiguriert.")
@@ -44,13 +112,14 @@ def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> d
     secret = llm_api_key(settings)
     if secret:
         headers["Authorization"] = f"Bearer {secret}"
-    is_ollama = _uses_ollama(base_url)
+    is_ollama = _uses_ollama(base_url, settings.llm.provider)
     payload: dict[str, Any]
     if is_ollama:
         payload = {
             "model": settings.llm.model,
             "messages": messages,
             "stream": False,
+            "keep_alive": "30m",
             "options": {
                 "temperature": 0.2,
                 "num_predict": settings.llm.max_tokens,
@@ -66,10 +135,19 @@ def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> d
             "stream": False,
         }
         endpoint = "/chat/completions"
-    with httpx.Client(timeout=settings.llm.timeout_seconds) as client:
-        response = client.post(f"{base_url}{endpoint}", headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    last_error: Exception | None = None
+    with httpx.Client(timeout=_timeout(settings)) as client:
+        for attempt in range(_attempts(settings)):
+            try:
+                response = client.post(f"{base_url}{endpoint}", headers=headers, json=payload)
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 >= _attempts(settings) or not _retryable(exc):
+                    raise
+                _backoff(attempt)
+    raise RuntimeError(f"LLM-Anfrage fehlgeschlagen: {last_error}")
 
 
 def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Iterator[str]:
@@ -80,37 +158,47 @@ def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Ite
     secret = llm_api_key(settings)
     if secret:
         headers["Authorization"] = f"Bearer {secret}"
-    is_ollama = _uses_ollama(base_url)
+    is_ollama = _uses_ollama(base_url, settings.llm.provider)
     payload: dict[str, Any] = {
         "model": settings.llm.model,
         "messages": messages,
         "stream": True,
     }
     if is_ollama:
+        payload["keep_alive"] = "30m"
         payload["options"] = {"temperature": 0.2, "num_predict": settings.llm.max_tokens}
         endpoint = "/api/chat"
     else:
         payload.update({"temperature": 0.2, "max_tokens": settings.llm.max_tokens})
         endpoint = "/chat/completions"
-    with httpx.Client(timeout=settings.llm.timeout_seconds) as client:
-        with client.stream("POST", f"{base_url}{endpoint}", headers=headers, json=payload) as response:
-            response.raise_for_status()
-            for raw_line in response.iter_lines():
-                line = raw_line.strip()
-                if not line:
-                    continue
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                if line == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if is_ollama:
-                    content = chunk.get("message", {}).get("content", "")
-                else:
-                    choices = chunk.get("choices", [])
-                    content = choices[0].get("delta", {}).get("content", "") if choices else ""
-                if content:
-                    yield str(content)
+    with httpx.Client(timeout=_timeout(settings)) as client:
+        for attempt in range(_attempts(settings)):
+            yielded = False
+            try:
+                with client.stream("POST", f"{base_url}{endpoint}", headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    for raw_line in response.iter_lines():
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        if line.startswith("data:"):
+                            line = line[5:].strip()
+                        if line == "[DONE]":
+                            return
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if is_ollama:
+                            content = chunk.get("message", {}).get("content", "")
+                        else:
+                            choices = chunk.get("choices", [])
+                            content = choices[0].get("delta", {}).get("content", "") if choices else ""
+                        if content:
+                            yielded = True
+                            yield str(content)
+                return
+            except Exception as exc:
+                if yielded or attempt + 1 >= _attempts(settings) or not _retryable(exc):
+                    raise
+                _backoff(attempt)

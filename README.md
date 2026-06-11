@@ -62,7 +62,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.2.0.md`
+- `docs/RELEASE_NOTES_v0.3.0.md`
 
 ## Struktur
 
@@ -97,7 +97,7 @@ Das Skript erledigt:
 - Erzeugung der virtuellen Umgebung
 - Installation in die venv
 - Initialisierung der Harbor-Konfiguration
-- Start der Harbor-TUI mit Fallback auf die einfache Konsole
+- Start der interaktiven Harbor-Konsole
 
 Von dort aus kannst du schrittweise:
 
@@ -110,7 +110,7 @@ Von dort aus kannst du schrittweise:
 - Host und Port aendern
 - systemd-Units fuer Harbor oder lokale Module vorbereiten
 
-Die neue TUI ist deutlich naeher an einem echten Operations-Deck:
+Die interaktive Konsole ist das zentrale Operations-Deck:
 
 - linke Navigationsspalte fuer Module und Services
 - Karten fuer LLM, Server und Prompt
@@ -118,7 +118,7 @@ Die neue TUI ist deutlich naeher an einem echten Operations-Deck:
 - Event-Log im unteren Bereich
 - Hotkeys fuer die haeufigen Aktionen
 
-Wichtige Tasten in der TUI:
+Wichtige Tasten in der Konsole:
 
 - `a` Modul anlegen
 - `l` LLM konfigurieren

@@ -42,7 +42,9 @@ Commands:
   install             Create venv and install woddi-harbor into it
   init                Initialize Harbor config/layout
   start               Ensure install, init if needed, then start API
-  console             Open the richer Harbor TUI, fallback to the simple console
+  console             Open the interactive Harbor console
+  stop                Stop all Harbor runtime components
+  uninstall-runtime   Remove managed services; preserve data and configuration
   cli [args...]       Run woddi-harbor CLI inside the venv
   activate-hint       Print the correct activation command for the current shell
   help                Show this help
@@ -114,8 +116,7 @@ ensure_venv() {
 install_project() {
   ensure_venv
   log "Installiere woddi-harbor in die virtuelle Umgebung"
-  "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
-  "$VENV_DIR/bin/python" -m pip install -e "$ROOT_DIR"
+  "$VENV_DIR/bin/python" -m pip install --no-build-isolation -e "$ROOT_DIR"
 }
 
 run_cli() {
@@ -153,11 +154,13 @@ case "$cmd" in
   console)
     install_project
     "$VENV_DIR/bin/woddi-harbor" init >/dev/null
-    if "$VENV_DIR/bin/woddi-harbor" tui; then
-      exit 0
-    fi
-    log "TUI konnte nicht gestartet werden, wechsle auf einfache Konsole"
-    exec "$VENV_DIR/bin/woddi-harbor" console-ui
+    exec "$VENV_DIR/bin/woddi-harbor" console "$@"
+    ;;
+  stop)
+    run_cli runtime stop-all
+    ;;
+  uninstall-runtime)
+    run_cli runtime uninstall --yes
     ;;
   cli)
     run_cli "$@"

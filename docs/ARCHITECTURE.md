@@ -12,7 +12,8 @@
 ## Data Plane
 
 - Remote OpenAI-kompatibles LLM
-- getrennte lokale Docs-, Maildir-, NetBox-, OpenStack- und SAP-Docs-Worker
+- lokale Docs- und Maildir-Suche
+- optionale Adapter fuer externe NetBox-, OpenStack- und Dokumentdienste
 - Standard-MCP ueber HTTP `/mcp`
 - interne Worker-Kommunikation mit Bearer-Token
 - eigene MCP-Pakete ueber manifestbasierte Lifecycle-Registry
@@ -26,7 +27,7 @@ Harbor API Worker (N)
        |
        +-- SQLite WAL: Control State
        +-- Remote LLM
-       +-- lokale Worker/systemd
+       +-- lokale Worker oder MCP-Prozesse
        +-- externe MCP HTTP Server
 ```
 
@@ -34,8 +35,8 @@ Harbor API Worker (N)
 
 - `api_workers` anhand realer Lasttests festlegen, initial 4 bis 8.
 - Indexierung und MCP-Prozesse getrennt von API-Workern betreiben.
-- Prozesse bei Bedarf pro NUMA-Node mit systemd `CPUAffinity` und
-  `NUMAPolicy=preferred` verteilen.
+- Prozesse bei Bedarf per CPU-Affinity/NUMA-Policy auf Sockets verteilen; systemd
+  ist dafuer eine optionale Implementierung.
 - Grosse Dokumentbestaende nicht in jedem API-Prozess laden. Suchindizes gehoeren
   in dedizierte Worker; bei weiterem Wachstum ist ein FTS-/Vektorbackend einzusetzen.
 - Das externe LLM verhindert, dass Modellgewichte den Harbor-RAM belegen.

@@ -1,0 +1,7 @@
+{
+  "id": "harbor-ops-mcp",
+  "version": "1.0.0",
+  "driver": "process",
+  "command": ["bin/harbor-ops-mcp"],
+  "tools": ["harbor_echo", "harbor_runtime"]
+}

@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 
 config/harbor.local.json
+config/modules.local.json
 config/users.local.json
 config/harbor.json
 config/modules.json

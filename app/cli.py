@@ -31,6 +31,7 @@ from .config import (
 )
 from .console import run_console
 from .jobs import run_job_worker
+from .llm import llm_health
 from .mcp_lifecycle import (
     create_instance,
     install_package,
@@ -60,11 +61,17 @@ from .modules import (
     validation_errors_by_module,
 )
 from .preflight import production_check
+from .runtime import stop_all, uninstall_runtime
 from .services import health_check_service, install_and_optionally_enable_service, service_action
 from .sources import source_overview, sync_source
 from .worker import run_worker
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
+app = typer.Typer(
+    no_args_is_help=False,
+    invoke_without_command=True,
+    add_completion=False,
+    help="woddi-harbor control hub. Ohne Unterbefehl startet die interaktive Konsole.",
+)
 module_app = typer.Typer(no_args_is_help=True)
 llm_app = typer.Typer(no_args_is_help=True)
 service_app = typer.Typer(no_args_is_help=True)
@@ -72,6 +79,7 @@ user_app = typer.Typer(no_args_is_help=True)
 mcp_app = typer.Typer(no_args_is_help=True)
 backup_app = typer.Typer(no_args_is_help=True)
 source_app = typer.Typer(no_args_is_help=True)
+runtime_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
 app.add_typer(service_app, name="service")
@@ -79,7 +87,29 @@ app.add_typer(user_app, name="user")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(backup_app, name="backup")
 app.add_typer(source_app, name="source")
+app.add_typer(runtime_app, name="runtime")
 console = Console()
+
+
+def _open_console(*, simple: bool = False) -> None:
+    ensure_layout()
+    if simple:
+        run_console(console)
+        return
+    from .tui import run_tui
+
+    run_tui()
+
+
+@app.callback()
+def root(ctx: typer.Context) -> None:
+    """Open the interactive console when no command is supplied."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        console.print("Interaktive Konsole benötigt ein Terminal. Nutze `woddi-harbor --help` für Automatisierung.")
+        raise typer.Exit(code=2)
+    _open_console()
 
 
 def _check(name: str, ok: bool, detail: str) -> None:
@@ -218,6 +248,26 @@ def source_sync(source_id: str, reindex: bool = typer.Option(True, "--reindex/--
     console.print_json(json.dumps(sync_source(source_id, reindex=reindex), ensure_ascii=False))
 
 
+@runtime_app.command("stop-all")
+def runtime_stop_all() -> None:
+    """Stop all Harbor services, modules, MCP processes and monitoring."""
+    result = stop_all()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result["ok"]:
+        raise typer.Exit(code=2)
+
+
+@runtime_app.command("uninstall")
+def runtime_uninstall(yes: bool = typer.Option(False, "--yes", help="Confirm removal of managed runtime services.")) -> None:
+    """Stop and remove Harbor runtime services while preserving all data."""
+    if not yes:
+        raise typer.BadParameter("Bestaetige das Entfernen der Runtime-Dienste mit --yes.")
+    result = uninstall_runtime()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result["ok"]:
+        raise typer.Exit(code=2)
+
+
 @app.command()
 def onboard(
     llm_base_url: str = typer.Option("", help="OpenAI-compatible /v1 base URL"),
@@ -227,7 +277,7 @@ def onboard(
     maildir_path: str = typer.Option("", help="Optional first maildir path"),
     mcp_base_url: str = typer.Option("", help="Optional first MCP HTTP URL"),
 ) -> None:
-    """Guided first-run onboarding without the TUI."""
+    """Guided first-run onboarding without the interactive console."""
     ensure_layout()
     settings = load_settings()
     if llm_base_url:
@@ -244,7 +294,7 @@ def onboard(
     if mcp_base_url:
         upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
     sync_service_profiles()
-    console.print(Panel.fit("Onboarding gespeichert. Danach `./harbor.sh console` oder `woddi-harbor tui` starten.", title="Onboard"))
+    console.print(Panel.fit("Onboarding gespeichert. Danach `woddi-harbor console` starten.", title="Onboard"))
 
 
 @app.command("init-admin")
@@ -318,20 +368,24 @@ def status() -> None:
     _print_services()
 
 
-@app.command("console-ui")
-def console_ui() -> None:
-    """Open the interactive Harbor control console."""
-    ensure_layout()
-    run_console(console)
+@app.command("console")
+def console_command(
+    simple: bool = typer.Option(False, "--simple", help="Use the line-oriented fallback console."),
+) -> None:
+    """Open the interactive Harbor console."""
+    _open_console(simple=simple)
 
 
-@app.command()
+@app.command(hidden=True)
 def tui() -> None:
-    """Open the richer Harbor terminal UI."""
-    ensure_layout()
-    from .tui import run_tui
+    """Compatibility alias for `woddi-harbor console`."""
+    _open_console()
 
-    run_tui()
+
+@app.command("console-ui", hidden=True)
+def console_ui() -> None:
+    """Compatibility alias for `woddi-harbor console --simple`."""
+    _open_console(simple=True)
 
 
 @app.command()
@@ -351,16 +405,13 @@ def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
 def chat(message: str, modules: str = "") -> None:
     """Send a chat request directly through the configured LLM."""
     from .control import _build_messages
-    from .llm import complete_chat
+    from .llm import complete_chat, extract_chat_content
 
     settings = load_settings()
     selected_modules = [item.strip() for item in modules.split(",") if item.strip()]
     llm_messages, used_modules = _build_messages(settings, message, selected_modules or None)
     response = complete_chat(settings, llm_messages)
-    reply = ""
-    choices = response.get("choices") or []
-    if choices:
-        reply = str(choices[0].get("message", {}).get("content", ""))
+    reply = extract_chat_content(response)
     console.print(Panel(reply or "(leer)", title=f"Harbor Reply | modules={','.join(used_modules) or '-'}"))
 
 
@@ -389,6 +440,15 @@ def llm_set(
     )
     save_settings(updated)
     console.print(Panel.fit(f"LLM gesetzt: {model} @ {base_url}", title="LLM"))
+
+
+@llm_app.command("check")
+def llm_check() -> None:
+    """Check LLM reachability and configured model availability."""
+    result = llm_health(load_settings())
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result["ok"]:
+        raise typer.Exit(code=2)
 
 
 @module_app.command("list")
@@ -757,7 +817,11 @@ def module_restart(module_id: str) -> None:
 @module_app.command("call")
 def module_call(module_id: str, action: str, payload: str = "{}") -> None:
     """Call a module action."""
-    result = execute_module(module_id, action, parse_json_payload(payload))
+    try:
+        result = execute_module(module_id, action, parse_json_payload(payload))
+    except Exception as exc:
+        console.print(f"[red]Modulaufruf fehlgeschlagen:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
     console.print_json(json.dumps(result, ensure_ascii=False))
 
 

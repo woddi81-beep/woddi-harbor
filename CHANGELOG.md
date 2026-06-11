@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.0 - 2026-06-11
+
+### Added
+
+- Real reference-document importer with source manifests and quality verification
+- Resilient Ollama/OpenAI-compatible LLM health checks, retries and timeout controls
+- Canonical interactive console through `woddi-harbor console`
+- Idempotent `runtime stop-all` and `runtime uninstall` commands
+- Own process-based MCP example with full discovery and tool-call flow
+- Hardware release gate for the 128 GiB / four-socket production target
+- Optional local TLS and authenticated Prometheus installers
+- Structured admin forms and improved chat module selection and session handling
+
+### Changed
+
+- systemd, TLS and monitoring are explicitly optional runtime components
+- Local module configuration is stored in ignored `config/modules.local.json`
+- The versioned module default is empty and contains no deployment-specific endpoints
+- Configuration locks are stored under `data/runtime/locks`
+- Obsolete embedded web applications were removed in favor of packaged web assets
+
+### Fixed
+
+- Read-only systemd workers no longer fail while reading configuration
+- Production installer keeps the source checkout editable and finds deployment assets
+- CLI module failures no longer print full Python tracebacks
+- Tests no longer leave document indexes in the production runtime directory
+
+### Verification
+
+- 56 automated tests, Ruff, compile checks, JavaScript syntax checks and dependency audit
+- 10,000 health requests at concurrency 64: zero errors, p95 88.04 ms
+- 5,000 readiness requests at concurrency 32: zero errors, p95 38.36 ms
+- Controlled LLM and MCP failure/recovery tests
+
+### Known Limitation
+
+- The required 128 GiB / four-socket benchmark remains blocked until that host is
+  available. The available host has 15.51 GiB RAM and one CPU socket; its results do
+  not count as target-hardware certification.
+
 ## 0.2.0 - 2026-06-10
 
 ### Added

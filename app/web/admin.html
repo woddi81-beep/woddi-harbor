@@ -11,6 +11,7 @@
     <aside class="sidebar">
       <h1 class="brand">Harbor Admin</h1>
       <p><a href="/chat">Zum Chat</a></p>
+      <p class="muted">Dauerbetrieb ist optional.<br><code>./harbor.sh stop</code><br><code>./harbor.sh uninstall-runtime</code></p>
       <nav id="nav" class="nav"></nav>
     </aside>
     <main class="main">
@@ -29,6 +30,40 @@
       <label>Module, kommasepariert<input name="allowed_modules" value="*"></label>
       <label>Tools, kommasepariert<input name="allowed_tools" value="*"></label>
       <div class="row"><button class="primary">Speichern</button><button type="button" id="user-cancel">Abbrechen</button></div>
+    </form>
+  </dialog>
+  <dialog id="module-dialog">
+    <form id="module-form" class="stack">
+      <h3>Modul konfigurieren</h3>
+      <label>ID<input name="id" required pattern="[A-Za-z0-9._-]+"></label>
+      <label>Name<input name="name"></label>
+      <label>Typ<select name="type"><option value="docs">Dokumente</option><option value="maildir">Maildir</option><option value="mcp_http">MCP HTTP</option></select></label>
+      <label>Lokaler Pfad<input name="path" placeholder="/srv/data/docs"></label>
+      <label>MCP-Endpunkt<input name="base_url" placeholder="http://127.0.0.1:61000/mcp"></label>
+      <div class="form-grid">
+        <label>Port<input name="port" type="number" min="0" value="0"></label>
+        <label>Top K<input name="top_k" type="number" min="1" value="5"></label>
+        <label>Timeout<input name="timeout_seconds" type="number" min="1" value="30"></label>
+      </div>
+      <label>Notizen<textarea name="notes" rows="2"></textarea></label>
+      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="module-dialog">Abbrechen</button></div>
+    </form>
+  </dialog>
+  <dialog id="mcp-package-dialog">
+    <form id="mcp-package-form" class="stack">
+      <h3>MCP-Paket installieren</h3>
+      <label>Serverseitiger Paketpfad<input name="source" required placeholder="/srv/mcp/mein-paket"></label>
+      <div class="row"><button class="primary">Installieren</button><button type="button" data-close="mcp-package-dialog">Abbrechen</button></div>
+    </form>
+  </dialog>
+  <dialog id="mcp-instance-dialog">
+    <form id="mcp-instance-form" class="stack">
+      <h3>MCP-Instanz anlegen</h3>
+      <label>Instanz-ID<input name="id" required pattern="[A-Za-z0-9._-]+"></label>
+      <label>Paket<select name="package_id" required></select></label>
+      <label>Version<input name="version" required></label>
+      <label>Umgebung (KEY=VALUE, eine Zeile je Wert)<textarea name="environment" rows="4" placeholder="MCP_PORT=61000"></textarea></label>
+      <div class="row"><button class="primary">Anlegen</button><button type="button" data-close="mcp-instance-dialog">Abbrechen</button></div>
     </form>
   </dialog>
   <script src="/static/admin.js" defer></script>

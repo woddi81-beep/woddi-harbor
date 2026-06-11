@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.auth import current_user
+from app.auth import current_user, require_metrics_access
 from app.config import HarborSettings, LlmSettings, ModuleConfig
 from app.control import _build_messages, _context_for_chat
 from app.modules import module_status
@@ -22,6 +22,12 @@ class SecurityTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as context:
                 current_user(FakeRequest())
         self.assertEqual(context.exception.status_code, 503)
+
+    def test_metrics_token_grants_access_without_admin_password(self) -> None:
+        request = FakeRequest()
+        request.headers = {"Authorization": "Bearer monitoring-secret"}
+        with patch.dict("os.environ", {"HARBOR_METRICS_TOKEN": "monitoring-secret"}, clear=False):
+            self.assertIsNone(require_metrics_access(request))
 
     def test_module_status_redacts_nested_secrets(self) -> None:
         module = ModuleConfig(

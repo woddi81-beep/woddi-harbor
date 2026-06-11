@@ -28,17 +28,19 @@ async function renderOverview() {
 }
 async function renderModules() {
   const data = await api("/api/modules/overview");
-  $("content").innerHTML = `<div class="row"><button class="primary" data-action="module:new">Modul aus JSON anlegen</button></div><div class="grid">${data.modules.map((item) => card(item.name || item.id,
-    `${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.type)}</span><pre>${esc(JSON.stringify(item, null, 2))}</pre>`,
-    buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["JSON bearbeiten", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
-  ).join("")}</div>`;
+  $("content").innerHTML = `<div class="row"><button class="primary" data-action="module:new">Modul anlegen</button></div><div class="grid">${data.modules.map((item) => card(item.name || item.id,
+    `${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.type)}</span>
+    <p class="muted">${esc(item.base_url || item.path || `${item.host}:${item.port}`)}</p>
+    <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
+    buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["Bearbeiten", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
+  )).join("")}</div>`;
 }
 async function renderSources() {
   const data = await api("/api/sources");
   $("content").innerHTML = `<div class="grid">${data.sources.map((item) => card(item.id,
     `${badge(item.quality?.healthy, "gesund", "nicht produktiv")}<p>${esc(item.target)}</p><pre>${esc(JSON.stringify(item.quality, null, 2))}</pre>`,
     buttons([["Synchronisieren", `source:sync:${item.id}`]])
-  ).join("")}</div>`;
+  )).join("")}</div>`;
 }
 async function renderUsers() {
   const data = await api("/api/users");
@@ -46,17 +48,19 @@ async function renderUsers() {
     <div class="grid">${data.users.map((item) => card(item.username,
       `${badge(item.enabled, "aktiv", "deaktiviert")} <span class="badge">${esc(item.role)}</span><p class="muted">Module: ${esc(item.allowed_modules.join(", ") || "-")}<br>Tools: ${esc(item.allowed_tools.join(", ") || "-")}</p>`,
       buttons([["Bearbeiten", `user:edit:${item.username}`]])
-    ).join("")}</div>`;
+    )).join("")}</div>`;
   window.harborUsers = data.users;
 }
 async function renderMcp() {
   const data = await api("/api/mcp");
+  window.harborMcpPackages = data.packages;
   $("content").innerHTML = `<div class="row"><button class="primary" data-action="mcp:install">Paket installieren</button><button data-action="mcp:create">Instanz anlegen</button></div>
-    <h3>Pakete</h3><pre class="panel">${esc(JSON.stringify(data.packages, null, 2))}</pre>
+    <h3>Pakete</h3><div class="grid">${data.packages.map((item) => card(`${item.id} ${item.version}`, `<p class="muted">${esc(item.manifest?.driver || "-")} · ${esc((item.manifest?.tools || []).join(", ") || "keine Tools")}</p>`)).join("") || '<p class="muted">Noch keine Pakete installiert.</p>'}</div>
     <h3>Instanzen</h3><div class="grid">${data.instances.map((item) => card(item.id,
-      `${badge(item.running, "läuft", "gestoppt")}<pre>${esc(JSON.stringify(item, null, 2))}</pre>`,
+      `${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.package_id)}@${esc(item.package_version)}</span>
+      <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
       buttons([["Start", `mcp:start:${item.id}`], ["Stop", `mcp:stop:${item.id}`, true], ["Restart", `mcp:restart:${item.id}`], ["Rollback", `mcp:rollback:${item.id}`]])
-    ).join("")}</div>`;
+    )).join("")}</div>`;
 }
 async function renderTable(endpoint, key) {
   const data = await api(endpoint);
@@ -71,7 +75,7 @@ async function renderServices() {
   $("content").innerHTML = `<div class="grid">${data.services.map((item) => card(item.id,
     `<span class="badge">${esc(item.kind)}</span><p>${esc(item.systemd_mode || "nicht installiert")}</p>`,
     buttons([["Prüfen", `service:check:${item.id}`], ["Start", `service:start:${item.id}`], ["Stop", `service:stop:${item.id}`, true], ["Restart", `service:restart:${item.id}`]])
-  ).join("")}</div>`;
+  )).join("")}</div>`;
 }
 const renderers = {
   overview: renderOverview, modules: renderModules, sources: renderSources, users: renderUsers, mcp: renderMcp,
@@ -89,16 +93,12 @@ async function action(raw) {
   const id = rest.join(":");
   let path; let body;
   if (kind === "module" && verb === "new") {
-    const rawModule = prompt("Vollständige Modul-Konfiguration als JSON:", '{"id":"docs","type":"docs","path":"data/sources/docs","port":41010}');
-    if (!rawModule) return;
-    return requestAndRender("/api/modules", "POST", rawModule);
+    return openModule();
   }
   if (kind === "module" && verb === "edit") {
     try {
       const currentModule = await api(`/api/modules/${encodeURIComponent(id)}`);
-      const rawModule = prompt("Modul-Konfiguration bearbeiten:", JSON.stringify(currentModule, null, 2));
-      if (!rawModule) return;
-      return requestAndRender(`/api/modules/${encodeURIComponent(id)}`, "PUT", rawModule);
+      return openModule(currentModule);
     } catch (error) { $("notice").textContent = error.message; return; }
   }
   if (kind === "module" && verb === "delete") {
@@ -106,14 +106,21 @@ async function action(raw) {
     return requestAndRender(`/api/modules/${encodeURIComponent(id)}`, "DELETE");
   }
   if (kind === "mcp" && verb === "install") {
-    const source = prompt("Serverseitiger Pfad zu mcp-package.json oder Paketverzeichnis:");
-    if (!source) return;
-    return requestAndRender("/api/mcp/packages/install", "POST", JSON.stringify({ source }));
+    $("mcp-package-form").reset();
+    $("mcp-package-dialog").showModal();
+    return;
   }
   if (kind === "mcp" && verb === "create") {
-    const instance = prompt("MCP-Instanz als JSON:", '{"id":"instance","package_id":"package","version":"1.0.0","config":{}}');
-    if (!instance) return;
-    return requestAndRender("/api/mcp/instances", "POST", instance);
+    const packages = window.harborMcpPackages || [];
+    const select = $("mcp-instance-form").package_id;
+    select.replaceChildren(...packages.map((item) => new Option(`${item.id} @ ${item.version}`, `${item.id}|${item.version}`)));
+    $("mcp-instance-form").reset();
+    if (packages[0]) {
+      select.value = `${packages[0].id}|${packages[0].version}`;
+      $("mcp-instance-form").version.value = packages[0].version;
+    }
+    $("mcp-instance-dialog").showModal();
+    return;
   }
   if (kind === "module") path = `/api/modules/${encodeURIComponent(id)}/${verb}`;
   if (kind === "source") path = `/api/sources/${encodeURIComponent(id)}/sync`;
@@ -147,6 +154,58 @@ function openUser(username) {
   form.dataset.edit = user?.username || "";
   $("user-dialog").showModal();
 }
+function openModule(module = null) {
+  const form = $("module-form");
+  form.reset();
+  form.id.value = module?.id || "";
+  form.id.readOnly = Boolean(module);
+  form.name.value = module?.name || "";
+  form.type.value = module?.type || "docs";
+  form.path.value = module?.path || "";
+  form.base_url.value = module?.base_url || "";
+  form.port.value = module?.port || 0;
+  form.top_k.value = module?.top_k || 5;
+  form.timeout_seconds.value = module?.timeout_seconds || 30;
+  form.notes.value = module?.notes || "";
+  form.dataset.edit = module?.id || "";
+  $("module-dialog").showModal();
+}
+$("module-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const type = form.type.value;
+  const payload = {
+    id: form.id.value.trim(), name: form.name.value.trim(), type,
+    transport: type === "mcp_http" ? "remote" : "local",
+    remote_protocol: type === "mcp_http" ? "mcp" : "auto",
+    path: form.path.value.trim(), base_url: form.base_url.value.trim(),
+    port: Number(form.port.value || 0), top_k: Number(form.top_k.value || 5),
+    timeout_seconds: Number(form.timeout_seconds.value || 30), notes: form.notes.value.trim(),
+  };
+  const edit = form.dataset.edit;
+  await requestAndRender(edit ? `/api/modules/${encodeURIComponent(edit)}` : "/api/modules", edit ? "PUT" : "POST", JSON.stringify(payload));
+  if (!$("notice").textContent) $("module-dialog").close();
+  else if ($("notice").textContent === "Aktion abgeschlossen.") $("module-dialog").close();
+});
+$("mcp-package-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const source = event.currentTarget.source.value.trim();
+  await requestAndRender("/api/mcp/packages/install", "POST", JSON.stringify({ source }));
+  if ($("notice").textContent === "Aktion abgeschlossen.") $("mcp-package-dialog").close();
+});
+$("mcp-instance-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const [packageId, selectedVersion] = form.package_id.value.split("|");
+  const env = {};
+  for (const line of form.environment.value.split("\n")) {
+    const [key, ...value] = line.split("=");
+    if (key.trim()) env[key.trim()] = value.join("=").trim();
+  }
+  const payload = { id: form.id.value.trim(), package_id: packageId, version: form.version.value.trim() || selectedVersion, config: { env } };
+  await requestAndRender("/api/mcp/instances", "POST", JSON.stringify(payload));
+  if ($("notice").textContent === "Aktion abgeschlossen.") $("mcp-instance-dialog").close();
+});
 $("user-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -165,6 +224,10 @@ $("user-form").addEventListener("submit", async (event) => {
   } catch (error) { $("notice").textContent = error.message; }
 });
 $("user-cancel").onclick = () => $("user-dialog").close();
+$("mcp-instance-form").package_id.addEventListener("change", (event) => {
+  $("mcp-instance-form").version.value = event.target.value.split("|")[1] || "";
+});
+document.querySelectorAll("[data-close]").forEach((button) => { button.onclick = () => $(button.dataset.close).close(); });
 $("content").addEventListener("click", (event) => { const raw = event.target.dataset.action; if (raw) action(raw); });
 $("refresh").onclick = render;
 for (const view of views) {
