@@ -16,6 +16,7 @@ def _openstack_credentials() -> dict[str, str]:
         "OS_AUTH_URL": "",
         "OS_REGION_NAME": "",
         "OS_INTERFACE": "",
+        "OS_TIMEOUT": "30",
         "OS_AUTH_TYPE": "",
         "OS_TOKEN": "",
         "OS_APPLICATION_CREDENTIAL_ID": "",

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2 - 2026-06-12
+
+### Added
+
+- Configurable OpenStack timeout from 5 to 600 seconds
+- Separate timeout diagnostics for Keystone authentication, project discovery and SDK operations
+- OpenStack health reports the active timeout
+
+### Changed
+
+- Project discovery uses the configured timeout instead of a fixed 15 seconds
+- SDK requests retry one failed connection
+
 ## 0.4.1 - 2026-06-12
 
 ### Added

@@ -109,7 +109,8 @@ konfiguriert. Token und Identity/Auth URL sind Pflichtfelder; Projektname und
 Projektdomäne bleiben bei einem bereits projektgebundenen Token leer. Harbor
 verwendet das OpenStack Python SDK direkt. Bei einem leeren Service-Katalog
 ermittelt Harbor die erreichbaren Projekte automatisch. Gibt es mehrere, wird
-die gewünschte Projekt-ID im Admin-Portal eingetragen. Danach:
+die gewünschte Projekt-ID im Admin-Portal eingetragen. Der Timeout gilt für
+Authentifizierung, Projekt-Ermittlung und Service-Abfragen. Danach:
 
 ```bash
 .venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'

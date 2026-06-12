@@ -105,6 +105,7 @@ async function action(raw) {
       form.project_domain_name.value = configuration.project_domain_name || "";
       form.auth_url.value = configuration.auth_url || "";
       form.region_name.value = configuration.region_name || "";
+      form.timeout_seconds.value = configuration.timeout_seconds || 60;
       form.port.value = configuration.port || 0;
       form.token.required = !configuration.token_configured;
       form.token.placeholder = configuration.token_configured ? "Gesetzt; leer lassen zum Beibehalten" : "Token eingeben";
@@ -215,6 +216,7 @@ $("openstack-form").addEventListener("submit", async (event) => {
     token: form.token.value,
     auth_url: form.auth_url.value.trim(),
     region_name: form.region_name.value.trim(),
+    timeout_seconds: Number(form.timeout_seconds.value || 60),
     port: Number(form.port.value || 0),
   };
   try {

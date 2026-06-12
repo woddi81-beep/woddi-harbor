@@ -568,6 +568,22 @@ class ModuleTests(unittest.TestCase):
         self.assertIn("project-1", str(context.exception))
         self.assertIn("project-2", str(context.exception))
 
+    def test_openstack_backend_reports_compute_timeout_with_operation(self) -> None:
+        connection = FakeOpenStackConnection()
+        connection.compute.servers = lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("read timed out"))
+        backend = OpenStackBackend(
+            credentials={
+                "OS_AUTH_URL": "https://identity.example/v3",
+                "OS_TOKEN": "token",
+                "OS_PROJECT_ID": "project-1",
+                "OS_TIMEOUT": "90",
+            },
+            connection_factory=lambda _credentials: connection,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "server.list.*90s"):
+            backend.call_tool("list_servers", {})
+
     def test_openstack_sdk_connection_preserves_project_scoped_token(self) -> None:
         connection = create_openstack_connection(
             {
@@ -615,6 +631,7 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(connection.config.config["auth_type"], "v3token")
         self.assertEqual(connection.config.config["auth"]["project_id"], "project-1")
         self.assertNotIn("project_name", connection.config.config["auth"])
+        self.assertEqual(connection.config.config["timeout"], "60.0")
 
     def test_openstack_module_validation_accepts_named_token(self) -> None:
         module = ModuleConfig(

@@ -159,6 +159,7 @@ class OpenStackConfigureRequest(BaseModel):
     token: str = Field(default="", max_length=8192)
     auth_url: str = Field(min_length=1, max_length=2048)
     region_name: str = Field(default="", max_length=255)
+    timeout_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
     port: int = Field(default=0, ge=0, le=65535)
 
 
@@ -658,7 +659,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.4.1", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version="0.4.2", lifespan=lifespan)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
@@ -746,6 +747,7 @@ def create_app() -> FastAPI:
             "project_domain_name": str(settings.get("project_domain_name", "")),
             "auth_url": str(settings.get("auth_url", "")),
             "region_name": str(settings.get("region_name", "")),
+            "timeout_seconds": module.timeout_seconds if module and module.type == "openstack_mcp" else 60.0,
             "port": module.port if module and module.type == "openstack_mcp" else 0,
             "token_configured": bool(load_module_named_secret("openstack", "openstack_token")),
         }
@@ -771,7 +773,7 @@ def create_app() -> FastAPI:
             remote_protocol="mcp",
             host=existing.host if existing and existing.type == "openstack_mcp" else "127.0.0.1",
             port=body.port,
-            timeout_seconds=existing.timeout_seconds if existing and existing.type == "openstack_mcp" else 30.0,
+            timeout_seconds=body.timeout_seconds,
             tool_names=[
                 "list_servers",
                 "list_projects",

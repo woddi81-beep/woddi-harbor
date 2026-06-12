@@ -93,6 +93,7 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
         "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
         "OS_REGION_NAME": _resolve("region_name", "region_name_env"),
         "OS_INTERFACE": _resolve("interface", "interface_env"),
+        "OS_TIMEOUT": str(max(1.0, module.timeout_seconds)),
         "OS_AUTH_TYPE": auth_type or "v3applicationcredential",
         "OS_TOKEN": token,
         "OS_APPLICATION_CREDENTIAL_ID": _resolve("application_credential_id", "application_credential_id_env"),

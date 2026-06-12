@@ -63,6 +63,7 @@
       <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3"></label>
       <div class="form-grid">
         <label>Region<input name="region_name" placeholder="RegionOne"></label>
+        <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="60"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
       <p class="muted">Bei einem bereits projektgebundenen Token bleiben alle Projektfelder leer. Bei einem ungescopten Token ist die Projekt-ID am zuverlässigsten; alternativ Projektname und Domäne angeben. Harbor wählt automatisch, wenn der Token genau ein Projekt erreicht.</p>

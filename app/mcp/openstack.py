@@ -18,6 +18,21 @@ SERVER_VERSION = "0.1.0"
 DEFAULT_CACHE_TTL_SECONDS = 20.0
 
 
+def _timeout_seconds(credentials: dict[str, str]) -> float:
+    try:
+        return max(5.0, min(600.0, float(credentials.get("OS_TIMEOUT", "60"))))
+    except ValueError:
+        return 60.0
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return True
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    return "timeout" in name or "timed out" in message
+
+
 def openstack_sdk_available() -> bool:
     try:
         import openstack  # noqa: F401
@@ -29,11 +44,19 @@ def openstack_sdk_available() -> bool:
 def discover_accessible_projects(credentials: dict[str, str]) -> list[dict[str, str]]:
     auth_url = credentials["OS_AUTH_URL"].rstrip("/")
     token = credentials.get("OS_TOKEN", "")
-    response = httpx.get(
-        f"{auth_url}/auth/projects",
-        headers={"X-Auth-Token": token, "Accept": "application/json"},
-        timeout=15.0,
-    )
+    timeout_seconds = _timeout_seconds(credentials)
+    target = f"{auth_url}/auth/projects"
+    timeout = httpx.Timeout(timeout_seconds, connect=min(10.0, timeout_seconds))
+    try:
+        response = httpx.get(
+            target,
+            headers={"X-Auth-Token": token, "Accept": "application/json"},
+            timeout=timeout,
+        )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            f"OpenStack Projekt-Ermittlung an {target} hat nach {timeout_seconds:.0f}s nicht geantwortet."
+        ) from exc
     response.raise_for_status()
     payload = response.json()
     projects = payload.get("projects", []) if isinstance(payload, dict) else []
@@ -58,6 +81,8 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         "region_name": credentials.get("OS_REGION_NAME") or None,
         "interface": credentials.get("OS_INTERFACE") or None,
         "force_ipv4": True,
+        "timeout": _timeout_seconds(credentials),
+        "connect_retries": 1,
     }
     token = credentials.get("OS_TOKEN", "")
     project_id = credentials.get("OS_PROJECT_ID", "")
@@ -154,8 +179,17 @@ class OpenStackBackend:
             token = self.credentials.get("OS_TOKEN", "")
             has_explicit_scope = bool(self.credentials.get("OS_PROJECT_ID") or self.credentials.get("OS_PROJECT_NAME"))
             if token and not has_explicit_scope:
-                connection.authorize()
-                access = connection.session.auth.get_access(connection.session)
+                timeout_seconds = _timeout_seconds(self.credentials)
+                try:
+                    connection.authorize()
+                    access = connection.session.auth.get_access(connection.session)
+                except Exception as exc:
+                    if _is_timeout_error(exc):
+                        raise RuntimeError(
+                            f"OpenStack Authentifizierung an {self.credentials['OS_AUTH_URL']} "
+                            f"hat nach {timeout_seconds:.0f}s nicht geantwortet."
+                        ) from exc
+                    raise
                 if not access.has_service_catalog():
                     projects = self.project_discovery(self.credentials)
                     if len(projects) == 1:
@@ -180,7 +214,16 @@ class OpenStackBackend:
         cached = self._cache.get(cache_key)
         if cached is not None and time.monotonic() - cached.cached_at < self.cache_ttl_seconds:
             return cached.payload
-        payload = loader()
+        try:
+            payload = loader()
+        except Exception as exc:
+            if _is_timeout_error(exc):
+                raise RuntimeError(
+                    f"OpenStack Operation {operation} hat nach "
+                    f"{_timeout_seconds(self.credentials):.0f}s nicht geantwortet. "
+                    "Pruefe Service-Katalog, Region, Routing und Firewall."
+                ) from exc
+            raise
         self._cache[cache_key] = CachedResult(payload=payload, cached_at=time.monotonic())
         return payload
 
@@ -224,6 +267,7 @@ class OpenStackBackend:
             "backend": "openstacksdk",
             "openstack_sdk": openstack_sdk_available(),
             "auth_configured": bool(self.credentials.get("OS_AUTH_URL")),
+            "timeout_seconds": _timeout_seconds(self.credentials),
             "scope_mode": "project_id"
             if self.credentials.get("OS_PROJECT_ID")
             else "project_name"

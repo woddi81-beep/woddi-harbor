@@ -339,6 +339,9 @@ Liefert ein Token keinen Service-Katalog, fragt Harbor die erreichbaren Projekte
 bei Keystone ab. Bei genau einem Projekt scoped Harbor automatisch. Bei mehreren
 Projekten muss im Admin-Portal die Projekt-ID ausgewählt werden.
 
+Der OpenStack-Dialog enthält einen Timeout für Keystone- und Service-Aufrufe.
+Für langsam erreichbare private Clouds sind `60` bis `120` Sekunden sinnvoll.
+
 Harbor verwendet das OpenStack Python SDK direkt. Es gibt keinen externen
 CLI-Prozess und keine Abhängigkeit von `PATH` oder Symlinks:
 
