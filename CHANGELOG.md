@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 - 2026-06-12
+
+### Changed
+
+- OpenStack MCP uses `openstacksdk` directly instead of spawning the `openstack` CLI
+- OpenStack list/show tools use SDK compute, identity, image and network proxies
+- Generic read-only OpenStack access is restricted to an SDK resource allowlist
+
+### Added
+
+- `openstacksdk` is a managed Harbor runtime dependency
+- Production check reports a missing SDK when an OpenStack module is enabled
+
+### Removed
+
+- OpenStack CLI path lookup, subprocess execution and symlink requirements
+
 ## 0.3.14 - 2026-06-12
 
 ### Fixed

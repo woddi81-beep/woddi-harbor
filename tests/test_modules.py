@@ -11,7 +11,7 @@ from app import cli
 from app import modules as modules_module
 from app.config import ModuleConfig, load_module_named_secret, save_module_named_secret
 from app.mcp.netbox import NetBoxBackend
-from app.mcp.openstack import resolve_openstack_cli
+from app.mcp.openstack import OpenStackBackend, create_openstack_connection
 from app.modules import (
     discover_standard_mcp_module,
     execute_module,
@@ -113,6 +113,89 @@ class FakeWorkerHealthClient:
     def post(self, url: str, *, headers: dict | None = None, json: dict | None = None) -> FakeResponse:
         self.calls.append({"method": "POST", "url": url, "headers": headers or {}, "json": json or {}})
         return FakeResponse({"ok": self.execute_status_code == 200}, status_code=self.execute_status_code)
+
+
+class FakeOpenStackResource:
+    def __init__(self, **payload: object) -> None:
+        self.payload = payload
+
+    def to_dict(self) -> dict[str, object]:
+        return self.payload
+
+
+class FakeOpenStackCompute:
+    def servers(self, *, details: bool = False):
+        assert details
+        return [
+            FakeOpenStackResource(id="vm-1", name="prod-api-01", status="ACTIVE", project_id="project-1"),
+            FakeOpenStackResource(id="vm-2", name="test-api-01", status="SHUTOFF", project_id="project-2"),
+        ]
+
+    def find_server(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="vm-1", name=value, status="ACTIVE")
+
+    def flavors(self):
+        return [FakeOpenStackResource(id="flavor-1", name="m1.small", ram=2048)]
+
+    def find_flavor(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="flavor-1", name=value)
+
+
+class FakeOpenStackIdentity:
+    def projects(self):
+        return [FakeOpenStackResource(id="project-1", name="production")]
+
+    def find_project(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="project-1", name=value)
+
+
+class FakeOpenStackImage:
+    def images(self):
+        return [FakeOpenStackResource(id="image-1", name="ubuntu", status="active")]
+
+    def find_image(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="image-1", name=value)
+
+
+class FakeOpenStackNetwork:
+    def networks(self):
+        return [FakeOpenStackResource(id="network-1", name="private")]
+
+    def subnets(self):
+        return [FakeOpenStackResource(id="subnet-1", name="private-v4", network_id="network-1")]
+
+    def ports(self):
+        return [FakeOpenStackResource(id="port-1", name="", network_id="network-1", device_id="vm-1")]
+
+    def routers(self):
+        return [FakeOpenStackResource(id="router-1", name="edge")]
+
+    def find_network(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="network-1", name=value)
+
+    def find_subnet(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="subnet-1", name=value)
+
+    def find_port(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="port-1", name=value)
+
+    def find_router(self, value: str, *, ignore_missing: bool):
+        assert not ignore_missing
+        return FakeOpenStackResource(id="router-1", name=value)
+
+
+class FakeOpenStackConnection:
+    compute = FakeOpenStackCompute()
+    identity = FakeOpenStackIdentity()
+    image = FakeOpenStackImage()
+    network = FakeOpenStackNetwork()
 
 
 class ModuleTests(unittest.TestCase):
@@ -399,18 +482,64 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(credentials["OS_TOKEN"], "token-value")
         self.assertEqual(credentials["OS_PROJECT_NAME"], "demo")
 
-    def test_openstack_cli_resolver_prefers_current_virtualenv(self) -> None:
-        with tempfile.TemporaryDirectory() as bin_dir:
-            python_path = Path(bin_dir) / "python"
-            openstack_path = Path(bin_dir) / "openstack"
-            python_path.touch(mode=0o755)
-            openstack_path.touch(mode=0o755)
-            with (
-                patch("app.mcp.openstack.sys.executable", str(python_path)),
-                patch("app.mcp.openstack.shutil.which", return_value="/usr/bin/openstack"),
-                patch.dict("os.environ", {}, clear=True),
-            ):
-                self.assertEqual(resolve_openstack_cli(), str(openstack_path))
+    def test_openstack_backend_lists_servers_through_sdk(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: FakeOpenStackConnection(),
+        )
+
+        result = backend.call_tool("list_servers", {"status": "ACTIVE", "limit": 5})
+
+        rows = result["structuredContent"]["data"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "prod-api-01")
+
+    def test_openstack_backend_generic_readonly_uses_sdk(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: FakeOpenStackConnection(),
+        )
+
+        result = backend.call_tool(
+            "call_readonly",
+            {"resource": "network", "operation": "list", "filters": {"name": "private"}},
+        )
+
+        rows = result["structuredContent"]["data"]
+        self.assertEqual(rows, [{"id": "network-1", "name": "private"}])
+
+    def test_openstack_sdk_connection_preserves_project_scoped_token(self) -> None:
+        connection = create_openstack_connection(
+            {
+                "OS_AUTH_URL": "https://identity.example/v3",
+                "OS_TOKEN": "project-scoped-token",
+                "OS_PROJECT_NAME": "",
+                "OS_PROJECT_DOMAIN_NAME": "",
+            }
+        )
+
+        self.assertEqual(connection.config.config["auth_type"], "token")
+        self.assertEqual(
+            connection.config.config["auth"],
+            {
+                "auth_url": "https://identity.example/v3",
+                "token": "project-scoped-token",
+            },
+        )
+
+    def test_openstack_sdk_connection_scopes_unscoped_token(self) -> None:
+        connection = create_openstack_connection(
+            {
+                "OS_AUTH_URL": "https://identity.example/v3",
+                "OS_TOKEN": "unscoped-token",
+                "OS_PROJECT_NAME": "production",
+                "OS_PROJECT_DOMAIN_NAME": "Default",
+            }
+        )
+
+        self.assertEqual(connection.config.config["auth_type"], "v3token")
+        self.assertEqual(connection.config.config["auth"]["project_name"], "production")
+        self.assertEqual(connection.config.config["auth"]["project_domain_name"], "Default")
 
     def test_openstack_module_validation_accepts_named_token(self) -> None:
         module = ModuleConfig(

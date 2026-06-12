@@ -330,24 +330,22 @@ Mehr Details zum Upstream-Projekt:
 ## OpenStack MCP Integration
 
 Im Admin-Portal unter `/admin` im Bereich **Module** auf **OpenStack einbinden**
-klicken. Erforderlich sind Projektname, OpenStack Token und Identity/Auth URL;
+klicken. Erforderlich sind OpenStack Token und Identity/Auth URL. Projektname
+und Projektdomäne bleiben bei einem bereits projektgebundenen Token leer;
 Region und lokaler Port sind optional. Das Token wird nicht in
 `config/modules.local.json` gespeichert und nie an den Browser zurückgegeben.
 
-Auf dem Harbor-Host muss der OpenStack CLI-Client verfügbar sein:
+Harbor verwendet das OpenStack Python SDK direkt. Es gibt keinen externen
+CLI-Prozess und keine Abhängigkeit von `PATH` oder Symlinks:
 
 ```bash
-.venv/bin/python -m pip install python-openstackclient
-.venv/bin/openstack --version
+.venv/bin/python -m pip install -e . --no-build-isolation
+.venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
 ./harbor.sh cli module start openstack
 ./harbor.sh cli module discover openstack
 ./harbor.sh cli module test openstack
 ./harbor.sh cli module call openstack list_servers '{}'
 ```
-
-Der Worker sucht den Client zuerst direkt neben seinem Python-Interpreter, also
-normalerweise unter `.venv/bin/openstack`. Optional kann ein abweichender Pfad
-über `OPENSTACK_CLI=/pfad/openstack` gesetzt werden.
 
 Die OpenStack-Werkzeuge sind auf lesende `list`- und `show`-Operationen begrenzt.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "woddi-harbor"
-version = "0.3.14"
+version = "0.4.0"
 description = "Local-first AI control hub for external LLMs, search modules, and MCP services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.115,<1.0",
   "beautifulsoup4>=4.12,<5.0",
   "httpx>=0.28,<1.0",
+  "openstacksdk>=4.7,<5.0",
   "pydantic>=2.8,<3.0",
   "rich>=14.0,<15.0",
   "textual>=0.76,<1.0",

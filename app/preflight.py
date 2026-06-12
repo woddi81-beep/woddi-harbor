@@ -5,6 +5,7 @@ import stat
 from typing import Any
 
 from .config import CONFIG_DIR, INTERNAL_TOKEN_PATH, load_modules, load_settings, load_users
+from .mcp.openstack import openstack_sdk_available
 from .modules import validation_errors_by_module
 from .sources import source_overview
 from .state import DATABASE_PATH, initialize_database
@@ -41,6 +42,13 @@ def production_check() -> dict[str, Any]:
     validation = validation_errors_by_module(modules)
     invalid = {module_id: errors for module_id, errors in validation.items() if errors}
     add("modules", not invalid, f"{len(modules)} Module, {len(invalid)} ungueltig: {invalid}")
+    openstack_modules = [module.id for module in modules if module.type == "openstack_mcp" and module.enabled]
+    sdk_available = openstack_sdk_available()
+    add(
+        "openstack_sdk",
+        not openstack_modules or sdk_available,
+        f"OpenStack-Module {openstack_modules}; openstacksdk {'installiert' if sdk_available else 'fehlt'}",
+    )
     sources = source_overview()
     unhealthy_sources = [
         source["id"]

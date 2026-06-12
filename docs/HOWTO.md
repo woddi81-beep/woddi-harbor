@@ -105,10 +105,12 @@ Bei `Errno 111` den Log-Auszug in der strukturierten Diagnose prüfen. Der Fehle
 bedeutet, dass der lokale Worker nicht lauscht oder beim Start beendet wurde.
 
 OpenStack wird im Admin-Portal unter **Module**, **OpenStack einbinden**
-konfiguriert. Projektname, Token und Identity/Auth URL sind Pflichtfelder. Danach:
+konfiguriert. Token und Identity/Auth URL sind Pflichtfelder; Projektname und
+Projektdomäne bleiben bei einem bereits projektgebundenen Token leer. Harbor
+verwendet das OpenStack Python SDK direkt. Danach:
 
 ```bash
-command -v openstack
+.venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
 .venv/bin/woddi-harbor module start openstack
 .venv/bin/woddi-harbor module discover openstack
 .venv/bin/woddi-harbor module test openstack

@@ -2,13 +2,9 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
-import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -21,14 +17,60 @@ SERVER_VERSION = "0.1.0"
 DEFAULT_CACHE_TTL_SECONDS = 20.0
 
 
-def resolve_openstack_cli() -> str:
-    configured = os.getenv("OPENSTACK_CLI", "").strip()
-    candidates = [Path(configured)] if configured else []
-    candidates.append(Path(sys.executable).resolve().with_name("openstack"))
-    for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return shutil.which("openstack") or ""
+def openstack_sdk_available() -> bool:
+    try:
+        import openstack  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def create_openstack_connection(credentials: dict[str, str]) -> Any:
+    try:
+        from openstack.connection import Connection
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenStack SDK nicht installiert. Installiere Harbor erneut oder fuehre aus: "
+            "python -m pip install openstacksdk"
+        ) from exc
+
+    options: dict[str, Any] = {
+        "auth_url": credentials["OS_AUTH_URL"],
+        "region_name": credentials.get("OS_REGION_NAME") or None,
+        "interface": credentials.get("OS_INTERFACE") or None,
+        "force_ipv4": True,
+    }
+    token = credentials.get("OS_TOKEN", "")
+    project_name = credentials.get("OS_PROJECT_NAME", "")
+    if token:
+        options.update(
+            {
+                "auth_type": "v3token" if project_name else "token",
+                "token": token,
+                "project_name": project_name or None,
+                "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or None,
+            }
+        )
+    elif credentials.get("OS_APPLICATION_CREDENTIAL_ID") and credentials.get("OS_APPLICATION_CREDENTIAL_SECRET"):
+        options.update(
+            {
+                "auth_type": "v3applicationcredential",
+                "application_credential_id": credentials["OS_APPLICATION_CREDENTIAL_ID"],
+                "application_credential_secret": credentials["OS_APPLICATION_CREDENTIAL_SECRET"],
+            }
+        )
+    else:
+        options.update(
+            {
+                "auth_type": credentials.get("OS_AUTH_TYPE") or "password",
+                "username": credentials.get("OS_USERNAME"),
+                "password": credentials.get("OS_PASSWORD"),
+                "project_name": project_name or None,
+                "user_domain_name": credentials.get("OS_USER_DOMAIN_NAME") or "Default",
+                "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default",
+            }
+        )
+    return Connection(**{key: value for key, value in options.items() if value is not None})
 
 
 def _jsonrpc_result(request_id: Any, result: dict[str, Any], *, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -62,8 +104,8 @@ def _tool_schema() -> list[dict[str, Any]]:
         {"name": "list_ports", "description": "List OpenStack ports.", "inputSchema": {"type": "object", "properties": {"server": {"type": "string"}, "network": {"type": "string"}, "limit": {"type": "integer", "minimum": 1}}}},
         {"name": "list_routers", "description": "List OpenStack routers.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "limit": {"type": "integer", "minimum": 1}}}},
         {
-            "name": "call_cli_readonly",
-            "description": "Execute a whitelisted read-only OpenStack CLI list/show command.",
+            "name": "call_readonly",
+            "description": "Execute a whitelisted read-only OpenStack SDK list/show operation.",
             "inputSchema": {"type": "object", "properties": {"resource": {"type": "string"}, "operation": {"type": "string", "enum": ["list", "show"]}, "target": {"type": "string"}, "filters": {"type": "object"}, "limit": {"type": "integer", "minimum": 1}}, "required": ["resource", "operation"]},
         },
     ]
@@ -79,71 +121,63 @@ class CachedResult:
 class OpenStackBackend:
     credentials: dict[str, str]
     cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS
+    connection_factory: Callable[[dict[str, str]], Any] = create_openstack_connection
     _cache: dict[str, CachedResult] = field(default_factory=dict)
+    _connection: Any = field(default=None, init=False, repr=False)
 
-    def _base_env(self) -> dict[str, str]:
-        import os
+    def _get_connection(self) -> Any:
+        if self._connection is None:
+            self._connection = self.connection_factory(self.credentials)
+        return self._connection
 
-        env = os.environ.copy()
-        for key, value in self.credentials.items():
-            if value:
-                env[key] = value
-        default_auth_type = (
-            "v3token"
-            if self.credentials.get("OS_TOKEN") and self.credentials.get("OS_PROJECT_NAME")
-            else "token"
-            if self.credentials.get("OS_TOKEN")
-            else "v3applicationcredential"
-        )
-        env.setdefault("OS_AUTH_TYPE", self.credentials.get("OS_AUTH_TYPE") or default_auth_type)
-        env.setdefault("PYTHONUNBUFFERED", "1")
-        return env
-
-    def _cache_key(self, command: list[str]) -> str:
-        return json.dumps(command, ensure_ascii=False, separators=(",", ":"))
-
-    def _run_openstack(self, args: list[str], *, timeout: float = 30.0, use_cache: bool = True) -> Any:
-        binary = resolve_openstack_cli()
-        if not binary:
-            expected = Path(sys.executable).resolve().with_name("openstack")
-            raise RuntimeError(
-                f"OpenStack CLI nicht gefunden. Installiere sie mit: {sys.executable} -m pip install python-openstackclient "
-                f"(erwarteter Pfad: {expected})"
-            )
-        command = [binary, *args, "-f", "json"]
-        cache_key = self._cache_key(command)
-        if use_cache:
-            cached = self._cache.get(cache_key)
-            if cached is not None and time.monotonic() - cached.cached_at < self.cache_ttl_seconds:
-                return cached.payload
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            env=self._base_env(),
-            timeout=timeout,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or f"OpenStack CLI exit {completed.returncode}")
-        try:
-            payload = json.loads(completed.stdout.strip() or "[]")
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"OpenStack CLI lieferte kein gueltiges JSON: {exc}") from exc
-        if use_cache:
-            self._cache[cache_key] = CachedResult(payload=payload, cached_at=time.monotonic())
+    def _cached(self, operation: str, arguments: dict[str, Any], loader: Callable[[], Any]) -> Any:
+        cache_key = json.dumps([operation, arguments], ensure_ascii=False, sort_keys=True, default=str)
+        cached = self._cache.get(cache_key)
+        if cached is not None and time.monotonic() - cached.cached_at < self.cache_ttl_seconds:
+            return cached.payload
+        payload = loader()
+        self._cache[cache_key] = CachedResult(payload=payload, cached_at=time.monotonic())
         return payload
 
-    def _limit_rows(self, payload: Any, limit: int | None) -> Any:
-        if limit is None or not isinstance(payload, list):
-            return payload
-        return payload[:limit]
+    @staticmethod
+    def _serialize(resource: Any) -> dict[str, Any]:
+        if isinstance(resource, dict):
+            payload = resource
+        elif hasattr(resource, "to_dict"):
+            payload = resource.to_dict()
+        else:
+            payload = {
+                key: value
+                for key, value in vars(resource).items()
+                if not key.startswith("_")
+            }
+        return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
+
+    def _list_resources(
+        self,
+        operation: str,
+        arguments: dict[str, Any],
+        loader: Callable[[], Any],
+        *,
+        field_filters: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = self._cached(operation, arguments, lambda: [self._serialize(item) for item in loader()])
+        name = str(arguments.get("name", "")).strip().lower()
+        if name:
+            rows = [row for row in rows if name in str(row.get("name") or row.get("id") or "").lower()]
+        for argument_name, field_name in (field_filters or {}).items():
+            expected = str(arguments.get(argument_name, "")).strip().lower()
+            if expected:
+                rows = [row for row in rows if expected in str(row.get(field_name, "")).lower()]
+        limit = int(arguments.get("limit", 0) or 0)
+        return rows[:limit] if limit > 0 else rows
 
     def health(self) -> dict[str, Any]:
         return {
-            "ok": True,
+            "ok": openstack_sdk_available(),
             "server": SERVER_NAME,
-            "openstack_cli": resolve_openstack_cli(),
+            "backend": "openstacksdk",
+            "openstack_sdk": openstack_sdk_available(),
             "auth_configured": bool(self.credentials.get("OS_AUTH_URL")),
             "credential_mode": "token"
             if self.credentials.get("OS_TOKEN")
@@ -160,54 +194,88 @@ class OpenStackBackend:
             tool["annotations"] = {"title": tool["name"], "readOnlyHint": True}
         return tools
 
-    def _apply_name_filter(self, payload: Any, name: str | None) -> Any:
-        if not name or not isinstance(payload, list):
-            return payload
-        normalized = name.lower()
-        return [item for item in payload if isinstance(item, dict) and normalized in str(item.get("Name") or item.get("name") or item.get("ID") or "").lower()]
-
-    def _apply_generic_filters(self, payload: Any, filters: dict[str, Any]) -> Any:
-        if not isinstance(payload, list):
-            return payload
-        rows = payload
+    def _apply_generic_filters(self, rows: list[dict[str, Any]], filters: dict[str, Any]) -> list[dict[str, Any]]:
         for key, value in filters.items():
             if value is None or value == "":
                 continue
             normalized = str(value).lower()
-            rows = [item for item in rows if isinstance(item, dict) and normalized in str(item.get(key) or item.get(key.title()) or "").lower()]
+            rows = [item for item in rows if normalized in str(item.get(key) or "").lower()]
         return rows
 
-    def _call_list(self, noun: str, arguments: dict[str, Any], *, extra_args: list[str] | None = None, filter_keys: dict[str, str] | None = None) -> Any:
-        payload = self._run_openstack([noun, "list", *(extra_args or [])])
-        rows = payload
-        if isinstance(filter_keys, dict):
-            mapped_filters = {filter_keys[key]: value for key, value in arguments.items() if key in filter_keys}
-            rows = self._apply_generic_filters(rows, mapped_filters)
-        rows = self._apply_name_filter(rows, str(arguments.get("name", "")).strip() or None)
-        return self._limit_rows(rows, int(arguments["limit"]) if "limit" in arguments and arguments.get("limit") else None)
+    def _resource_list(self, resource: str, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+        connection = self._get_connection()
+        loaders: dict[str, Callable[[], Any]] = {
+            "server": lambda: connection.compute.servers(details=True),
+            "project": lambda: connection.identity.projects(),
+            "image": lambda: connection.image.images(),
+            "flavor": lambda: connection.compute.flavors(),
+            "network": lambda: connection.network.networks(),
+            "subnet": lambda: connection.network.subnets(),
+            "port": lambda: connection.network.ports(),
+            "router": lambda: connection.network.routers(),
+        }
+        return self._list_resources(f"{resource}.list", arguments, loaders[resource])
+
+    def _resource_show(self, resource: str, target: str) -> dict[str, Any]:
+        connection = self._get_connection()
+        finders: dict[str, Callable[[str], Any]] = {
+            "server": lambda value: connection.compute.find_server(value, ignore_missing=False),
+            "project": lambda value: connection.identity.find_project(value, ignore_missing=False),
+            "image": lambda value: connection.image.find_image(value, ignore_missing=False),
+            "flavor": lambda value: connection.compute.find_flavor(value, ignore_missing=False),
+            "network": lambda value: connection.network.find_network(value, ignore_missing=False),
+            "subnet": lambda value: connection.network.find_subnet(value, ignore_missing=False),
+            "port": lambda value: connection.network.find_port(value, ignore_missing=False),
+            "router": lambda value: connection.network.find_router(value, ignore_missing=False),
+        }
+        return self._cached(f"{resource}.show", {"target": target}, lambda: self._serialize(finders[resource](target)))
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        connection = self._get_connection()
         if name == "list_servers":
-            payload = self._call_list("server", arguments, filter_keys={"status": "Status", "project": "Project ID"})
+            payload = self._list_resources(
+                "server.list",
+                arguments,
+                lambda: connection.compute.servers(details=True),
+                field_filters={"status": "status", "project": "project_id"},
+            )
             return self._tool_result(name, arguments, payload)
         if name == "get_server":
-            payload = self._run_openstack(["server", "show", str(arguments["server"]).strip()], use_cache=True)
+            payload = self._resource_show("server", str(arguments["server"]).strip())
             return self._tool_result(name, arguments, payload)
         if name == "list_projects":
-            return self._tool_result(name, arguments, self._call_list("project", arguments))
+            return self._tool_result(name, arguments, self._resource_list("project", arguments))
         if name == "list_images":
-            return self._tool_result(name, arguments, self._call_list("image", arguments, filter_keys={"status": "Status"}))
+            payload = self._list_resources(
+                "image.list",
+                arguments,
+                lambda: connection.image.images(),
+                field_filters={"status": "status"},
+            )
+            return self._tool_result(name, arguments, payload)
         if name == "list_flavors":
-            return self._tool_result(name, arguments, self._call_list("flavor", arguments))
+            return self._tool_result(name, arguments, self._resource_list("flavor", arguments))
         if name == "list_networks":
-            return self._tool_result(name, arguments, self._call_list("network", arguments))
+            return self._tool_result(name, arguments, self._resource_list("network", arguments))
         if name == "list_subnets":
-            return self._tool_result(name, arguments, self._call_list("subnet", arguments, filter_keys={"network": "Network"}))
+            payload = self._list_resources(
+                "subnet.list",
+                arguments,
+                lambda: connection.network.subnets(),
+                field_filters={"network": "network_id"},
+            )
+            return self._tool_result(name, arguments, payload)
         if name == "list_ports":
-            return self._tool_result(name, arguments, self._call_list("port", arguments, filter_keys={"server": "Device ID", "network": "Network"}))
+            payload = self._list_resources(
+                "port.list",
+                arguments,
+                lambda: connection.network.ports(),
+                field_filters={"server": "device_id", "network": "network_id"},
+            )
+            return self._tool_result(name, arguments, payload)
         if name == "list_routers":
-            return self._tool_result(name, arguments, self._call_list("router", arguments))
-        if name == "call_cli_readonly":
+            return self._tool_result(name, arguments, self._resource_list("router", arguments))
+        if name in {"call_readonly", "call_cli_readonly"}:
             resource = str(arguments["resource"]).strip().lower()
             operation = str(arguments["operation"]).strip().lower()
             allowed_resources = {"server", "project", "image", "flavor", "network", "subnet", "port", "router"}
@@ -217,10 +285,10 @@ class OpenStackBackend:
                 target = str(arguments.get("target", "")).strip()
                 if not target:
                     raise ValueError("target ist fuer show erforderlich.")
-                payload = self._run_openstack([resource, "show", target], use_cache=True)
+                payload = self._resource_show(resource, target)
             elif operation == "list":
                 filters = arguments.get("filters")
-                payload = self._call_list(resource, {"limit": arguments.get("limit")})
+                payload = self._resource_list(resource, {"limit": arguments.get("limit")})
                 if filters is not None:
                     if not isinstance(filters, dict):
                         raise ValueError("filters muss ein Objekt sein.")
@@ -288,12 +356,10 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
             return _jsonrpc_error(request_id, -32602, "Invalid params", data=f"Missing required argument: {exc.args[0]}", status_code=400, headers=session_headers)
         except ValueError as exc:
             return _jsonrpc_error(request_id, -32602, "Invalid params", data=str(exc), status_code=400, headers=session_headers)
-        except subprocess.TimeoutExpired as exc:
-            return _jsonrpc_error(request_id, -32002, "OpenStack request timed out", data=str(exc), headers=session_headers)
         except Exception as exc:
             return _jsonrpc_error(request_id, -32000, "Server error", data=str(exc), headers=session_headers)
 
     return app
 
 
-__all__ = ["create_app", "OpenStackBackend", "MCP_PROTOCOL_VERSION"]
+__all__ = ["create_app", "create_openstack_connection", "OpenStackBackend", "MCP_PROTOCOL_VERSION"]
