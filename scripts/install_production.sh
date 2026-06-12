@@ -5,8 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-manual}"
 
 cd "$ROOT"
+python3 tools/verify_installation.py --source-only
 python3 -m venv .venv
 .venv/bin/python -m pip install --no-build-isolation -e .
+.venv/bin/python tools/verify_installation.py
 .venv/bin/woddi-harbor init
 
 if [[ "$MODE" == "manual" ]]; then

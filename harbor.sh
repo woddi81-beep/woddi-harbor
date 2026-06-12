@@ -115,8 +115,10 @@ ensure_venv() {
 
 install_project() {
   ensure_venv
+  "$PYTHON_BIN" "$ROOT_DIR/tools/verify_installation.py" --source-only
   log "Installiere woddi-harbor in die virtuelle Umgebung"
   "$VENV_DIR/bin/python" -m pip install --no-build-isolation -e "$ROOT_DIR"
+  "$VENV_DIR/bin/python" "$ROOT_DIR/tools/verify_installation.py"
 }
 
 run_cli() {

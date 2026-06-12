@@ -62,7 +62,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.3.0.md`
+- `docs/RELEASE_NOTES_v0.3.1.md`
 
 ## Struktur
 

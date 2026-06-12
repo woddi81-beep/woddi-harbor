@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-06-12
+
+### Fixed
+
+- Installation now rejects incomplete source checkouts before starting Harbor
+- Post-install verification detects missing modules and foreign top-level `app` packages
+- Production and shell installers verify the effective Python import origin
+
 ## 0.3.0 - 2026-06-11
 
 ### Added
