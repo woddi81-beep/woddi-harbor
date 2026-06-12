@@ -12,6 +12,8 @@ from email import policy
 from pathlib import Path
 from typing import Literal
 
+from bs4 import BeautifulSoup
+
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./:-]{2,}")
 TEXT_EXTENSIONS = {
     ".txt",
@@ -310,6 +312,11 @@ def _text_to_document(path: Path, *, source_id: str = "", source_label: str = ""
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return None
+    if path.suffix.lower() in {".html", ".htm"}:
+        soup = BeautifulSoup(text, "html.parser")
+        for element in soup(["script", "style", "nav", "svg", "noscript"]):
+            element.decompose()
+        text = "\n".join(soup.stripped_strings)
     stat = path.stat()
     return IndexedDocument(
         title=path.name,

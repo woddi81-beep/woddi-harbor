@@ -22,6 +22,8 @@ SOURCES_LOCAL_CONFIG_PATH = CONFIG_DIR / "sources.local.json"
 SOURCES_RUNTIME_DIR = RUNTIME_DIR / "sources"
 SOURCES_DATA_DIR = DATA_DIR / "sources"
 SOURCE_LOCK_DIR = RUNTIME_DIR / "locks"
+DOCUMENT_TEXT_EXTENSIONS = {".md", ".markdown", ".html", ".htm"}
+DOCUMENT_ASSET_EXTENSIONS = {".png"}
 
 
 @dataclass
@@ -92,7 +94,7 @@ def configure_document_sources(operations_path: str, customer_path: str) -> dict
     if missing:
         raise ValueError(f"Dokumentverzeichnis nicht gefunden: {', '.join(missing)}")
 
-    extensions = [".md", ".markdown"]
+    extensions = sorted(DOCUMENT_TEXT_EXTENSIONS | DOCUMENT_ASSET_EXTENSIONS)
     sources = [
         ManagedSource(
             id="operation-docs",
@@ -211,22 +213,33 @@ def source_quality(path: Path, include_extensions: list[str] | None = None) -> d
         if item.is_file() and not item.is_symlink() and (not extensions or item.suffix.lower() in extensions)
     ]
     total_bytes = 0
+    text_bytes = 0
+    text_files = 0
+    asset_files = 0
     empty_files = 0
     hashes: dict[str, int] = {}
     for item in files:
         content = item.read_bytes()
         total_bytes += len(content)
-        if not content.strip():
-            empty_files += 1
+        if item.suffix.lower() in DOCUMENT_ASSET_EXTENSIONS:
+            asset_files += 1
+        else:
+            text_files += 1
+            text_bytes += len(content)
+            if not content.strip():
+                empty_files += 1
         digest = hashlib.sha256(content).hexdigest()
         hashes[digest] = hashes.get(digest, 0) + 1
     duplicate_files = sum(count - 1 for count in hashes.values() if count > 1)
     return {
         "files": len(files),
         "bytes": total_bytes,
+        "text_files": text_files,
+        "text_bytes": text_bytes,
+        "asset_files": asset_files,
         "empty_files": empty_files,
         "duplicate_files": duplicate_files,
-        "healthy": bool(files and total_bytes >= 100),
+        "healthy": bool(text_files and text_bytes >= 100),
     }
 
 

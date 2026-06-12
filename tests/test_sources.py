@@ -18,23 +18,38 @@ class SourceQualityTests(unittest.TestCase):
         self.assertEqual(quality["duplicate_files"], 1)
         self.assertTrue(quality["healthy"])
 
-    def test_local_copy_keeps_only_configured_extensions(self) -> None:
+    def test_local_copy_keeps_document_text_and_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             origin = root / "origin"
             target = root / "target"
             origin.mkdir()
             (origin / "guide.md").write_text("# Guide\n", encoding="utf-8")
+            (origin / "guide.html").write_text("<h1>Guide</h1>", encoding="utf-8")
+            (origin / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\n")
             (origin / "script.sh").write_text("exit 0\n", encoding="utf-8")
             _copy_local(
                 ManagedSource(
                     id="docs",
                     kind="local",
                     source_path=str(origin),
-                    include_extensions=[".md"],
+                    include_extensions=[".md", ".html", ".png"],
                 ),
                 target,
             )
 
             self.assertTrue((target / "guide.md").is_file())
+            self.assertTrue((target / "guide.html").is_file())
+            self.assertTrue((target / "diagram.png").is_file())
             self.assertFalse((target / "script.sh").exists())
+
+    def test_images_alone_do_not_pass_source_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\n" * 20)
+
+            quality = source_quality(root, [".png"])
+
+        self.assertEqual(quality["asset_files"], 1)
+        self.assertEqual(quality["text_files"], 0)
+        self.assertFalse(quality["healthy"])

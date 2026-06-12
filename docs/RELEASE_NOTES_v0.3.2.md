@@ -12,5 +12,4 @@ Production documentation is configured from the existing Markdown repositories:
 .venv/bin/woddi-harbor source sync customer-docs
 ```
 
-Host-specific paths are stored in ignored `config/sources.local.json`. Only `.md`
-and `.markdown` files are copied into Harbor's managed document directories.
+Host-specific paths are stored in ignored `config/sources.local.json`.

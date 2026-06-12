@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.2
+git checkout v0.3.3
 scripts/install_production.sh manual
 ```
 
@@ -59,9 +59,11 @@ konfiguriert:
 .venv/bin/woddi-harbor source sync customer-docs
 ```
 
-Harbor kopiert nur `.md` und `.markdown` Dateien in seine verwalteten
-Dokumentverzeichnisse. Die hostspezifischen Pfade werden in der nicht versionierten
-Datei `config/sources.local.json` gespeichert. Anschliessend:
+Harbor kopiert `.md`, `.markdown`, `.html`, `.htm` und `.png` in seine verwalteten
+Dokumentverzeichnisse. HTML wird als sichtbarer Text indexiert; PNG-Dateien bleiben
+als zugehoerige Assets erhalten und werden nicht als Binaertext indexiert. Die
+hostspezifischen Pfade werden in der nicht versionierten Datei
+`config/sources.local.json` gespeichert. Anschliessend:
 
 ```bash
 .venv/bin/woddi-harbor source list

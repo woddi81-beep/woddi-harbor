@@ -9,6 +9,24 @@ from app.search import ensure_index, load_index_meta
 
 
 class SearchCacheTests(unittest.TestCase):
+    def test_html_is_indexed_as_visible_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "docs"
+            root.mkdir()
+            (root / "guide.html").write_text(
+                "<html><head><style>.x{}</style></head><body><h1>Harbor Guide</h1><script>ignored()</script><p>Visible content</p></body></html>",
+                encoding="utf-8",
+            )
+            index_path = Path(tmpdir) / "index.json"
+
+            index, rebuilt = ensure_index("docs", [("docs-source", "Docs", root)], index_path)
+
+            self.assertTrue(rebuilt)
+            self.assertEqual(index.document_count, 1)
+            self.assertIn("Harbor Guide", index.documents[0].text)
+            self.assertIn("Visible content", index.documents[0].text)
+            self.assertNotIn("ignored", index.documents[0].text)
+
     def test_ensure_index_reuses_memory_cache_within_staleness_ttl(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "docs"

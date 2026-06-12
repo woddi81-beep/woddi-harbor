@@ -30,6 +30,6 @@ class ReferenceImportTests(unittest.TestCase):
         configured = save_sources.call_args.args[0]
         self.assertEqual(configured[0].source_path, str(operations))
         self.assertEqual(configured[1].source_path, str(customer))
-        self.assertEqual(configured[0].include_extensions, [".md", ".markdown"])
+        self.assertEqual(configured[0].include_extensions, [".htm", ".html", ".markdown", ".md", ".png"])
         self.assertEqual(len(save_modules.call_args.args[0]), 2)
         self.assertTrue(result["ok"])

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3 - 2026-06-12
+
+### Added
+
+- HTML documentation is normalized to visible text before indexing
+- PNG documentation assets are preserved alongside Markdown and HTML
+- Source quality reports distinguish searchable text from binary assets
+
 ## 0.3.2 - 2026-06-12
 
 ### Fixed
