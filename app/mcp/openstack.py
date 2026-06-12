@@ -75,7 +75,8 @@ class OpenStackBackend:
         for key, value in self.credentials.items():
             if value:
                 env[key] = value
-        env.setdefault("OS_AUTH_TYPE", self.credentials.get("OS_AUTH_TYPE") or "v3applicationcredential")
+        default_auth_type = "token" if self.credentials.get("OS_TOKEN") else "v3applicationcredential"
+        env.setdefault("OS_AUTH_TYPE", self.credentials.get("OS_AUTH_TYPE") or default_auth_type)
         env.setdefault("PYTHONUNBUFFERED", "1")
         return env
 
@@ -121,9 +122,13 @@ class OpenStackBackend:
             "server": SERVER_NAME,
             "openstack_cli": shutil.which("openstack") or "",
             "auth_configured": bool(self.credentials.get("OS_AUTH_URL")),
-            "credential_mode": "application_credential"
+            "credential_mode": "token"
+            if self.credentials.get("OS_TOKEN")
+            else "application_credential"
             if self.credentials.get("OS_APPLICATION_CREDENTIAL_ID") and self.credentials.get("OS_APPLICATION_CREDENTIAL_SECRET")
-            else "password" if self.credentials.get("OS_USERNAME") and self.credentials.get("OS_PASSWORD") else "unknown",
+            else "password"
+            if self.credentials.get("OS_USERNAME") and self.credentials.get("OS_PASSWORD")
+            else "unknown",
         }
 
     def list_tools(self) -> list[dict[str, Any]]:

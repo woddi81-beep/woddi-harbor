@@ -49,6 +49,24 @@
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="module-dialog">Abbrechen</button></div>
     </form>
   </dialog>
+  <dialog id="openstack-dialog">
+    <form id="openstack-form" class="stack">
+      <h3>OpenStack einbinden</h3>
+      <label>Projektname<input name="project_name" required autocomplete="off"></label>
+      <label>
+        <span>OpenStack Token <span class="help" title="openstack token issue" aria-label="openstack token issue">?</span></span>
+        <input name="token" type="password" autocomplete="new-password" placeholder="Token eingeben">
+      </label>
+      <p id="openstack-token-state" class="muted"></p>
+      <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3"></label>
+      <div class="form-grid">
+        <label>Region<input name="region_name" placeholder="RegionOne"></label>
+        <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
+      </div>
+      <p class="muted">Das Token wird serverseitig mit Dateirechten 0600 gespeichert und nie wieder an den Browser übertragen.</p>
+      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="openstack-dialog">Abbrechen</button></div>
+    </form>
+  </dialog>
   <dialog id="mcp-package-dialog">
     <form id="mcp-package-form" class="stack">
       <h3>MCP-Paket installieren</h3>

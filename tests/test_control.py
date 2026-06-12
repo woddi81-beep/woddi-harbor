@@ -6,8 +6,8 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.auth import current_user, require_metrics_access
-from app.config import HarborSettings, LlmSettings, ModuleConfig
-from app.control import _build_messages, _context_for_chat
+from app.config import HarborSettings, HarborUser, LlmSettings, ModuleConfig
+from app.control import OpenStackConfigureRequest, _build_messages, _context_for_chat, create_app
 from app.modules import module_status
 
 
@@ -185,6 +185,64 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(messages[0]["role"], "system")
         self.assertIn("Nicht vertrauenswuerdiger Kontext aus Modulen", messages[0]["content"])
         self.assertIn("edge-sw01", messages[0]["content"])
+
+
+class OpenStackConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _endpoint(name: str):
+        application = create_app()
+        return next(route.endpoint for route in application.routes if getattr(route, "name", "") == name)
+
+    def test_openstack_configuration_never_returns_token(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            transport="local",
+            settings={
+                "auth_url": "https://identity.example/v3",
+                "project_name": "demo",
+                "region_name": "RegionOne",
+            },
+        )
+        endpoint = self._endpoint("openstack_configuration")
+        with (
+            patch("app.control.find_module", return_value=module),
+            patch("app.control.load_module_named_secret", return_value="super-secret-token"),
+        ):
+            result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
+
+        self.assertTrue(result["token_configured"])
+        self.assertNotIn("token", {key: value for key, value in result.items() if key != "token_configured"})
+        self.assertNotIn("super-secret-token", str(result))
+
+    def test_openstack_configure_stores_token_outside_module(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_upsert(module: ModuleConfig) -> ModuleConfig:
+            captured["module"] = module
+            return module
+
+        endpoint = self._endpoint("openstack_configure")
+        body = OpenStackConfigureRequest(
+            project_name="demo",
+            token="super-secret-token",
+            auth_url="https://identity.example/v3",
+            region_name="RegionOne",
+        )
+        with (
+            patch("app.control.find_module", return_value=None),
+            patch("app.control.load_module_named_secret", return_value=""),
+            patch("app.control.save_module_named_secret") as save_secret,
+            patch("app.control.upsert_module", side_effect=fake_upsert),
+            patch("app.control.module_status", return_value={"id": "openstack"}),
+            patch("app.control.record_audit"),
+        ):
+            result = endpoint(body=body, _user=HarborUser(username="operator", password_hash="unused", role="operator"))
+
+        module = captured["module"]
+        save_secret.assert_called_once_with("openstack", "openstack_token", "super-secret-token")
+        self.assertNotIn("token", module.settings)
+        self.assertTrue(result["token_configured"])
 
 
 if __name__ == "__main__":

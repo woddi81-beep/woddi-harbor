@@ -902,20 +902,26 @@ def module_reindex(module_id: str) -> None:
 
 @module_app.command("discover")
 def module_discover(module_id: str) -> None:
-    """Run remote capability discovery for an mcp_http module."""
+    """Run capability discovery for a remote or local MCP module."""
     module = find_module(module_id)
     if module is None:
         raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
-    if module.type != "mcp_http":
-        raise typer.BadParameter("discover ist nur fuer mcp_http-Module sinnvoll.")
-    result = discover_remote_module(module)
+    if module.type not in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
+        raise typer.BadParameter("discover ist nur fuer MCP-Module sinnvoll.")
+    try:
+        result = discover_remote_module(module)
+    except Exception as exc:
+        raise typer.BadParameter(f"Discovery fehlgeschlagen: {exc}") from exc
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Discovery"))
 
 
 @module_app.command("diagnose")
 def module_diagnose(module_id: str, lines: int = 40) -> None:
     """Show combined status, health, discovery and recent logs for a module."""
-    result = module_diagnostics(module_id, log_lines=lines)
+    try:
+        result = module_diagnostics(module_id, log_lines=lines)
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Diagnose"))
 
 

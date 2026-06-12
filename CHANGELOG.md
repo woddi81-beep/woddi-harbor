@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.8 - 2026-06-12
+
+### Added
+
+- OpenStack token authentication with project, Identity URL and region configuration in the admin portal
+- Private per-module secret storage with directory mode `0700` and file mode `0600`
+- OpenStack token status without exposing the stored token to browsers or module status output
+
+### Fixed
+
+- Module diagnostics now report connection failures as structured results instead of raising `Errno 111`
+- Local NetBox, OpenStack and SAP MCP modules can be inspected with `module discover`
+
 ## 0.3.7 - 2026-06-12
 
 ### Added

@@ -26,10 +26,13 @@ from .config import (
     HarborUser,
     ModuleConfig,
     ModuleSource,
+    delete_module_named_secret,
     find_module,
+    load_module_named_secret,
     load_modules,
     load_settings,
     load_users,
+    save_module_named_secret,
     save_users,
     system_prompt,
 )
@@ -147,6 +150,14 @@ class UserUpsertRequest(BaseModel):
 
 class BackupCreateRequest(BaseModel):
     label: str = Field(default="manual", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+class OpenStackConfigureRequest(BaseModel):
+    project_name: str = Field(min_length=1, max_length=255)
+    token: str = Field(default="", max_length=8192)
+    auth_url: str = Field(min_length=1, max_length=2048)
+    region_name: str = Field(default="", max_length=255)
+    port: int = Field(default=0, ge=0, le=65535)
 
 
 def _record_activity(kind: str, label: str, detail: str = "") -> None:
@@ -645,7 +656,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.3.7", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version="0.3.8", lifespan=lifespan)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
@@ -721,6 +732,80 @@ def create_app() -> FastAPI:
     @app.get("/api/modules/overview")
     def modules_overview(_user=require_role("admin")) -> dict[str, Any]:
         return {"modules": list_module_overview()}
+
+    @app.get("/api/integrations/openstack")
+    def openstack_configuration(_user=require_role("admin")) -> dict[str, Any]:
+        module = find_module("openstack")
+        settings = module.settings if module and module.type == "openstack_mcp" else {}
+        return {
+            "configured": bool(module and module.type == "openstack_mcp"),
+            "project_name": str(settings.get("project_name", "")),
+            "auth_url": str(settings.get("auth_url", "")),
+            "region_name": str(settings.get("region_name", "")),
+            "port": module.port if module and module.type == "openstack_mcp" else 0,
+            "token_configured": bool(load_module_named_secret("openstack", "openstack_token")),
+        }
+
+    @app.put("/api/integrations/openstack")
+    def openstack_configure(body: OpenStackConfigureRequest, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
+        existing = find_module("openstack")
+        old_token = load_module_named_secret("openstack", "openstack_token")
+        new_token = body.token.strip()
+        if not new_token and not old_token:
+            raise HTTPException(status_code=400, detail="OpenStack Token fehlt.")
+        module = ModuleConfig(
+            id="openstack",
+            name="OpenStack MCP",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+            host=existing.host if existing and existing.type == "openstack_mcp" else "127.0.0.1",
+            port=body.port,
+            timeout_seconds=existing.timeout_seconds if existing and existing.type == "openstack_mcp" else 30.0,
+            tool_names=[
+                "list_servers",
+                "list_projects",
+                "list_images",
+                "list_flavors",
+                "list_networks",
+                "list_subnets",
+                "list_ports",
+                "list_routers",
+            ],
+            test_action="discover",
+            settings={
+                "auth_type": "token",
+                "auth_url": body.auth_url.strip(),
+                "region_name": body.region_name.strip(),
+                "project_name": body.project_name.strip(),
+                "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
+            },
+            notes="Harbor verwaltet diesen lokalen, read-only OpenStack MCP Worker.",
+        )
+        try:
+            if new_token:
+                save_module_named_secret("openstack", "openstack_token", new_token)
+            upsert_module(module)
+        except Exception as exc:
+            if new_token:
+                if old_token:
+                    save_module_named_secret("openstack", "openstack_token", old_token)
+                else:
+                    delete_module_named_secret("openstack", "openstack_token")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_audit(
+            "integration.openstack.configure",
+            "openstack",
+            actor=_user.username,
+            detail={"project_name": body.project_name.strip(), "auth_url": body.auth_url.strip()},
+        )
+        return {
+            "ok": True,
+            "message": "OpenStack-Konfiguration gespeichert.",
+            "token_configured": True,
+            "status": module_status(module),
+        }
 
     @app.post("/api/modules")
     def module_create(body: ModuleUpsertRequest, _user: HarborUser = require_role("operator")) -> dict[str, Any]:

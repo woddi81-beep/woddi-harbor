@@ -9,9 +9,16 @@ from fastapi import FastAPI
 
 from app import cli
 from app import modules as modules_module
-from app.config import ModuleConfig
+from app.config import ModuleConfig, load_module_named_secret, save_module_named_secret
 from app.mcp.netbox import NetBoxBackend
-from app.modules import discover_standard_mcp_module, execute_module, module_test, validation_errors_by_module, worker_execute
+from app.modules import (
+    discover_standard_mcp_module,
+    execute_module,
+    module_diagnostics,
+    module_test,
+    validation_errors_by_module,
+    worker_execute,
+)
 from app.worker import ExecuteRequest, create_worker_app
 from app.worker_netbox import create_worker_app as create_netbox_worker_app
 from app.worker_netbox import run_worker as run_netbox_worker
@@ -360,6 +367,76 @@ class ModuleTests(unittest.TestCase):
         credentials = captured["credentials"]
         self.assertEqual(credentials["OS_AUTH_URL"], "https://openstack.example/v3")
         self.assertEqual(credentials["OS_APPLICATION_CREDENTIAL_ID"], "abc")
+
+    def test_create_openstack_worker_app_accepts_token_credentials(self) -> None:
+        module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
+        captured: dict[str, object] = {}
+
+        def fake_create_app(credentials: dict[str, str]):
+            captured["credentials"] = credentials
+            return FastAPI()
+
+        with (
+            patch("app.worker_openstack.find_module", return_value=module),
+            patch("app.worker_openstack.create_app", side_effect=fake_create_app),
+            patch.dict(
+                "os.environ",
+                {
+                    "OS_AUTH_URL": "https://openstack.example/v3",
+                    "OS_AUTH_TYPE": "token",
+                    "OS_TOKEN": "token-value",
+                    "OS_PROJECT_NAME": "demo",
+                    "HARBOR_INTERNAL_WORKER_TOKEN": "worker-token",
+                },
+                clear=True,
+            ),
+        ):
+            app = create_openstack_worker_app("openstack")
+
+        self.assertIsNotNone(app)
+        credentials = captured["credentials"]
+        self.assertEqual(credentials["OS_TOKEN"], "token-value")
+        self.assertEqual(credentials["OS_PROJECT_NAME"], "demo")
+
+    def test_openstack_module_validation_accepts_named_token(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            transport="local",
+            port=41003,
+            settings={"auth_url": "https://openstack.example/v3", "project_name": "demo", "auth_type": "token"},
+        )
+        with patch("app.modules.load_module_named_secret", return_value="token-value"):
+            self.assertEqual(modules_module.validate_module_config(module), [])
+
+    def test_module_diagnostics_reports_connection_refused_without_raising(self) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            transport="local",
+            port=41002,
+            settings={"netbox_url": "http://netbox.example"},
+        )
+        refused = ConnectionRefusedError(111, "Connection refused")
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.module_status", side_effect=refused),
+            patch("app.modules.health_check_module", side_effect=refused),
+            patch("app.modules.discover_remote_module", side_effect=refused),
+            patch("app.modules._read_module_log_tail", return_value=[]),
+        ):
+            result = module_diagnostics("netbox")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("Connection refused", result["health"]["error"])
+        self.assertIn("module start netbox", result["hint"])
+
+    def test_module_named_secret_is_private(self) -> None:
+        with tempfile.TemporaryDirectory() as secret_dir:
+            with patch("app.config.SECRETS_DIR", Path(secret_dir)):
+                path = save_module_named_secret("openstack", "openstack_token", "token-value")
+                self.assertEqual(load_module_named_secret("openstack", "openstack_token"), "token-value")
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_validation_errors_by_module_detects_duplicate_ports(self) -> None:
         modules = [

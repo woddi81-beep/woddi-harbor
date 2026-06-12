@@ -62,7 +62,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.3.7.md`
+- `docs/RELEASE_NOTES_v0.3.8.md`
 
 ## Struktur
 
@@ -300,10 +300,21 @@ curl -u admin:SECRET -X POST http://127.0.0.1:9680/api/modules/docs-local/start
 Schnellstart:
 
 ```bash
-./harbor.sh cli module add-netbox-mcp netbox --endpoint http://127.0.0.1:8000/mcp
+./harbor.sh cli module add-netbox-mcp netbox --netbox-url http://NETBOX-SERVER
+./harbor.sh cli module start netbox
 ./harbor.sh cli module discover netbox
 ./harbor.sh cli module test netbox
 ./harbor.sh cli module call netbox get_objects '{"object_type":"dcim.devices","limit":5}'
+```
+
+Ein `Errno 111: Connection refused` bei der Diagnose bedeutet, dass der lokale
+MCP-Worker nicht auf seinem konfigurierten Port antwortet. Ab v0.3.8 liefert
+`module diagnose` dafür ein strukturiertes Ergebnis samt Start-Hinweis:
+
+```bash
+./harbor.sh cli module diagnose netbox
+./harbor.sh cli module start netbox
+./harbor.sh cli module diagnose netbox
 ```
 
 Erwarteter Upstream laut Projekt-README:
@@ -315,6 +326,25 @@ Erwarteter Upstream laut Projekt-README:
 Mehr Details zum Upstream-Projekt:
 
 - https://github.com/netboxlabs/netbox-mcp-server
+
+## OpenStack MCP Integration
+
+Im Admin-Portal unter `/admin` im Bereich **Module** auf **OpenStack einbinden**
+klicken. Erforderlich sind Projektname, OpenStack Token und Identity/Auth URL;
+Region und lokaler Port sind optional. Das Token wird nicht in
+`config/modules.local.json` gespeichert und nie an den Browser zurückgegeben.
+
+Auf dem Harbor-Host muss der OpenStack CLI-Client verfügbar sein:
+
+```bash
+command -v openstack
+./harbor.sh cli module start openstack
+./harbor.sh cli module discover openstack
+./harbor.sh cli module test openstack
+./harbor.sh cli module call openstack list_servers '{}'
+```
+
+Die OpenStack-Werkzeuge sind auf lesende `list`- und `show`-Operationen begrenzt.
 
 ## Eigene MCP-Pakete
 

@@ -28,7 +28,7 @@ async function renderOverview() {
 }
 async function renderModules() {
   const data = await api("/api/modules/overview");
-  $("content").innerHTML = `<div class="row"><button class="primary" data-action="module:new">Modul anlegen</button></div><div class="grid">${data.modules.map((item) => card(item.name || item.id,
+  $("content").innerHTML = `<div class="row"><button class="primary" data-action="module:new">Modul anlegen</button><button data-action="module:openstack">OpenStack einbinden</button></div><div class="grid">${data.modules.map((item) => card(item.name || item.id,
     `${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.type)}</span>
     <p class="muted">${esc(item.base_url || item.path || `${item.host}:${item.port}`)}</p>
     <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
@@ -94,6 +94,22 @@ async function action(raw) {
   let path; let body;
   if (kind === "module" && verb === "new") {
     return openModule();
+  }
+  if (kind === "module" && verb === "openstack") {
+    try {
+      const configuration = await api("/api/integrations/openstack");
+      const form = $("openstack-form");
+      form.reset();
+      form.project_name.value = configuration.project_name || "";
+      form.auth_url.value = configuration.auth_url || "";
+      form.region_name.value = configuration.region_name || "";
+      form.port.value = configuration.port || 0;
+      form.token.required = !configuration.token_configured;
+      form.token.placeholder = configuration.token_configured ? "Gesetzt; leer lassen zum Beibehalten" : "Token eingeben";
+      $("openstack-token-state").textContent = configuration.token_configured ? "Ein Token ist sicher hinterlegt." : "Noch kein Token hinterlegt.";
+      $("openstack-dialog").showModal();
+    } catch (error) { $("notice").textContent = error.message; }
+    return;
   }
   if (kind === "module" && verb === "edit") {
     try {
@@ -186,6 +202,25 @@ $("module-form").addEventListener("submit", async (event) => {
   await requestAndRender(edit ? `/api/modules/${encodeURIComponent(edit)}` : "/api/modules", edit ? "PUT" : "POST", JSON.stringify(payload));
   if (!$("notice").textContent) $("module-dialog").close();
   else if ($("notice").textContent === "Aktion abgeschlossen.") $("module-dialog").close();
+});
+$("openstack-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    project_name: form.project_name.value.trim(),
+    token: form.token.value,
+    auth_url: form.auth_url.value.trim(),
+    region_name: form.region_name.value.trim(),
+    port: Number(form.port.value || 0),
+  };
+  try {
+    const result = await api("/api/integrations/openstack", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    $("openstack-dialog").close();
+    $("notice").textContent = result.message;
+    await render();
+  } catch (error) { $("notice").textContent = error.message; }
 });
 $("mcp-package-form").addEventListener("submit", async (event) => {
   event.preventDefault();

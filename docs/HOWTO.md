@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.7
+git checkout v0.3.8
 scripts/install_production.sh manual
 ```
 
@@ -90,7 +90,31 @@ Für eine Git-Quelle wird in `config/sources.json` ein Eintrag mit `kind: "git"`
 
 Alternativ stehen diese Funktionen im Admin-Portal unter `/admin` bereit.
 
-## 6. Module verwalten
+## 6. NetBox und OpenStack prüfen
+
+NetBox ohne Token:
+
+```bash
+.venv/bin/woddi-harbor module add-netbox-mcp netbox \
+  --netbox-url http://NETBOX-SERVER
+.venv/bin/woddi-harbor module start netbox
+.venv/bin/woddi-harbor module diagnose netbox
+```
+
+Bei `Errno 111` den Log-Auszug in der strukturierten Diagnose prüfen. Der Fehler
+bedeutet, dass der lokale Worker nicht lauscht oder beim Start beendet wurde.
+
+OpenStack wird im Admin-Portal unter **Module**, **OpenStack einbinden**
+konfiguriert. Projektname, Token und Identity/Auth URL sind Pflichtfelder. Danach:
+
+```bash
+command -v openstack
+.venv/bin/woddi-harbor module start openstack
+.venv/bin/woddi-harbor module discover openstack
+.venv/bin/woddi-harbor module test openstack
+```
+
+## 7. Module verwalten
 
 ```bash
 .venv/bin/woddi-harbor module list
@@ -101,7 +125,7 @@ Alternativ stehen diese Funktionen im Admin-Portal unter `/admin` bereit.
 .venv/bin/woddi-harbor module stop 10
 ```
 
-## 7. MCP-Paket installieren und steuern
+## 8. MCP-Paket installieren und steuern
 
 Ein eigenes MCP-Paket enthält eine `mcp-package.json`. Beispiel für einen
 prozessbasierten Server:

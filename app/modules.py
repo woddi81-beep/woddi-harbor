@@ -28,6 +28,7 @@ from .config import (
     ModuleConfig,
     find_module,
     internal_worker_token,
+    load_module_named_secret,
     load_modules,
     module_secret,
     module_sources,
@@ -79,11 +80,18 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
             return os.getenv(env_name, "").strip()
         return ""
 
+    token = _resolve("token", "token_env")
+    if not token:
+        token = load_module_named_secret(module.id, "openstack_token")
+    auth_type = _resolve("auth_type", "auth_type_env")
+    if token and not auth_type:
+        auth_type = "token"
     return {
         "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
         "OS_REGION_NAME": _resolve("region_name", "region_name_env"),
         "OS_INTERFACE": _resolve("interface", "interface_env"),
-        "OS_AUTH_TYPE": _resolve("auth_type", "auth_type_env") or "v3applicationcredential",
+        "OS_AUTH_TYPE": auth_type or "v3applicationcredential",
+        "OS_TOKEN": token,
         "OS_APPLICATION_CREDENTIAL_ID": _resolve("application_credential_id", "application_credential_id_env"),
         "OS_APPLICATION_CREDENTIAL_SECRET": _resolve("application_credential_secret", "application_credential_secret_env"),
         "OS_USERNAME": _resolve("username", "username_env"),
@@ -524,7 +532,8 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
                 errors.append(f"OpenStack Auth URL ungueltig: {openstack['OS_AUTH_URL']}")
         has_app_creds = bool(openstack["OS_APPLICATION_CREDENTIAL_ID"] and openstack["OS_APPLICATION_CREDENTIAL_SECRET"])
         has_password_creds = bool(openstack["OS_USERNAME"] and openstack["OS_PASSWORD"])
-        if not has_app_creds and not has_password_creds:
+        has_token = bool(openstack["OS_TOKEN"])
+        if not has_app_creds and not has_password_creds and not has_token:
             errors.append("OpenStack Credentials fehlen.")
         if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
@@ -778,15 +787,34 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
     payload: dict[str, Any] = {
         "ok": True,
         "module_id": module_id,
-        "status": module_status(module),
-        "health": health_check_module(module_id),
         "log_path": str(module_log_path(module_id)),
         "log_tail": _read_module_log_tail(module_id, lines=log_lines),
+        "errors": [],
     }
+    try:
+        payload["status"] = module_status(module)
+    except Exception as exc:
+        payload["ok"] = False
+        payload["status"] = {"running": False, "error": str(exc)}
+        payload["errors"].append(f"Status: {exc}")
+    try:
+        payload["health"] = health_check_module(module_id)
+        payload["ok"] = payload["ok"] and bool(payload["health"].get("ok"))
+    except Exception as exc:
+        payload["ok"] = False
+        payload["health"] = {"ok": False, "error": str(exc)}
+        payload["errors"].append(f"Health: {exc}")
     if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
-        remote = discover_remote_module(module)
-        payload["remote"] = remote
-        payload["ok"] = payload["ok"] and bool(remote.get("ok"))
+        try:
+            remote = discover_remote_module(module)
+            payload["remote"] = remote
+            payload["ok"] = payload["ok"] and bool(remote.get("ok"))
+        except Exception as exc:
+            payload["ok"] = False
+            payload["remote"] = {"ok": False, "error": str(exc)}
+            payload["errors"].append(f"Discovery: {exc}")
+    if not payload["ok"] and module.transport == "local":
+        payload["hint"] = f"Lokalen Worker pruefen oder starten: woddi-harbor module start {module.id}"
     return payload
 
 
