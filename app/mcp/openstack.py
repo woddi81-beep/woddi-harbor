@@ -88,7 +88,13 @@ class OpenStackBackend:
         for key, value in self.credentials.items():
             if value:
                 env[key] = value
-        default_auth_type = "v3token" if self.credentials.get("OS_TOKEN") else "v3applicationcredential"
+        default_auth_type = (
+            "v3token"
+            if self.credentials.get("OS_TOKEN") and self.credentials.get("OS_PROJECT_NAME")
+            else "token"
+            if self.credentials.get("OS_TOKEN")
+            else "v3applicationcredential"
+        )
         env.setdefault("OS_AUTH_TYPE", self.credentials.get("OS_AUTH_TYPE") or default_auth_type)
         env.setdefault("PYTHONUNBUFFERED", "1")
         return env

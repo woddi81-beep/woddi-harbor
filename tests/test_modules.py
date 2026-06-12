@@ -428,6 +428,24 @@ class ModuleTests(unittest.TestCase):
         with patch("app.modules.load_module_named_secret", return_value="token-value"):
             self.assertEqual(modules_module.validate_module_config(module), [])
 
+    def test_openstack_settings_do_not_rescope_project_scoped_token(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            transport="local",
+            settings={
+                "auth_url": "https://openstack.example/v3",
+                "auth_type": "v3token",
+                "project_domain_name": "Default",
+            },
+        )
+        with patch("app.modules.load_module_named_secret", return_value="token-value"):
+            settings = modules_module._openstack_settings(module)
+
+        self.assertEqual(settings["OS_AUTH_TYPE"], "token")
+        self.assertEqual(settings["OS_PROJECT_NAME"], "")
+        self.assertEqual(settings["OS_PROJECT_DOMAIN_NAME"], "")
+
     def test_module_diagnostics_reports_connection_refused_without_raising(self) -> None:
         module = ModuleConfig(
             id="netbox",

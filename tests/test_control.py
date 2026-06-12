@@ -249,6 +249,34 @@ class OpenStackConfigurationTests(unittest.TestCase):
         self.assertEqual(module.settings["project_domain_name"], "Default")
         self.assertTrue(result["token_configured"])
 
+    def test_openstack_configure_accepts_project_scoped_token_without_project(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_upsert(module: ModuleConfig) -> ModuleConfig:
+            captured["module"] = module
+            return module
+
+        endpoint = self._endpoint("openstack_configure")
+        body = OpenStackConfigureRequest(
+            token="project-scoped-token",
+            auth_url="https://identity.example/v3",
+            region_name="RegionOne",
+        )
+        with (
+            patch("app.control.find_module", return_value=None),
+            patch("app.control.load_module_named_secret", return_value=""),
+            patch("app.control.save_module_named_secret"),
+            patch("app.control.upsert_module", side_effect=fake_upsert),
+            patch("app.control.module_status", return_value={"id": "openstack"}),
+            patch("app.control.record_audit"),
+        ):
+            endpoint(body=body, _user=HarborUser(username="operator", password_hash="unused", role="operator"))
+
+        module = captured["module"]
+        self.assertEqual(module.settings["auth_type"], "token")
+        self.assertEqual(module.settings["project_name"], "")
+        self.assertEqual(module.settings["project_domain_name"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

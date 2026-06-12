@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.12 - 2026-06-12
+
+### Changed
+
+- OpenStack project and project domain are optional for project-scoped tokens
+- Harbor only applies Keystone project scoping when a project name is configured
+- Existing project-scoped tokens use `token` authentication without project variables
+
 ## 0.3.11 - 2026-06-12
 
 ### Fixed

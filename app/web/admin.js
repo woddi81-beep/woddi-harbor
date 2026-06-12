@@ -101,7 +101,7 @@ async function action(raw) {
       const form = $("openstack-form");
       form.reset();
       form.project_name.value = configuration.project_name || "";
-      form.project_domain_name.value = configuration.project_domain_name || "Default";
+      form.project_domain_name.value = configuration.project_domain_name || "";
       form.auth_url.value = configuration.auth_url || "";
       form.region_name.value = configuration.region_name || "";
       form.port.value = configuration.port || 0;

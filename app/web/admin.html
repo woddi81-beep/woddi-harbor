@@ -52,8 +52,8 @@
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
       <h3>OpenStack einbinden</h3>
-      <label>Projektname<input name="project_name" required autocomplete="off"></label>
-      <label>Projektdomäne<input name="project_domain_name" required value="Default" autocomplete="off"></label>
+      <label>Projektname (optional)<input name="project_name" autocomplete="off" placeholder="Nur für ungescopte Tokens"></label>
+      <label>Projektdomäne (optional)<input name="project_domain_name" autocomplete="off" placeholder="Default"></label>
       <label>
         <span>OpenStack Token <span class="help" title="openstack token issue" aria-label="openstack token issue">?</span></span>
         <input name="token" type="password" autocomplete="new-password" placeholder="Token eingeben">
@@ -64,7 +64,7 @@
         <label>Region<input name="region_name" placeholder="RegionOne"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <p class="muted">Das Token wird serverseitig mit Dateirechten 0600 gespeichert und nie wieder an den Browser übertragen.</p>
+      <p class="muted">Bei einem bereits projektgebundenen Token bleiben Projektname und Projektdomäne leer. Nur ungescopte Tokens benötigen ein Projekt. Das Token wird mit Dateirechten 0600 gespeichert und nie wieder an den Browser übertragen.</p>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="openstack-dialog">Abbrechen</button></div>
     </form>
   </dialog>

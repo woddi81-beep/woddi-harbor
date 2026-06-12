@@ -153,8 +153,8 @@ class BackupCreateRequest(BaseModel):
 
 
 class OpenStackConfigureRequest(BaseModel):
-    project_name: str = Field(min_length=1, max_length=255)
-    project_domain_name: str = Field(default="Default", min_length=1, max_length=255)
+    project_name: str = Field(default="", max_length=255)
+    project_domain_name: str = Field(default="", max_length=255)
     token: str = Field(default="", max_length=8192)
     auth_url: str = Field(min_length=1, max_length=2048)
     region_name: str = Field(default="", max_length=255)
@@ -657,7 +657,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.3.11", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version="0.3.12", lifespan=lifespan)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
@@ -741,7 +741,7 @@ def create_app() -> FastAPI:
         return {
             "configured": bool(module and module.type == "openstack_mcp"),
             "project_name": str(settings.get("project_name", "")),
-            "project_domain_name": str(settings.get("project_domain_name", "Default")),
+            "project_domain_name": str(settings.get("project_domain_name", "")),
             "auth_url": str(settings.get("auth_url", "")),
             "region_name": str(settings.get("region_name", "")),
             "port": module.port if module and module.type == "openstack_mcp" else 0,
@@ -755,6 +755,10 @@ def create_app() -> FastAPI:
         new_token = body.token.strip()
         if not new_token and not old_token:
             raise HTTPException(status_code=400, detail="OpenStack Token fehlt.")
+        project_name = body.project_name.strip()
+        project_domain_name = body.project_domain_name.strip()
+        if project_name and not project_domain_name:
+            project_domain_name = "Default"
         module = ModuleConfig(
             id="openstack",
             name="OpenStack MCP",
@@ -777,11 +781,11 @@ def create_app() -> FastAPI:
             ],
             test_action="discover",
             settings={
-                "auth_type": "v3token",
+                "auth_type": "v3token" if project_name else "token",
                 "auth_url": body.auth_url.strip(),
                 "region_name": body.region_name.strip(),
-                "project_name": body.project_name.strip(),
-                "project_domain_name": body.project_domain_name.strip(),
+                "project_name": project_name,
+                "project_domain_name": project_domain_name if project_name else "",
                 "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
             },
             notes="Harbor verwaltet diesen lokalen, read-only OpenStack MCP Worker.",
@@ -802,8 +806,8 @@ def create_app() -> FastAPI:
             "openstack",
             actor=_user.username,
             detail={
-                "project_name": body.project_name.strip(),
-                "project_domain_name": body.project_domain_name.strip(),
+                "project_name": project_name,
+                "project_domain_name": project_domain_name if project_name else "",
                 "auth_url": body.auth_url.strip(),
             },
         )
