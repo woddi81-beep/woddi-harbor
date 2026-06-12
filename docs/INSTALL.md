@@ -21,5 +21,7 @@ Die manuelle Installation schreibt und startet keine systemd-Units. Fuer einen
 explizit gewuenschten Dauerbetrieb stehen die Modi `user` und `system` bereit.
 Reverse-Proxy/TLS und Prometheus/Grafana koennen unabhaengig davon aktiviert werden.
 
-Der API-Prozess bleibt auf `127.0.0.1:9680`. Ein direktes öffentliches Binding ist
-nicht vorgesehen.
+Standardmaessig bleibt der API-Prozess auf `127.0.0.1:9680`. In einem geschuetzten
+Netz kann er explizit mit
+`woddi-harbor server set --host 0.0.0.0 --port 9680` auf allen IPv4-Interfaces
+bereitgestellt werden.

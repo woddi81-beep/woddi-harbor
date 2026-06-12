@@ -80,6 +80,7 @@ mcp_app = typer.Typer(no_args_is_help=True)
 backup_app = typer.Typer(no_args_is_help=True)
 source_app = typer.Typer(no_args_is_help=True)
 runtime_app = typer.Typer(no_args_is_help=True)
+server_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
 app.add_typer(service_app, name="service")
@@ -88,6 +89,7 @@ app.add_typer(mcp_app, name="mcp")
 app.add_typer(backup_app, name="backup")
 app.add_typer(source_app, name="source")
 app.add_typer(runtime_app, name="runtime")
+app.add_typer(server_app, name="server")
 console = Console()
 
 
@@ -415,6 +417,39 @@ def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
         port=port or settings.port,
         workers=settings.api_workers,
     )
+
+
+@server_app.command("set")
+def server_set(
+    host: str = typer.Option(..., "--host", help="Listen address, e.g. 0.0.0.0 for all IPv4 interfaces."),
+    port: int = typer.Option(9680, "--port", min=1, max=65535),
+) -> None:
+    """Persist the Harbor listen address and port."""
+    normalized_host = host.strip()
+    if not normalized_host:
+        raise typer.BadParameter("Host darf nicht leer sein.")
+    settings = load_settings()
+    settings.host = normalized_host
+    settings.port = port
+    save_settings(settings)
+    console.print_json(
+        json.dumps(
+            {
+                "ok": True,
+                "host": settings.host,
+                "port": settings.port,
+                "external": settings.host not in {"127.0.0.1", "::1", "localhost"},
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+@server_app.command("show")
+def server_show() -> None:
+    """Show the configured Harbor listen address and port."""
+    settings = load_settings()
+    console.print_json(json.dumps({"host": settings.host, "port": settings.port}, ensure_ascii=False))
 
 
 @app.command()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "woddi-harbor"
-version = "0.3.6"
+version = "0.3.7"
 description = "Local-first AI control hub for external LLMs, search modules, and MCP services."
 readme = "README.md"
 requires-python = ">=3.10"

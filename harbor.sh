@@ -4,8 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-DEFAULT_HOST="${HARBOR_HOST:-127.0.0.1}"
-DEFAULT_PORT="${HARBOR_PORT:-9680}"
 
 detect_os() {
   if [[ -r /etc/os-release ]]; then
@@ -129,8 +127,14 @@ run_cli() {
 start_harbor() {
   install_project
   "$VENV_DIR/bin/woddi-harbor" init >/dev/null
-  log "Starte woddi-harbor auf ${DEFAULT_HOST}:${DEFAULT_PORT}"
-  exec "$VENV_DIR/bin/woddi-harbor" serve --host "$DEFAULT_HOST" --port "$DEFAULT_PORT"
+  if [[ -n "${HARBOR_HOST:-}" || -n "${HARBOR_PORT:-}" ]]; then
+    local host="${HARBOR_HOST:-127.0.0.1}"
+    local port="${HARBOR_PORT:-9680}"
+    log "Starte woddi-harbor mit Umgebungs-Override auf ${host}:${port}"
+    exec "$VENV_DIR/bin/woddi-harbor" serve --host "$host" --port "$port"
+  fi
+  log "Starte woddi-harbor mit der gespeicherten Server-Konfiguration"
+  exec "$VENV_DIR/bin/woddi-harbor" serve
 }
 
 cmd="${1:-start}"

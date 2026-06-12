@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.6
+git checkout v0.3.7
 scripts/install_production.sh manual
 ```
 
@@ -156,6 +156,18 @@ Upgrade und Rollback:
 
 systemd ist optional. Fuer manuellen Betrieb genuegen `./harbor.sh start` und
 `./harbor.sh console`. Eine User-Installation fuer Dauerbetrieb:
+
+Fuer direkten Zugriff aus einem geschuetzten Netz:
+
+```bash
+.venv/bin/woddi-harbor server set --host 0.0.0.0 --port 9680
+.venv/bin/woddi-harbor server show
+./harbor.sh start
+```
+
+Der Port `9680/tcp` muss in der Host-Firewall fuer das geschuetzte Quellnetz
+freigegeben sein. Ein externes Binding erzeugt im `production-check` bewusst eine
+Warnung, aber keinen Fehler.
 
 ```bash
 systemctl --user start woddi-harbor.service

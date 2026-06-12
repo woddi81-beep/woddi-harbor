@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.7 - 2026-06-12
+
+### Added
+
+- Persistent `server set` and `server show` CLI commands
+- Explicit external binding support for protected networks
+
+### Changed
+
+- `harbor.sh start` uses persisted server settings unless environment overrides are set
+
 ## 0.3.6 - 2026-06-12
 
 ### Fixed

@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
 from app.cli import app
+from app.config import HarborSettings
 
 runner = CliRunner()
 
@@ -31,3 +32,18 @@ def test_no_command_is_explicit_without_terminal(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "benötigt ein Terminal" in result.stdout
+
+
+def test_server_set_persists_external_bind(monkeypatch) -> None:
+    settings = HarborSettings()
+    saved: list[HarborSettings] = []
+    monkeypatch.setattr("app.cli.load_settings", lambda: settings)
+    monkeypatch.setattr("app.cli.save_settings", saved.append)
+
+    result = runner.invoke(app, ["server", "set", "--host", "0.0.0.0", "--port", "9680"])
+
+    assert result.exit_code == 0
+    assert saved == [settings]
+    assert settings.host == "0.0.0.0"
+    assert settings.port == 9680
+    assert '"external": true' in result.stdout
