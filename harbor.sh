@@ -127,14 +127,10 @@ run_cli() {
 start_harbor() {
   install_project
   "$VENV_DIR/bin/woddi-harbor" init >/dev/null
-  if [[ -n "${HARBOR_HOST:-}" || -n "${HARBOR_PORT:-}" ]]; then
-    local host="${HARBOR_HOST:-0.0.0.0}"
-    local port="${HARBOR_PORT:-9680}"
-    log "Starte woddi-harbor mit Umgebungs-Override auf ${host}:${port}"
-    exec "$VENV_DIR/bin/woddi-harbor" serve --host "$host" --port "$port"
-  fi
-  log "Starte woddi-harbor mit der gespeicherten Server-Konfiguration"
-  exec "$VENV_DIR/bin/woddi-harbor" serve
+  local host="${HARBOR_HOST:-0.0.0.0}"
+  local port="${HARBOR_PORT:-9680}"
+  log "Starte woddi-harbor auf ${host}:${port}"
+  exec "$VENV_DIR/bin/woddi-harbor" serve --host "$host" --port "$port"
 }
 
 cmd="${1:-start}"

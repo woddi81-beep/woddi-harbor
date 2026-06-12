@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.14 - 2026-06-12
+
+### Fixed
+
+- `harbor.sh start` always passes an explicit listen address to Uvicorn
+- Manual startup no longer falls back to stale loopback configuration
+- `HARBOR_HOST` and `HARBOR_PORT` remain explicit runtime overrides
+
 ## 0.3.13 - 2026-06-12
 
 ### Changed

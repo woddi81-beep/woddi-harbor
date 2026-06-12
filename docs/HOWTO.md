@@ -223,7 +223,9 @@ Dokumente, Chats, Konfiguration oder Backups zu loeschen:
 ## 9. TLS-Reverse-Proxy aktivieren
 
 In `deploy/nginx.conf.tpl` oder `deploy/Caddyfile` den Platzhalter
-`__HARBOR_HOSTNAME__` ersetzen. Harbor selbst bleibt auf `127.0.0.1:9680`.
+`__HARBOR_HOSTNAME__` ersetzen. `./harbor.sh start` bindet Harbor standardmäßig
+auf `0.0.0.0:9680`; mit `HARBOR_HOST=127.0.0.1` kann der Zugriff bewusst auf
+Loopback begrenzt werden.
 
 Ohne oeffentlichen DNS-Namen kann `deploy/Caddyfile.local` fuer
 `https://localhost:9443` verwendet werden. Es nutzt eine interne Caddy-CA; ohne
