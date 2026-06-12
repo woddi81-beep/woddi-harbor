@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.1
+git checkout v0.3.2
 scripts/install_production.sh manual
 ```
 
@@ -48,27 +48,23 @@ export HARBOR_LLM_API_KEY='...'
 
 ## 4. Dokumentquellen importieren
 
-Die mit dem Repository getesteten Harbor- und ASV-Referenzkorpora werden über eine
-explizite Allowlist aufgebaut:
+Die beiden produktiven Markdown-Repositories werden direkt als lokale Quellen
+konfiguriert:
 
 ```bash
-.venv/bin/python tools/import_reference_docs.py
+.venv/bin/woddi-harbor source configure-docs \
+  --operations-path /opt/woddi-ai/doku/documentation-operation-main \
+  --customer-path /opt/woddi-ai/doku/documentation-customer-main
 .venv/bin/woddi-harbor source sync operation-docs
 .venv/bin/woddi-harbor source sync customer-docs
 ```
 
-Der Importer erzeugt je Korpus ein `_SOURCE_MANIFEST.json` mit Herkunft, Größe und
-SHA-256-Prüfsumme. Private Uploads, Datenbanken, Secrets und Runtime-Daten werden
-nicht importiert.
-
-Lokale Inhalte in die konfigurierten Verzeichnisse kopieren:
+Harbor kopiert nur `.md` und `.markdown` Dateien in seine verwalteten
+Dokumentverzeichnisse. Die hostspezifischen Pfade werden in der nicht versionierten
+Datei `config/sources.local.json` gespeichert. Anschliessend:
 
 ```bash
-rsync -a /pfad/operations-doku/ data/sources/documentation-operation/
-rsync -a /pfad/kunden-doku/ data/sources/documentation-customer/
 .venv/bin/woddi-harbor source list
-.venv/bin/woddi-harbor source sync operation-docs
-.venv/bin/woddi-harbor source sync customer-docs
 ```
 
 Für eine Git-Quelle wird in `config/sources.json` ein Eintrag mit `kind: "git"`,

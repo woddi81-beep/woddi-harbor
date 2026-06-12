@@ -13,11 +13,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from .config import CONFIG_DIR, DATA_DIR, RUNTIME_DIR, resolve_path
+from .config import CONFIG_DIR, DATA_DIR, RUNTIME_DIR, ModuleConfig, ModuleSource, load_modules, resolve_path, save_modules
 from .modules import execute_module
 
 SourceKind = Literal["local", "git"]
 SOURCES_CONFIG_PATH = CONFIG_DIR / "sources.json"
+SOURCES_LOCAL_CONFIG_PATH = CONFIG_DIR / "sources.local.json"
 SOURCES_RUNTIME_DIR = RUNTIME_DIR / "sources"
 SOURCES_DATA_DIR = DATA_DIR / "sources"
 SOURCE_LOCK_DIR = RUNTIME_DIR / "locks"
@@ -45,9 +46,15 @@ def ensure_sources_config() -> None:
     SOURCES_CONFIG_PATH.write_text('{\n  "sources": []\n}\n', encoding="utf-8")
 
 
+def sources_config_path(*, for_write: bool = False) -> Path:
+    if for_write or SOURCES_LOCAL_CONFIG_PATH.exists():
+        return SOURCES_LOCAL_CONFIG_PATH
+    return SOURCES_CONFIG_PATH
+
+
 def load_sources() -> list[ManagedSource]:
     ensure_sources_config()
-    payload = json.loads(SOURCES_CONFIG_PATH.read_text(encoding="utf-8"))
+    payload = json.loads(sources_config_path().read_text(encoding="utf-8"))
     sources: list[ManagedSource] = []
     for raw in payload.get("sources", []):
         sources.append(
@@ -64,6 +71,71 @@ def load_sources() -> list[ManagedSource]:
             )
         )
     return sources
+
+
+def save_sources(sources: list[ManagedSource]) -> Path:
+    path = sources_config_path(for_write=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"sources": [asdict(source) for source in sources]}
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        temporary = Path(handle.name)
+    os.replace(temporary, path)
+    return path
+
+
+def configure_document_sources(operations_path: str, customer_path: str) -> dict[str, Any]:
+    operations = resolve_path(operations_path)
+    customer = resolve_path(customer_path)
+    missing = [str(path) for path in (operations, customer) if not path.is_dir()]
+    if missing:
+        raise ValueError(f"Dokumentverzeichnis nicht gefunden: {', '.join(missing)}")
+
+    extensions = [".md", ".markdown"]
+    sources = [
+        ManagedSource(
+            id="operation-docs",
+            kind="local",
+            module_id="10",
+            source_path=str(operations),
+            target_path="data/sources/documentation-operation",
+            include_extensions=extensions,
+        ),
+        ManagedSource(
+            id="customer-docs",
+            kind="local",
+            module_id="11",
+            source_path=str(customer),
+            target_path="data/sources/documentation-customer",
+            include_extensions=extensions,
+        ),
+    ]
+    source_config = save_sources(sources)
+
+    modules_by_id = {module.id: module for module in load_modules()}
+    definitions = (
+        ("10", "Operations-Dokumentation", "data/sources/documentation-operation"),
+        ("11", "Kunden-Dokumentation", "data/sources/documentation-customer"),
+    )
+    for module_id, name, path in definitions:
+        module = modules_by_id.get(module_id)
+        if module is None:
+            module = ModuleConfig(id=module_id, type="docs")
+            modules_by_id[module_id] = module
+        module.enabled = True
+        module.name = name
+        module.transport = "local"
+        module.path = path
+        module.sources = [ModuleSource(id=f"{module_id}-source-1", path=path, label=name)]
+    save_modules(sorted(modules_by_id.values(), key=lambda item: item.id))
+    return {
+        "ok": True,
+        "source_config": str(source_config),
+        "operations_path": str(operations),
+        "customer_path": str(customer),
+        "modules": ["10", "11"],
+    }
 
 
 def find_source(source_id: str) -> ManagedSource | None:
@@ -98,6 +170,7 @@ def _copy_local(source: ManagedSource, staging: Path) -> None:
     if not origin.is_dir():
         raise ValueError(f"Quellverzeichnis nicht gefunden: {origin}")
     shutil.copytree(origin, staging, dirs_exist_ok=True, symlinks=False)
+    _filter_staging(staging, source.include_extensions)
 
 
 def _clone_git(source: ManagedSource, staging: Path) -> None:
@@ -116,6 +189,18 @@ def _clone_git(source: ManagedSource, staging: Path) -> None:
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or "Git-Import fehlgeschlagen.")
     shutil.rmtree(staging / ".git", ignore_errors=True)
+    _filter_staging(staging, source.include_extensions)
+
+
+def _filter_staging(staging: Path, include_extensions: list[str] | None) -> None:
+    if not include_extensions:
+        return
+    extensions = {item.lower() if item.startswith(".") else f".{item.lower()}" for item in include_extensions}
+    for item in sorted(staging.rglob("*"), reverse=True):
+        if item.is_symlink() or (item.is_file() and item.suffix.lower() not in extensions):
+            item.unlink()
+        elif item.is_dir() and not any(item.iterdir()):
+            item.rmdir()
 
 
 def source_quality(path: Path, include_extensions: list[str] | None = None) -> dict[str, Any]:

@@ -6,6 +6,7 @@ __pycache__/
 
 config/harbor.local.json
 config/modules.local.json
+config/sources.local.json
 config/users.local.json
 config/harbor.json
 config/modules.json

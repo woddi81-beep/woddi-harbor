@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2 - 2026-06-12
+
+### Fixed
+
+- Removed all hard-coded ASV documentation references from the active product
+- Added host-local document source configuration in `config/sources.local.json`
+- Added one-command setup for the production operation and customer Markdown repositories
+- Document synchronization now excludes non-Markdown repository artifacts
+
 ## 0.3.1 - 2026-06-12
 
 ### Fixed

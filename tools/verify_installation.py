@@ -51,7 +51,7 @@ def main() -> None:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         print(
-            "Checkout reparieren: git fetch --tags && git checkout v0.3.1",
+            "Checkout reparieren: git fetch --tags && git checkout v0.3.2",
             file=sys.stderr,
         )
         raise SystemExit(2)

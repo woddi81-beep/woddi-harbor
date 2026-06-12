@@ -1,22 +1,3 @@
 {
-  "sources": [
-    {
-      "id": "operation-docs",
-      "kind": "local",
-      "enabled": true,
-      "module_id": "10",
-      "source_path": "data/sources/documentation-operation",
-      "target_path": "data/sources/documentation-operation",
-      "include_extensions": [".md", ".txt", ".rst", ".yaml", ".yml", ".json"]
-    },
-    {
-      "id": "customer-docs",
-      "kind": "local",
-      "enabled": true,
-      "module_id": "11",
-      "source_path": "data/sources/documentation-customer",
-      "target_path": "data/sources/documentation-customer",
-      "include_extensions": [".md", ".txt", ".rst", ".yaml", ".yml", ".json"]
-    }
-  ]
+  "sources": []
 }

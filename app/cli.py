@@ -63,7 +63,7 @@ from .modules import (
 from .preflight import production_check
 from .runtime import stop_all, uninstall_runtime
 from .services import health_check_service, install_and_optionally_enable_service, service_action
-from .sources import source_overview, sync_source
+from .sources import configure_document_sources, source_overview, sync_source
 from .worker import run_worker
 
 app = typer.Typer(
@@ -246,6 +246,22 @@ def source_list() -> None:
 @source_app.command("sync")
 def source_sync(source_id: str, reindex: bool = typer.Option(True, "--reindex/--no-reindex")) -> None:
     console.print_json(json.dumps(sync_source(source_id, reindex=reindex), ensure_ascii=False))
+
+
+@source_app.command("configure-docs")
+def source_configure_docs(
+    operations_path: str = typer.Option(
+        "/opt/woddi-ai/doku/documentation-operation-main",
+        "--operations-path",
+    ),
+    customer_path: str = typer.Option(
+        "/opt/woddi-ai/doku/documentation-customer-main",
+        "--customer-path",
+    ),
+) -> None:
+    """Configure the production Markdown repositories as local document sources."""
+    result = configure_document_sources(operations_path, customer_path)
+    console.print_json(json.dumps(result, ensure_ascii=False))
 
 
 @runtime_app.command("stop-all")

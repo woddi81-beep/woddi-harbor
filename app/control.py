@@ -645,7 +645,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.3.1", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version="0.3.2", lifespan=lifespan)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
