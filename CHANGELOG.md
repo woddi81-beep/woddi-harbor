@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.9 - 2026-06-12
+
+### Fixed
+
+- OpenStack MCP workers locate `openstack` next to the active virtualenv Python
+- OpenStack CLI errors include the exact installation command and expected path
+- `OPENSTACK_CLI` can explicitly select a client binary
+
 ## 0.3.8 - 2026-06-12
 
 ### Added

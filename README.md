@@ -337,12 +337,17 @@ Region und lokaler Port sind optional. Das Token wird nicht in
 Auf dem Harbor-Host muss der OpenStack CLI-Client verfügbar sein:
 
 ```bash
-command -v openstack
+.venv/bin/python -m pip install python-openstackclient
+.venv/bin/openstack --version
 ./harbor.sh cli module start openstack
 ./harbor.sh cli module discover openstack
 ./harbor.sh cli module test openstack
 ./harbor.sh cli module call openstack list_servers '{}'
 ```
+
+Der Worker sucht den Client zuerst direkt neben seinem Python-Interpreter, also
+normalerweise unter `.venv/bin/openstack`. Optional kann ein abweichender Pfad
+über `OPENSTACK_CLI=/pfad/openstack` gesetzt werden.
 
 Die OpenStack-Werkzeuge sind auf lesende `list`- und `show`-Operationen begrenzt.
 

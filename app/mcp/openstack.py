@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -16,6 +19,16 @@ MCP_PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "openstack-mcp-server"
 SERVER_VERSION = "0.1.0"
 DEFAULT_CACHE_TTL_SECONDS = 20.0
+
+
+def resolve_openstack_cli() -> str:
+    configured = os.getenv("OPENSTACK_CLI", "").strip()
+    candidates = [Path(configured)] if configured else []
+    candidates.append(Path(sys.executable).resolve().with_name("openstack"))
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("openstack") or ""
 
 
 def _jsonrpc_result(request_id: Any, result: dict[str, Any], *, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -84,9 +97,13 @@ class OpenStackBackend:
         return json.dumps(command, ensure_ascii=False, separators=(",", ":"))
 
     def _run_openstack(self, args: list[str], *, timeout: float = 30.0, use_cache: bool = True) -> Any:
-        binary = shutil.which("openstack")
+        binary = resolve_openstack_cli()
         if not binary:
-            raise RuntimeError("OpenStack CLI nicht gefunden.")
+            expected = Path(sys.executable).resolve().with_name("openstack")
+            raise RuntimeError(
+                f"OpenStack CLI nicht gefunden. Installiere sie mit: {sys.executable} -m pip install python-openstackclient "
+                f"(erwarteter Pfad: {expected})"
+            )
         command = [binary, *args, "-f", "json"]
         cache_key = self._cache_key(command)
         if use_cache:
@@ -120,7 +137,7 @@ class OpenStackBackend:
         return {
             "ok": True,
             "server": SERVER_NAME,
-            "openstack_cli": shutil.which("openstack") or "",
+            "openstack_cli": resolve_openstack_cli(),
             "auth_configured": bool(self.credentials.get("OS_AUTH_URL")),
             "credential_mode": "token"
             if self.credentials.get("OS_TOKEN")

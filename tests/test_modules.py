@@ -11,6 +11,7 @@ from app import cli
 from app import modules as modules_module
 from app.config import ModuleConfig, load_module_named_secret, save_module_named_secret
 from app.mcp.netbox import NetBoxBackend
+from app.mcp.openstack import resolve_openstack_cli
 from app.modules import (
     discover_standard_mcp_module,
     execute_module,
@@ -397,6 +398,19 @@ class ModuleTests(unittest.TestCase):
         credentials = captured["credentials"]
         self.assertEqual(credentials["OS_TOKEN"], "token-value")
         self.assertEqual(credentials["OS_PROJECT_NAME"], "demo")
+
+    def test_openstack_cli_resolver_prefers_current_virtualenv(self) -> None:
+        with tempfile.TemporaryDirectory() as bin_dir:
+            python_path = Path(bin_dir) / "python"
+            openstack_path = Path(bin_dir) / "openstack"
+            python_path.touch(mode=0o755)
+            openstack_path.touch(mode=0o755)
+            with (
+                patch("app.mcp.openstack.sys.executable", str(python_path)),
+                patch("app.mcp.openstack.shutil.which", return_value="/usr/bin/openstack"),
+                patch.dict("os.environ", {}, clear=True),
+            ):
+                self.assertEqual(resolve_openstack_cli(), str(openstack_path))
 
     def test_openstack_module_validation_accepts_named_token(self) -> None:
         module = ModuleConfig(
