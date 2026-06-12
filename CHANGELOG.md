@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10 - 2026-06-12
+
+### Fixed
+
+- `module call` accepts JSON both as a third positional argument and through `--payload`
+- Existing NetBox and OpenStack command examples work as documented
+
 ## 0.3.9 - 2026-06-12
 
 ### Fixed

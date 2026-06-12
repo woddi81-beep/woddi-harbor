@@ -866,10 +866,16 @@ def module_restart(module_id: str) -> None:
 
 
 @module_app.command("call")
-def module_call(module_id: str, action: str, payload: str = "{}") -> None:
+def module_call(
+    module_id: str,
+    action: str,
+    payload: str = typer.Argument("{}", help="JSON-Payload als Positionsargument"),
+    payload_option: Optional[str] = typer.Option(None, "--payload", help="JSON-Payload als Option"),
+) -> None:
     """Call a module action."""
     try:
-        result = execute_module(module_id, action, parse_json_payload(payload))
+        effective_payload = payload_option if payload_option is not None else payload
+        result = execute_module(module_id, action, parse_json_payload(effective_payload))
     except Exception as exc:
         console.print(f"[red]Modulaufruf fehlgeschlagen:[/red] {exc}")
         raise typer.Exit(code=2) from exc

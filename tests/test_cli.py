@@ -3,10 +3,26 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.cli import module_add_netbox_mcp, module_add_openstack_local_mcp, module_add_openstack_mcp
+from typer.testing import CliRunner
+
+from app.cli import app, module_add_netbox_mcp, module_add_openstack_local_mcp, module_add_openstack_mcp
 
 
 class CliModuleTests(unittest.TestCase):
+    def test_module_call_accepts_positional_payload(self) -> None:
+        with patch("app.cli.execute_module", return_value={"ok": True}) as execute:
+            result = CliRunner().invoke(app, ["module", "call", "openstack", "list_servers", "{}"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        execute.assert_called_once_with("openstack", "list_servers", {})
+
+    def test_module_call_accepts_payload_option(self) -> None:
+        with patch("app.cli.execute_module", return_value={"ok": True}) as execute:
+            result = CliRunner().invoke(app, ["module", "call", "openstack", "list_servers", "--payload", "{}"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        execute.assert_called_once_with("openstack", "list_servers", {})
+
     def test_add_openstack_mcp_registers_remote_mcp_module(self) -> None:
         captured: dict[str, object] = {}
 
