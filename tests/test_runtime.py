@@ -9,6 +9,8 @@ def test_stop_all_stops_running_mcp_and_systemd() -> None:
         patch("app.runtime.instance_status", return_value={"running": True}),
         patch("app.runtime.stop_instance") as stop_instance,
         patch("app.runtime._stop_orphan_mcp_processes", return_value={"component": "orphan-mcp-processes", "ok": True}),
+        patch("app.runtime._stop_local_modules", return_value=[]),
+        patch("app.runtime._stop_manual_harbor", return_value={"component": "harbor", "ok": True}),
         patch("app.runtime._installed_units", return_value=["woddi-harbor.service"]),
         patch("app.runtime.shutil.which", return_value=None),
         patch("app.runtime.subprocess.run") as run,

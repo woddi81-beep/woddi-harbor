@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
 import secrets
 import shutil
 import sys
@@ -17,6 +18,7 @@ from rich.table import Table
 from .auth import hash_password
 from .backup import create_backup, restore_backup
 from .config import (
+    PID_DIR,
     SECRETS_DIR,
     HarborUser,
     ModuleConfig,
@@ -61,7 +63,7 @@ from .modules import (
     validation_errors_by_module,
 )
 from .preflight import production_check
-from .runtime import stop_all, uninstall_runtime
+from .runtime import restart_all, start_all, stop_all, uninstall_runtime
 from .services import health_check_service, install_and_optionally_enable_service, service_action
 from .sources import configure_document_sources, source_overview, sync_source
 from .worker import run_worker
@@ -275,6 +277,24 @@ def runtime_stop_all() -> None:
         raise typer.Exit(code=2)
 
 
+@runtime_app.command("start-all")
+def runtime_start_all() -> None:
+    """Start Harbor and all enabled local MCP workers."""
+    result = start_all()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result["ok"]:
+        raise typer.Exit(code=2)
+
+
+@runtime_app.command("restart-all")
+def runtime_restart_all() -> None:
+    """Restart Harbor and all enabled local MCP workers."""
+    result = restart_all()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result["ok"]:
+        raise typer.Exit(code=2)
+
+
 @runtime_app.command("uninstall")
 def runtime_uninstall(yes: bool = typer.Option(False, "--yes", help="Confirm removal of managed runtime services.")) -> None:
     """Stop and remove Harbor runtime services while preserving all data."""
@@ -410,13 +430,23 @@ def console_ui() -> None:
 def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
     """Run the Harbor control API."""
     settings = load_settings()
-    uvicorn.run(
-        "app.control:create_app",
-        factory=True,
-        host=host or settings.host,
-        port=port or settings.port,
-        workers=settings.api_workers,
-    )
+    PID_DIR.mkdir(parents=True, exist_ok=True)
+    pid_path = PID_DIR / "harbor.pid"
+    pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    try:
+        uvicorn.run(
+            "app.control:create_app",
+            factory=True,
+            host=host or settings.host,
+            port=port or settings.port,
+            workers=settings.api_workers,
+        )
+    finally:
+        try:
+            if pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                pid_path.unlink()
+        except OSError:
+            pass
 
 
 @server_app.command("set")

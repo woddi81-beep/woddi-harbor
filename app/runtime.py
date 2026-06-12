@@ -4,11 +4,23 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .config import DATA_DIR, save_service_profiles, sync_service_profiles
+from .config import (
+    BASE_DIR,
+    DATA_DIR,
+    LOG_DIR,
+    PID_DIR,
+    load_modules,
+    load_settings,
+    save_service_profiles,
+    sync_service_profiles,
+)
 from .mcp_lifecycle import (
     instance_status,
     list_mcp_instances,
@@ -24,6 +36,8 @@ MANAGED_USER_UNITS = (
     "woddi-harbor-tls.service",
 )
 PROMETHEUS_CONTAINER = "woddi-harbor-prometheus"
+HARBOR_PID_PATH = PID_DIR / "harbor.pid"
+LOCAL_WORKER_TYPES = {"netbox_mcp", "openstack_mcp", "sap_docs_mcp"}
 
 
 def _run(command: list[str]) -> dict[str, Any]:
@@ -35,6 +49,140 @@ def _run(command: list[str]) -> dict[str, Any]:
         "stdout": completed.stdout.strip(),
         "stderr": completed.stderr.strip(),
     }
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _read_harbor_pid() -> int | None:
+    try:
+        pid = int(HARBOR_PID_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    if _pid_alive(pid):
+        return pid
+    HARBOR_PID_PATH.unlink(missing_ok=True)
+    return None
+
+
+def _harbor_healthy(timeout_seconds: float = 1.0) -> bool:
+    port = load_settings().port
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=timeout_seconds) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def _wait_for_harbor(expected_running: bool, timeout_seconds: float = 30.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _harbor_healthy() is expected_running:
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def start_all() -> dict[str, Any]:
+    from .modules import start_module
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    PID_DIR.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    pid = _read_harbor_pid()
+
+    if _harbor_healthy():
+        results.append({"component": "harbor", "ok": True, "status": "already-running", "pid": pid})
+    else:
+        log_path = LOG_DIR / "harbor.log"
+        with log_path.open("a", encoding="utf-8") as log_handle:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "app.cli", "serve"],
+                cwd=BASE_DIR,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        healthy = _wait_for_harbor(True)
+        results.append(
+            {
+                "component": "harbor",
+                "ok": healthy,
+                "status": "started" if healthy else "start-failed",
+                "pid": process.pid,
+                "log": str(log_path),
+            }
+        )
+
+    if results[-1]["ok"]:
+        for module in load_modules():
+            if not module.enabled or module.transport != "local" or module.type not in LOCAL_WORKER_TYPES:
+                continue
+            try:
+                module_result = start_module(module.id)
+                results.append(
+                    {
+                        "component": f"module:{module.id}",
+                        "ok": bool(module_result.get("ok")),
+                        "result": module_result,
+                    }
+                )
+            except Exception as exc:
+                results.append({"component": f"module:{module.id}", "ok": False, "error": str(exc)})
+
+    return {"ok": all(item["ok"] for item in results), "results": results}
+
+
+def _stop_local_modules() -> list[dict[str, Any]]:
+    from .modules import stop_module
+
+    results: list[dict[str, Any]] = []
+    for module in load_modules():
+        if module.transport != "local":
+            continue
+        try:
+            module_result = stop_module(module.id)
+            results.append(
+                {
+                    "component": f"module:{module.id}",
+                    "ok": bool(module_result.get("ok")),
+                    "result": module_result,
+                }
+            )
+        except Exception as exc:
+            results.append({"component": f"module:{module.id}", "ok": False, "error": str(exc)})
+    return results
+
+
+def _stop_manual_harbor() -> dict[str, Any]:
+    pid = _read_harbor_pid()
+    if pid is None:
+        return {"component": "harbor", "ok": True, "status": "not-running"}
+    if pid == os.getpid():
+        return {"component": "harbor", "ok": False, "status": "current-process", "pid": pid}
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        HARBOR_PID_PATH.unlink(missing_ok=True)
+        return {"component": "harbor", "ok": True, "status": "not-running", "pid": pid}
+
+    deadline = time.monotonic() + 10.0
+    while _pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if _pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    HARBOR_PID_PATH.unlink(missing_ok=True)
+    stopped = _wait_for_harbor(False, timeout_seconds=5.0)
+    return {"component": "harbor", "ok": stopped, "status": "stopped" if stopped else "stop-failed", "pid": pid}
 
 
 def _installed_module_units() -> list[str]:
@@ -100,7 +248,7 @@ def _stop_orphan_mcp_processes() -> dict[str, Any]:
 
 
 def stop_all() -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
+    results = _stop_local_modules()
     for instance in list_mcp_instances():
         try:
             if instance_status(instance["id"])["running"]:
@@ -122,7 +270,14 @@ def stop_all() -> dict[str, Any]:
         inspected = _run(["docker", "container", "inspect", PROMETHEUS_CONTAINER])
         if inspected["ok"]:
             results.append({"component": "prometheus", **_run(["docker", "stop", PROMETHEUS_CONTAINER])})
+    results.append(_stop_manual_harbor())
     return {"ok": all(item["ok"] for item in results), "results": results}
+
+
+def restart_all() -> dict[str, Any]:
+    stopped = stop_all()
+    started = start_all()
+    return {"ok": stopped["ok"] and started["ok"], "stop": stopped, "start": started}
 
 
 def uninstall_runtime() -> dict[str, Any]:
