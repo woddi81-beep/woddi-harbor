@@ -418,7 +418,12 @@ class ModuleTests(unittest.TestCase):
             type="openstack_mcp",
             transport="local",
             port=41003,
-            settings={"auth_url": "https://openstack.example/v3", "project_name": "demo", "auth_type": "token"},
+            settings={
+                "auth_url": "https://openstack.example/v3",
+                "project_name": "demo",
+                "project_domain_name": "Default",
+                "auth_type": "v3token",
+            },
         )
         with patch("app.modules.load_module_named_secret", return_value="token-value"):
             self.assertEqual(modules_module.validate_module_config(module), [])

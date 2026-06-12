@@ -85,7 +85,7 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
         token = load_module_named_secret(module.id, "openstack_token")
     auth_type = _resolve("auth_type", "auth_type_env")
     if token and not auth_type:
-        auth_type = "token"
+        auth_type = "v3token"
     return {
         "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
         "OS_REGION_NAME": _resolve("region_name", "region_name_env"),

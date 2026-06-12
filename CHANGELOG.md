@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.11 - 2026-06-12
+
+### Fixed
+
+- OpenStack token authentication uses the Keystone v3 token plugin
+- OpenStack tokens can be scoped with project name and project domain
+- The admin portal exposes project domain with the conventional `Default` value
+
 ## 0.3.10 - 2026-06-12
 
 ### Fixed

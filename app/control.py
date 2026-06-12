@@ -154,6 +154,7 @@ class BackupCreateRequest(BaseModel):
 
 class OpenStackConfigureRequest(BaseModel):
     project_name: str = Field(min_length=1, max_length=255)
+    project_domain_name: str = Field(default="Default", min_length=1, max_length=255)
     token: str = Field(default="", max_length=8192)
     auth_url: str = Field(min_length=1, max_length=2048)
     region_name: str = Field(default="", max_length=255)
@@ -656,7 +657,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.3.10", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version="0.3.11", lifespan=lifespan)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
@@ -740,6 +741,7 @@ def create_app() -> FastAPI:
         return {
             "configured": bool(module and module.type == "openstack_mcp"),
             "project_name": str(settings.get("project_name", "")),
+            "project_domain_name": str(settings.get("project_domain_name", "Default")),
             "auth_url": str(settings.get("auth_url", "")),
             "region_name": str(settings.get("region_name", "")),
             "port": module.port if module and module.type == "openstack_mcp" else 0,
@@ -775,10 +777,11 @@ def create_app() -> FastAPI:
             ],
             test_action="discover",
             settings={
-                "auth_type": "token",
+                "auth_type": "v3token",
                 "auth_url": body.auth_url.strip(),
                 "region_name": body.region_name.strip(),
                 "project_name": body.project_name.strip(),
+                "project_domain_name": body.project_domain_name.strip(),
                 "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
             },
             notes="Harbor verwaltet diesen lokalen, read-only OpenStack MCP Worker.",
@@ -798,7 +801,11 @@ def create_app() -> FastAPI:
             "integration.openstack.configure",
             "openstack",
             actor=_user.username,
-            detail={"project_name": body.project_name.strip(), "auth_url": body.auth_url.strip()},
+            detail={
+                "project_name": body.project_name.strip(),
+                "project_domain_name": body.project_domain_name.strip(),
+                "auth_url": body.auth_url.strip(),
+            },
         )
         return {
             "ok": True,
