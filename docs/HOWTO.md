@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.4
+git checkout v0.3.5
 scripts/install_production.sh manual
 ```
 
@@ -70,7 +70,8 @@ hostspezifischen Pfade werden in der nicht versionierten Datei
 ```
 
 Der Reindex lokaler Dokumentmodule erfolgt direkt und benoetigt keinen laufenden
-Harbor- oder Modul-Worker.
+Harbor- oder Modul-Worker. Das gilt ebenfalls fuer `search`, `stats` und andere
+Aufrufe lokaler Docs- und Maildir-Module.
 
 Für eine Git-Quelle wird in `config/sources.json` ein Eintrag mit `kind: "git"`,
 `repository`, `branch`, `target_path` und der zugehörigen `module_id` angelegt.

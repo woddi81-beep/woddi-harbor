@@ -176,6 +176,18 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(response, {"ok": True, "data": {"hits": []}})
         execute_patch.assert_called_once_with(module, "search", {"query": "test"})
 
+    def test_execute_local_docs_directly_without_http_worker(self) -> None:
+        module = ModuleConfig(id="10", type="docs", transport="local", path="/tmp/docs")
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.worker_execute", return_value={"ok": True, "data": {"hits": []}}) as direct_execute,
+            patch("app.modules.httpx.Client", side_effect=AssertionError("HTTP worker must not be used")),
+        ):
+            result = execute_module("10", "search", {"query": "installation"})
+
+        self.assertEqual(result, {"ok": True, "data": {"hits": []}})
+        direct_execute.assert_called_once_with(module, "search", {"query": "installation"})
+
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
     @patch("app.modules.httpx.Client", FakeWorkerHealthClient)
     def test_module_health_reachable_requires_execute_endpoint_for_local_worker(self) -> None:

@@ -1248,6 +1248,9 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
 
+    if module.transport == "local" and module.type in {"docs", "maildir"}:
+        return worker_execute(module, action, payload)
+
     if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
         try:
             if _is_local_mcp_module(module) or module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):

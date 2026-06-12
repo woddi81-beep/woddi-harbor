@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.5 - 2026-06-12
+
+### Fixed
+
+- Local Docs and Maildir calls execute directly without an HTTP worker
+- CLI document search works while Harbor and module processes are stopped
+- Chat and administration use the same workerless local search path
+
 ## 0.3.4 - 2026-06-12
 
 ### Fixed
