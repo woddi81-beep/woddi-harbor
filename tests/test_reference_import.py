@@ -31,5 +31,8 @@ class ReferenceImportTests(unittest.TestCase):
         self.assertEqual(configured[0].source_path, str(operations))
         self.assertEqual(configured[1].source_path, str(customer))
         self.assertEqual(configured[0].include_extensions, [".htm", ".html", ".markdown", ".md", ".png"])
-        self.assertEqual(len(save_modules.call_args.args[0]), 2)
+        modules = save_modules.call_args.args[0]
+        self.assertEqual(len(modules), 2)
+        self.assertTrue(all(module.port == 0 for module in modules))
+        self.assertTrue(all(module.type == "docs" for module in modules))
         self.assertTrue(result["ok"])

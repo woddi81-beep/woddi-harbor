@@ -487,7 +487,7 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
                 errors.append(f"Pfad existiert nicht: {root}")
             elif not root.is_dir():
                 errors.append(f"Pfad ist kein Verzeichnis: {root}")
-        if module.port <= 0 or module.port > 65535:
+        if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
         if module.top_k <= 0:
             errors.append("top_k muss groesser als 0 sein.")
@@ -548,7 +548,7 @@ def validation_errors_by_module(modules: list[ModuleConfig] | None = None) -> di
     errors = {module.id: list(validate_module_config(module)) for module in current_modules}
     port_usage: dict[tuple[str, int], list[str]] = {}
     for module in current_modules:
-        if module.transport != "local" or module.port <= 0:
+        if module.transport != "local" or module.type in {"docs", "maildir"} or module.port <= 0:
             continue
         key = (module.host, module.port)
         port_usage.setdefault(key, []).append(module.id)

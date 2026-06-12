@@ -127,8 +127,15 @@ def configure_document_sources(operations_path: str, customer_path: str) -> dict
             modules_by_id[module_id] = module
         module.enabled = True
         module.name = name
+        module.type = "docs"
         module.transport = "local"
+        module.remote_protocol = "auto"
         module.path = path
+        module.base_url = ""
+        module.api_key = ""
+        module.api_key_env = ""
+        module.port = 0
+        module.top_k = max(1, module.top_k)
         module.sources = [ModuleSource(id=f"{module_id}-source-1", path=path, label=name)]
     save_modules(sorted(modules_by_id.values(), key=lambda item: item.id))
     return {

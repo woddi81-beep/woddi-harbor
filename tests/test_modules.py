@@ -188,6 +188,14 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True, "data": {"hits": []}})
         direct_execute.assert_called_once_with(module, "search", {"query": "installation"})
 
+    def test_workerless_docs_module_is_valid_without_port(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            module = ModuleConfig(id="10", type="docs", transport="local", path=temporary, port=0)
+
+            errors = validation_errors_by_module([module])
+
+        self.assertEqual(errors["10"], [])
+
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
     @patch("app.modules.httpx.Client", FakeWorkerHealthClient)
     def test_module_health_reachable_requires_execute_endpoint_for_local_worker(self) -> None:
@@ -354,14 +362,25 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(credentials["OS_APPLICATION_CREDENTIAL_ID"], "abc")
 
     def test_validation_errors_by_module_detects_duplicate_ports(self) -> None:
-        with tempfile.TemporaryDirectory() as first_dir, tempfile.TemporaryDirectory() as second_dir:
-            modules = [
-                ModuleConfig(id="docs-a", type="docs", transport="local", path=first_dir, port=41000),
-                ModuleConfig(id="docs-b", type="docs", transport="local", path=second_dir, port=41000),
-            ]
-            errors = validation_errors_by_module(modules)
-        self.assertIn("Port-Konflikt", " ".join(errors["docs-a"]))
-        self.assertIn("Port-Konflikt", " ".join(errors["docs-b"]))
+        modules = [
+            ModuleConfig(
+                id="netbox-a",
+                type="netbox_mcp",
+                transport="local",
+                port=41000,
+                settings={"netbox_url": "https://netbox-a.example/api"},
+            ),
+            ModuleConfig(
+                id="netbox-b",
+                type="netbox_mcp",
+                transport="local",
+                port=41000,
+                settings={"netbox_url": "https://netbox-b.example/api"},
+            ),
+        ]
+        errors = validation_errors_by_module(modules)
+        self.assertIn("Port-Konflikt", " ".join(errors["netbox-a"]))
+        self.assertIn("Port-Konflikt", " ".join(errors["netbox-b"]))
 
     def test_worker_execute_uses_query_cache_for_repeated_docs_searches(self) -> None:
         with tempfile.TemporaryDirectory() as docs_dir, tempfile.TemporaryDirectory() as runtime_dir:

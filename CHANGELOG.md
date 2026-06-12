@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.6 - 2026-06-12
+
+### Fixed
+
+- Workerless Docs and Maildir modules no longer require a network port
+- Workerless search modules are excluded from local port-conflict validation
+- Document source setup resets stale transport and endpoint fields
+
 ## 0.3.5 - 2026-06-12
 
 ### Fixed

@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.5
+git checkout v0.3.6
 scripts/install_production.sh manual
 ```
 
