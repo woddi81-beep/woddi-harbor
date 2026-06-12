@@ -3,8 +3,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app.sources import ManagedSource, _copy_local, source_quality
+from app.config import ModuleConfig
+from app.sources import ManagedSource, _copy_local, source_quality, sync_source
 
 
 class SourceQualityTests(unittest.TestCase):
@@ -53,3 +55,33 @@ class SourceQualityTests(unittest.TestCase):
         self.assertEqual(quality["asset_files"], 1)
         self.assertEqual(quality["text_files"], 0)
         self.assertFalse(quality["healthy"])
+
+    def test_sync_reindexes_local_docs_without_worker_http(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origin = root / "origin"
+            target = root / "target"
+            origin.mkdir()
+            (origin / "guide.md").write_text("searchable documentation " * 10, encoding="utf-8")
+            source = ManagedSource(
+                id="operation-docs",
+                kind="local",
+                module_id="10",
+                source_path=str(origin),
+                target_path=str(target),
+                include_extensions=[".md"],
+            )
+            module = ModuleConfig(id="10", type="docs", transport="local")
+            with (
+                patch("app.sources.find_source", return_value=source),
+                patch("app.sources.find_module", return_value=module),
+                patch("app.sources.worker_execute", return_value={"ok": True}) as direct_reindex,
+                patch("app.sources.execute_module", side_effect=AssertionError("HTTP transport must not be used")),
+                patch("app.sources.SOURCE_LOCK_DIR", root / "locks"),
+                patch("app.sources.SOURCES_RUNTIME_DIR", root / "runtime"),
+            ):
+                result = sync_source("operation-docs")
+
+        direct_reindex.assert_called_once_with(module, "reindex", {})
+        self.assertEqual(result["reindex_mode"], "direct")
+        self.assertTrue(result["ok"])

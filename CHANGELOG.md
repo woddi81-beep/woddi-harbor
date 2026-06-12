@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4 - 2026-06-12
+
+### Fixed
+
+- Source synchronization reindexes local document modules without an HTTP worker
+- Manual operation no longer fails source sync with connection refused
+- Sync output reports whether reindexing used direct or transported execution
+
 ## 0.3.3 - 2026-06-12
 
 ### Added

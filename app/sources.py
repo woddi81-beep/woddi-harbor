@@ -13,8 +13,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from .config import CONFIG_DIR, DATA_DIR, RUNTIME_DIR, ModuleConfig, ModuleSource, load_modules, resolve_path, save_modules
-from .modules import execute_module
+from .config import CONFIG_DIR, DATA_DIR, RUNTIME_DIR, ModuleConfig, ModuleSource, find_module, load_modules, resolve_path, save_modules
+from .modules import execute_module, worker_execute
 
 SourceKind = Literal["local", "git"]
 SOURCES_CONFIG_PATH = CONFIG_DIR / "sources.json"
@@ -296,8 +296,17 @@ def sync_source(source_id: str, *, reindex: bool = True) -> dict[str, Any]:
                     shutil.rmtree(previous, ignore_errors=True)
                 manifest = _write_manifest(source, quality, changed=changed)
         reindex_result: dict[str, Any] | None = None
+        reindex_mode = ""
         if reindex and source.module_id:
-            reindex_result = execute_module(source.module_id, "reindex", {})
+            module = find_module(source.module_id)
+            if module is None:
+                raise ValueError(f"Zugehoeriges Modul nicht gefunden: {source.module_id}")
+            if module.transport == "local" and module.type in {"docs", "maildir"}:
+                reindex_result = worker_execute(module, "reindex", {})
+                reindex_mode = "direct"
+            else:
+                reindex_result = execute_module(source.module_id, "reindex", {})
+                reindex_mode = "transport"
         return {
             "ok": True,
             "source_id": source.id,
@@ -305,6 +314,7 @@ def sync_source(source_id: str, *, reindex: bool = True) -> dict[str, Any]:
             "quality": quality,
             "manifest": str(manifest),
             "reindex": reindex_result,
+            "reindex_mode": reindex_mode,
         }
 
 
