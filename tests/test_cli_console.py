@@ -46,4 +46,5 @@ def test_server_set_persists_external_bind(monkeypatch) -> None:
     assert saved == [settings]
     assert settings.host == "0.0.0.0"
     assert settings.port == 9680
+    assert settings.listen_configured is True
     assert '"external": true' in result.stdout

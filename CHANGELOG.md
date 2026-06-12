@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.13 - 2026-06-12
+
+### Changed
+
+- Harbor now listens on `0.0.0.0` by default
+- Legacy implicit `127.0.0.1` configurations migrate once to the external bind
+- Explicit binds configured through `server set` remain unchanged
+
 ## 0.3.12 - 2026-06-12
 
 ### Changed

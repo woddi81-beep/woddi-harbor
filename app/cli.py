@@ -431,6 +431,7 @@ def server_set(
     settings = load_settings()
     settings.host = normalized_host
     settings.port = port
+    settings.listen_configured = True
     save_settings(settings)
     console.print_json(
         json.dumps(

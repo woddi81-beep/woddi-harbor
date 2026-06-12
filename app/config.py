@@ -42,11 +42,12 @@ class LlmSettings:
 @dataclass
 class HarborSettings:
     name: str = "Harbor"
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 9680
     api_workers: int = 4
     system_prompt_path: str = "config/system_prompt.txt"
     onboarding_complete: bool = False
+    listen_configured: bool = True
     llm: LlmSettings = field(default_factory=LlmSettings)
 
 
@@ -264,15 +265,23 @@ def load_settings() -> HarborSettings:
         retry_attempts=max(1, min(5, int(llm_payload.get("retry_attempts", 3)))),
         max_tokens=int(llm_payload.get("max_tokens", 1200)),
     )
-    return HarborSettings(
+    legacy_listen_config = "listen_configured" not in payload
+    configured_host = str(payload.get("host", "0.0.0.0")).strip() or "0.0.0.0"
+    if legacy_listen_config and configured_host in {"127.0.0.1", "::1", "localhost"}:
+        configured_host = "0.0.0.0"
+    settings = HarborSettings(
         name=str(payload.get("name", "Harbor")),
-        host=str(payload.get("host", "127.0.0.1")),
+        host=configured_host,
         port=int(payload.get("port", 9680)),
         api_workers=max(1, int(payload.get("api_workers", 4))),
         system_prompt_path=str(payload.get("system_prompt_path", "config/system_prompt.txt")),
         onboarding_complete=bool(payload.get("onboarding_complete", False)),
+        listen_configured=True,
         llm=llm,
     )
+    if legacy_listen_config and not local_path.exists():
+        save_settings(settings)
+    return settings
 
 
 def save_settings(settings: HarborSettings) -> None:
