@@ -335,6 +335,10 @@ und Projektdomäne bleiben bei einem bereits projektgebundenen Token leer;
 Region und lokaler Port sind optional. Das Token wird nicht in
 `config/modules.local.json` gespeichert und nie an den Browser zurückgegeben.
 
+Liefert ein Token keinen Service-Katalog, fragt Harbor die erreichbaren Projekte
+bei Keystone ab. Bei genau einem Projekt scoped Harbor automatisch. Bei mehreren
+Projekten muss im Admin-Portal die Projekt-ID ausgewählt werden.
+
 Harbor verwendet das OpenStack Python SDK direkt. Es gibt keinen externen
 CLI-Prozess und keine Abhängigkeit von `PATH` oder Symlinks:
 

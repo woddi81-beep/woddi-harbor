@@ -191,11 +191,37 @@ class FakeOpenStackNetwork:
         return FakeOpenStackResource(id="router-1", name=value)
 
 
+class FakeOpenStackAccess:
+    def __init__(self, has_catalog: bool = True) -> None:
+        self._has_catalog = has_catalog
+
+    def has_service_catalog(self) -> bool:
+        return self._has_catalog
+
+
+class FakeOpenStackAuth:
+    def __init__(self, has_catalog: bool = True) -> None:
+        self.access = FakeOpenStackAccess(has_catalog)
+
+    def get_access(self, _session: object) -> FakeOpenStackAccess:
+        return self.access
+
+
+class FakeOpenStackSession:
+    def __init__(self, has_catalog: bool = True) -> None:
+        self.auth = FakeOpenStackAuth(has_catalog)
+
+
 class FakeOpenStackConnection:
-    compute = FakeOpenStackCompute()
-    identity = FakeOpenStackIdentity()
-    image = FakeOpenStackImage()
-    network = FakeOpenStackNetwork()
+    def __init__(self, *, has_catalog: bool = True) -> None:
+        self.compute = FakeOpenStackCompute()
+        self.identity = FakeOpenStackIdentity()
+        self.image = FakeOpenStackImage()
+        self.network = FakeOpenStackNetwork()
+        self.session = FakeOpenStackSession(has_catalog)
+
+    def authorize(self) -> str:
+        return "token"
 
 
 class ModuleTests(unittest.TestCase):
@@ -508,6 +534,40 @@ class ModuleTests(unittest.TestCase):
         rows = result["structuredContent"]["data"]
         self.assertEqual(rows, [{"id": "network-1", "name": "private"}])
 
+    def test_openstack_backend_auto_scopes_single_project(self) -> None:
+        created_credentials: list[dict[str, str]] = []
+
+        def factory(credentials: dict[str, str]) -> FakeOpenStackConnection:
+            created_credentials.append(credentials)
+            return FakeOpenStackConnection(has_catalog=bool(credentials.get("OS_PROJECT_ID")))
+
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "unscoped-token"},
+            connection_factory=factory,
+            project_discovery=lambda _credentials: [{"id": "project-1", "name": "production"}],
+        )
+
+        result = backend.call_tool("list_servers", {})
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod-api-01")
+        self.assertEqual(created_credentials[-1]["OS_PROJECT_ID"], "project-1")
+
+    def test_openstack_backend_reports_ambiguous_projects(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "unscoped-token"},
+            connection_factory=lambda _credentials: FakeOpenStackConnection(has_catalog=False),
+            project_discovery=lambda _credentials: [
+                {"id": "project-1", "name": "production"},
+                {"id": "project-2", "name": "testing"},
+            ],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "mehrere Projekte") as context:
+            backend.call_tool("list_servers", {})
+
+        self.assertIn("project-1", str(context.exception))
+        self.assertIn("project-2", str(context.exception))
+
     def test_openstack_sdk_connection_preserves_project_scoped_token(self) -> None:
         connection = create_openstack_connection(
             {
@@ -540,6 +600,21 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(connection.config.config["auth_type"], "v3token")
         self.assertEqual(connection.config.config["auth"]["project_name"], "production")
         self.assertEqual(connection.config.config["auth"]["project_domain_name"], "Default")
+
+    def test_openstack_sdk_connection_scopes_token_by_project_id(self) -> None:
+        connection = create_openstack_connection(
+            {
+                "OS_AUTH_URL": "https://identity.example/v3",
+                "OS_TOKEN": "unscoped-token",
+                "OS_PROJECT_ID": "project-1",
+                "OS_PROJECT_NAME": "",
+                "OS_PROJECT_DOMAIN_NAME": "",
+            }
+        )
+
+        self.assertEqual(connection.config.config["auth_type"], "v3token")
+        self.assertEqual(connection.config.config["auth"]["project_id"], "project-1")
+        self.assertNotIn("project_name", connection.config.config["auth"])
 
     def test_openstack_module_validation_accepts_named_token(self) -> None:
         module = ModuleConfig(

@@ -100,6 +100,7 @@ async function action(raw) {
       const configuration = await api("/api/integrations/openstack");
       const form = $("openstack-form");
       form.reset();
+      form.project_id.value = configuration.project_id || "";
       form.project_name.value = configuration.project_name || "";
       form.project_domain_name.value = configuration.project_domain_name || "";
       form.auth_url.value = configuration.auth_url || "";
@@ -208,6 +209,7 @@ $("openstack-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = {
+    project_id: form.project_id.value.trim(),
     project_name: form.project_name.value.trim(),
     project_domain_name: form.project_domain_name.value.trim(),
     token: form.token.value,

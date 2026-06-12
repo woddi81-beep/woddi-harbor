@@ -22,6 +22,7 @@ def _openstack_credentials() -> dict[str, str]:
         "OS_APPLICATION_CREDENTIAL_SECRET": "",
         "OS_USERNAME": "",
         "OS_PASSWORD": "",
+        "OS_PROJECT_ID": "",
         "OS_PROJECT_NAME": "",
         "OS_USER_DOMAIN_NAME": "",
         "OS_PROJECT_DOMAIN_NAME": "",

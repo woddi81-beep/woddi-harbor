@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
@@ -23,6 +24,24 @@ def openstack_sdk_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+def discover_accessible_projects(credentials: dict[str, str]) -> list[dict[str, str]]:
+    auth_url = credentials["OS_AUTH_URL"].rstrip("/")
+    token = credentials.get("OS_TOKEN", "")
+    response = httpx.get(
+        f"{auth_url}/auth/projects",
+        headers={"X-Auth-Token": token, "Accept": "application/json"},
+        timeout=15.0,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    projects = payload.get("projects", []) if isinstance(payload, dict) else []
+    return [
+        {"id": str(project.get("id", "")), "name": str(project.get("name", ""))}
+        for project in projects
+        if isinstance(project, dict) and project.get("id")
+    ]
 
 
 def create_openstack_connection(credentials: dict[str, str]) -> Any:
@@ -41,14 +60,16 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         "force_ipv4": True,
     }
     token = credentials.get("OS_TOKEN", "")
+    project_id = credentials.get("OS_PROJECT_ID", "")
     project_name = credentials.get("OS_PROJECT_NAME", "")
     if token:
         options.update(
             {
-                "auth_type": "v3token" if project_name else "token",
+                "auth_type": "v3token" if project_id or project_name else "token",
                 "token": token,
-                "project_name": project_name or None,
-                "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or None,
+                "project_id": project_id or None,
+                "project_name": project_name if not project_id else None,
+                "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") if project_name and not project_id else None,
             }
         )
     elif credentials.get("OS_APPLICATION_CREDENTIAL_ID") and credentials.get("OS_APPLICATION_CREDENTIAL_SECRET"):
@@ -65,9 +86,10 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
                 "auth_type": credentials.get("OS_AUTH_TYPE") or "password",
                 "username": credentials.get("OS_USERNAME"),
                 "password": credentials.get("OS_PASSWORD"),
-                "project_name": project_name or None,
+                "project_id": project_id or None,
+                "project_name": project_name if not project_id else None,
                 "user_domain_name": credentials.get("OS_USER_DOMAIN_NAME") or "Default",
-                "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default",
+                "project_domain_name": (credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default") if not project_id else None,
             }
         )
     return Connection(**{key: value for key, value in options.items() if value is not None})
@@ -122,12 +144,35 @@ class OpenStackBackend:
     credentials: dict[str, str]
     cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS
     connection_factory: Callable[[dict[str, str]], Any] = create_openstack_connection
+    project_discovery: Callable[[dict[str, str]], list[dict[str, str]]] = discover_accessible_projects
     _cache: dict[str, CachedResult] = field(default_factory=dict)
     _connection: Any = field(default=None, init=False, repr=False)
 
     def _get_connection(self) -> Any:
         if self._connection is None:
-            self._connection = self.connection_factory(self.credentials)
+            connection = self.connection_factory(self.credentials)
+            token = self.credentials.get("OS_TOKEN", "")
+            has_explicit_scope = bool(self.credentials.get("OS_PROJECT_ID") or self.credentials.get("OS_PROJECT_NAME"))
+            if token and not has_explicit_scope:
+                connection.authorize()
+                access = connection.session.auth.get_access(connection.session)
+                if not access.has_service_catalog():
+                    projects = self.project_discovery(self.credentials)
+                    if len(projects) == 1:
+                        scoped_credentials = {**self.credentials, "OS_PROJECT_ID": projects[0]["id"]}
+                        connection = self.connection_factory(scoped_credentials)
+                    elif projects:
+                        choices = ", ".join(f"{project['name']} ({project['id']})" for project in projects)
+                        raise RuntimeError(
+                            "OpenStack Token ist ungescoped und hat Zugriff auf mehrere Projekte. "
+                            f"Konfiguriere eine Projekt-ID: {choices}"
+                        )
+                    else:
+                        raise RuntimeError(
+                            "OpenStack Token ist ungescoped und Keystone liefert kein erreichbares Projekt. "
+                            "Erzeuge einen projektgebundenen Token oder konfiguriere eine Projekt-ID."
+                        )
+            self._connection = connection
         return self._connection
 
     def _cached(self, operation: str, arguments: dict[str, Any], loader: Callable[[], Any]) -> Any:
@@ -179,6 +224,11 @@ class OpenStackBackend:
             "backend": "openstacksdk",
             "openstack_sdk": openstack_sdk_available(),
             "auth_configured": bool(self.credentials.get("OS_AUTH_URL")),
+            "scope_mode": "project_id"
+            if self.credentials.get("OS_PROJECT_ID")
+            else "project_name"
+            if self.credentials.get("OS_PROJECT_NAME")
+            else "catalog_or_auto",
             "credential_mode": "token"
             if self.credentials.get("OS_TOKEN")
             else "application_credential"

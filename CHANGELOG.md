@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 - 2026-06-12
+
+### Added
+
+- OpenStack project-ID configuration for reliable Keystone token scoping
+- Automatic project discovery for unscoped tokens with an empty service catalog
+- Automatic scoping when exactly one project is accessible
+- Clear project choices when an unscoped token can access multiple projects
+
+### Changed
+
+- OpenStack health reports the active scope strategy
+
 ## 0.4.0 - 2026-06-12
 
 ### Changed

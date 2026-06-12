@@ -83,11 +83,12 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
     token = _resolve("token", "token_env")
     if not token:
         token = load_module_named_secret(module.id, "openstack_token")
+    project_id = _resolve("project_id", "project_id_env")
     project_name = _resolve("project_name", "project_name_env")
     project_domain_name = _resolve("project_domain_name", "project_domain_name_env")
     auth_type = _resolve("auth_type", "auth_type_env")
     if token:
-        auth_type = "v3token" if project_name else "token"
+        auth_type = "v3token" if project_id or project_name else "token"
     return {
         "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
         "OS_REGION_NAME": _resolve("region_name", "region_name_env"),
@@ -98,9 +99,10 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
         "OS_APPLICATION_CREDENTIAL_SECRET": _resolve("application_credential_secret", "application_credential_secret_env"),
         "OS_USERNAME": _resolve("username", "username_env"),
         "OS_PASSWORD": _resolve("password", "password_env"),
+        "OS_PROJECT_ID": project_id,
         "OS_PROJECT_NAME": project_name,
         "OS_USER_DOMAIN_NAME": _resolve("user_domain_name", "user_domain_name_env"),
-        "OS_PROJECT_DOMAIN_NAME": project_domain_name if project_name else "",
+        "OS_PROJECT_DOMAIN_NAME": project_domain_name if project_name and not project_id else "",
     }
 
 

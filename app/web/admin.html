@@ -52,6 +52,7 @@
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
       <h3>OpenStack einbinden</h3>
+      <label>Projekt-ID (optional)<input name="project_id" autocomplete="off" placeholder="Empfohlen für ungescopte Tokens"></label>
       <label>Projektname (optional)<input name="project_name" autocomplete="off" placeholder="Nur für ungescopte Tokens"></label>
       <label>Projektdomäne (optional)<input name="project_domain_name" autocomplete="off" placeholder="Default"></label>
       <label>
@@ -64,7 +65,7 @@
         <label>Region<input name="region_name" placeholder="RegionOne"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <p class="muted">Bei einem bereits projektgebundenen Token bleiben Projektname und Projektdomäne leer. Nur ungescopte Tokens benötigen ein Projekt. Das Token wird mit Dateirechten 0600 gespeichert und nie wieder an den Browser übertragen.</p>
+      <p class="muted">Bei einem bereits projektgebundenen Token bleiben alle Projektfelder leer. Bei einem ungescopten Token ist die Projekt-ID am zuverlässigsten; alternativ Projektname und Domäne angeben. Harbor wählt automatisch, wenn der Token genau ein Projekt erreicht.</p>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="openstack-dialog">Abbrechen</button></div>
     </form>
   </dialog>

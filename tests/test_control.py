@@ -200,6 +200,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
             transport="local",
             settings={
                 "auth_url": "https://identity.example/v3",
+                "project_id": "",
                 "project_name": "demo",
                 "project_domain_name": "Default",
                 "region_name": "RegionOne",
@@ -213,6 +214,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
             result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
 
         self.assertTrue(result["token_configured"])
+        self.assertEqual(result["project_id"], "")
         self.assertEqual(result["project_domain_name"], "Default")
         self.assertNotIn("token", {key: value for key, value in result.items() if key != "token_configured"})
         self.assertNotIn("super-secret-token", str(result))
@@ -226,6 +228,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         endpoint = self._endpoint("openstack_configure")
         body = OpenStackConfigureRequest(
+            project_id="",
             project_name="demo",
             project_domain_name="Default",
             token="super-secret-token",
@@ -246,6 +249,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
         save_secret.assert_called_once_with("openstack", "openstack_token", "super-secret-token")
         self.assertNotIn("token", module.settings)
         self.assertEqual(module.settings["auth_type"], "v3token")
+        self.assertEqual(module.settings["project_id"], "")
         self.assertEqual(module.settings["project_domain_name"], "Default")
         self.assertTrue(result["token_configured"])
 
@@ -258,6 +262,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         endpoint = self._endpoint("openstack_configure")
         body = OpenStackConfigureRequest(
+            project_id="",
             token="project-scoped-token",
             auth_url="https://identity.example/v3",
             region_name="RegionOne",
