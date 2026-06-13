@@ -33,6 +33,7 @@ class CliModuleTests(unittest.TestCase):
         with (
             patch("app.cli.validate_module_config", return_value=[]),
             patch("app.cli.upsert_module", side_effect=fake_upsert),
+            patch("app.cli.load_module_named_secret", return_value=""),
             patch("app.cli.console.print"),
         ):
             module_add_openstack_mcp(module_id="openstack", base_url="http://127.0.0.1:8080/mcp")
@@ -43,7 +44,17 @@ class CliModuleTests(unittest.TestCase):
         self.assertEqual(module.provider, "openstack-mcp-server")
         self.assertEqual(module.remote_protocol, "mcp")
         self.assertEqual(module.base_url, "http://127.0.0.1:8080/mcp")
-        self.assertEqual(module.tool_names, ["list_servers", "list_projects", "list_images"])
+        self.assertEqual(
+            module.tool_names,
+            [
+                "discover_resources",
+                "get_storage_statistics",
+                "get_project_statistics",
+                "list_servers",
+                "list_projects",
+                "list_images",
+            ],
+        )
 
     def test_add_openstack_local_mcp_registers_local_mcp_module(self) -> None:
         captured: dict[str, object] = {}
@@ -82,7 +93,7 @@ class CliModuleTests(unittest.TestCase):
         module = captured["module"]
         self.assertEqual(module.type, "netbox_mcp")
         self.assertEqual(module.transport, "local")
-        self.assertEqual(module.settings["netbox_token"], "")
+        self.assertNotIn("netbox_token", module.settings)
         self.assertEqual(module.settings["netbox_token_env"], "")
 
 

@@ -9,14 +9,23 @@
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <h1 class="brand">Harbor Admin</h1>
-      <p><a href="/chat">Zum Chat</a></p>
-      <p class="muted">Dauerbetrieb ist optional.<br><code>./harbor.sh stop</code><br><code>./harbor.sh uninstall-runtime</code></p>
+      <div class="brand-block">
+        <span class="eyebrow">Control Plane</span>
+        <h1 class="brand">Harbor Admin</h1>
+        <p class="muted">Module, Zugriffe und Betrieb zentral verwalten.</p>
+      </div>
       <nav id="nav" class="nav"></nav>
+      <div class="sidebar-footer">
+        <a class="nav-link" href="/chat">Zum Chat</a>
+        <details class="runtime-help"><summary>Runtime-Befehle</summary><code>./harbor.sh stop</code><code>./harbor.sh uninstall-runtime</code></details>
+      </div>
     </aside>
     <main class="main">
-      <div class="topbar"><h2 id="title">Übersicht</h2><button id="refresh">Aktualisieren</button></div>
-      <div id="notice" class="notice"></div>
+      <div class="topbar">
+        <div><span class="eyebrow">Administration</span><h2 id="title">Übersicht</h2></div>
+        <button id="refresh">Aktualisieren</button>
+      </div>
+      <div id="notice" class="notice" role="status"></div>
       <section id="content" class="stack"></section>
     </main>
   </div>
@@ -47,6 +56,20 @@
       </div>
       <label>Notizen<textarea name="notes" rows="2"></textarea></label>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="module-dialog">Abbrechen</button></div>
+      </form>
+  </dialog>
+  <dialog id="netbox-dialog">
+    <form id="netbox-form" class="stack">
+      <h3>NetBox einbinden</h3>
+      <label>NetBox URL<input name="netbox_url" type="url" required placeholder="https://netbox.example.com"></label>
+      <label>API-Token<input name="token" type="password" autocomplete="new-password" placeholder="Read-only Token"></label>
+      <p id="netbox-token-state" class="muted"></p>
+      <div class="form-grid">
+        <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="30"></label>
+        <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
+      </div>
+      <p class="muted">Verwende einen NetBox-Token mit ausschließlich lesenden Rechten. Harbor speichert ihn getrennt von der Modulkonfiguration.</p>
+      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="netbox-dialog">Abbrechen</button></div>
     </form>
   </dialog>
   <dialog id="openstack-dialog">
@@ -86,6 +109,13 @@
       <label>Umgebung (KEY=VALUE, eine Zeile je Wert)<textarea name="environment" rows="4" placeholder="MCP_PORT=61000"></textarea></label>
       <div class="row"><button class="primary">Anlegen</button><button type="button" data-close="mcp-instance-dialog">Abbrechen</button></div>
     </form>
+  </dialog>
+  <dialog id="discovery-dialog">
+    <div class="dialog-head">
+      <div><span class="eyebrow">Quelle</span><h2 id="discovery-title">Discovery</h2></div>
+      <button type="button" class="icon-button" data-close="discovery-dialog" aria-label="Schließen">×</button>
+    </div>
+    <pre id="discovery-result" class="discovery-result"></pre>
   </dialog>
   <script src="/static/admin.js" defer></script>
 </body>

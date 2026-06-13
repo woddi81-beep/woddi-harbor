@@ -11,7 +11,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from .config import ModuleConfig, load_modules, load_settings, save_settings, save_system_prompt, system_prompt
+from .config import ModuleConfig, load_modules, load_settings, parse_module_type, save_settings, save_system_prompt, system_prompt
 from .llm import complete_chat
 from .modules import (
     execute_module,
@@ -158,7 +158,7 @@ def _module_add_wizard(console: Console) -> None:
         module = ModuleConfig(
             id=module_id,
             name=name,
-            type=kind,
+            type=parse_module_type(kind),
             transport="local",
             path=path,
             port=port,

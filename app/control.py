@@ -14,12 +14,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth import hash_password, require_metrics_access, require_role
 from .backup import list_backups
+from .cache import BoundedTTLCache
 from .config import (
     LOG_DIR,
     HarborSettings,
@@ -32,6 +34,8 @@ from .config import (
     load_modules,
     load_settings,
     load_users,
+    parse_module_type,
+    parse_user_role,
     save_module_named_secret,
     save_users,
     system_prompt,
@@ -83,6 +87,7 @@ RECENT_ACTIVITY: deque[dict[str, Any]] = deque(maxlen=25)
 DEFAULT_LOG_PATH = Path("~/.harbor/logs/harbor.log").expanduser()
 _WARMUP_STOP = threading.Event()
 _WARMUP_THREAD: threading.Thread | None = None
+_DASHBOARD_CACHE = BoundedTTLCache[dict[str, Any]](ttl_seconds=2.0, max_entries=1)
 
 
 class ExecuteRequest(BaseModel):
@@ -163,6 +168,13 @@ class OpenStackConfigureRequest(BaseModel):
     port: int = Field(default=0, ge=0, le=65535)
 
 
+class NetBoxConfigureRequest(BaseModel):
+    netbox_url: str = Field(min_length=1, max_length=2048)
+    token: str = Field(default="", max_length=8192)
+    timeout_seconds: float = Field(default=30.0, ge=5.0, le=600.0)
+    port: int = Field(default=0, ge=0, le=65535)
+
+
 def _record_activity(kind: str, label: str, detail: str = "") -> None:
     RECENT_ACTIVITY.appendleft(
         {
@@ -204,6 +216,9 @@ def _system_stats() -> dict[str, Any]:
 
 
 def _dashboard_payload() -> dict[str, Any]:
+    cached = _DASHBOARD_CACHE.get("dashboard")
+    if cached is not None:
+        return cached
     settings = load_settings()
     modules = list_module_overview()
     llm = _llm_health(settings)
@@ -216,7 +231,7 @@ def _dashboard_payload() -> dict[str, Any]:
     health_cache_hits = sum(int(module["status"].get("runtime_state", {}).get("health_cache_hits", 0)) for module in modules)
     query_cache_total = query_cache_hits + query_cache_misses
     health_cache_total = health_checks + health_cache_hits
-    return {
+    payload = {
         "app": {
             "name": settings.name,
             "host": settings.host,
@@ -242,6 +257,8 @@ def _dashboard_payload() -> dict[str, Any]:
         "activity": list(RECENT_ACTIVITY),
         "stats": _system_stats(),
     }
+    _DASHBOARD_CACHE.set("dashboard", payload)
+    return payload
 
 
 def _read_harbor_log() -> dict[str, Any]:
@@ -330,7 +347,8 @@ def _context_for_module(
         return {"module": module.id, "kind": "openstack", **openstack_context}
     if not _is_netbox_module(module) or not _should_use_netbox(message, selected_modules, module):
         return None
-    if allowed_tools is not None and "get_objects" not in allowed_tools:
+    netbox_tool = _guess_netbox_tool(message)
+    if allowed_tools is not None and netbox_tool not in allowed_tools:
         return None
     netbox_context = _query_netbox_context(module, message)
     if not netbox_context:
@@ -393,6 +411,13 @@ def _should_use_openstack(message: str, selected_modules: set[str], module: Modu
         r"\brouter(?:s)?\b",
         r"\btenant(?:s)?\b",
         r"\bfloating ip(?:s)?\b",
+        r"\bstorage\b",
+        r"\bspeicher\b",
+        r"\bvolume(?:s)?\b",
+        r"\bvolumen\b",
+        r"\bquota\b",
+        r"\bauslastung\b",
+        r"\bstatisti(?:k|cs)\b",
     )
     return any(re.search(pattern, lower) for pattern in token_patterns)
 
@@ -498,7 +523,38 @@ def _extract_netbox_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     return rows if isinstance(rows, list) else []
 
 
+def _guess_netbox_tool(message: str) -> str:
+    lower = message.lower()
+    if any(term in lower for term in {"statistik", "statistics", "bestand", "inventar", "anzahl", "wie viele"}):
+        return "get_inventory_statistics"
+    if any(term in lower for term in {"felder", "fields", "schema", "struktur", "erfasst"}):
+        return "describe_object_type"
+    if any(term in lower for term in {"discovery", "entdecken", "objekttyp", "object type", "möglichkeiten"}):
+        return "discover_object_types"
+    return "get_objects"
+
+
 def _query_netbox_context(module: ModuleConfig, message: str) -> dict[str, Any] | None:
+    tool_name = _guess_netbox_tool(message)
+    if tool_name != "get_objects":
+        arguments: dict[str, Any] = {}
+        if tool_name == "describe_object_type":
+            arguments = {
+                "object_type": _guess_netbox_object_types(message)[0],
+                "include_sample": False,
+                "max_fields": 300,
+            }
+        try:
+            result = execute_module(module.id, tool_name, arguments)
+        except Exception as exc:
+            return {"tool": tool_name, "results": [], "note": f"NetBox-Discovery fehlgeschlagen: {exc}"}
+        data = result.get("data", {})
+        structured = data.get("structuredContent", {}) if isinstance(data, dict) else {}
+        payload = structured.get("data") if isinstance(structured, dict) else None
+        if isinstance(payload, dict):
+            return {"tool": tool_name, "results": [payload]}
+        return {"tool": tool_name, "results": [], "note": "NetBox lieferte keinen strukturierten Inhalt."}
+
     query = _extract_netbox_query(message)
     filters: dict[str, Any] = {"limit": 5}
     if query:
@@ -526,6 +582,13 @@ def _query_netbox_context(module: ModuleConfig, message: str) -> dict[str, Any] 
 
 def _guess_openstack_tool(message: str) -> str:
     lower = message.lower()
+    if any(term in lower for term in {"discovery", "felder", "fields", "schema", "erfasst", "ressourcen"}):
+        return "discover_resources"
+    if any(term in lower for term in {"storage", "speicher", "volume", "volumen", "cinder"}):
+        if any(term in lower for term in {"statistik", "status", "auslastung", "quota", "prozent", "%", "voll", "frei"}):
+            return "get_storage_statistics"
+    if any(term in lower for term in {"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"}):
+        return "get_project_statistics"
     if "project" in lower or "tenant" in lower:
         return "list_projects"
     if "image" in lower:
@@ -546,7 +609,11 @@ def _guess_openstack_tool(message: str) -> str:
 def _query_openstack_context(module: ModuleConfig, message: str) -> dict[str, Any] | None:
     tool_name = _guess_openstack_tool(message)
     query = _extract_netbox_query(message)
-    arguments: dict[str, Any] = {"limit": 5}
+    arguments: dict[str, Any] = (
+        {}
+        if tool_name in {"discover_resources", "get_storage_statistics", "get_project_statistics"}
+        else {"limit": 5}
+    )
     if query:
         if tool_name in {"list_servers", "list_projects", "list_images", "list_flavors", "list_networks", "list_subnets", "list_routers"}:
             arguments["name"] = query
@@ -624,7 +691,7 @@ def _request_to_module(body: ModuleUpsertRequest) -> ModuleConfig:
     ]
     return ModuleConfig(
         id=body.id.strip(),
-        type=str(body.type).strip(),
+        type=parse_module_type(body.type),
         enabled=body.enabled,
         name=body.name.strip(),
         provider=body.provider.strip(),
@@ -660,6 +727,7 @@ def create_app() -> FastAPI:
         _WARMUP_STOP.set()
 
     app = FastAPI(title="Harbor", version="0.4.2", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
@@ -687,7 +755,13 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "public, max-age=3600, must-revalidate"
+        elif request.url.path.startswith("/api/") or request.url.path == "/metrics":
+            response.headers["Cache-Control"] = "no-store"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     @app.get("/", response_class=RedirectResponse)
@@ -724,6 +798,10 @@ def create_app() -> FastAPI:
             "users_configured": bool(load_users()),
         }
 
+    @app.get("/api/dashboard")
+    def dashboard(_user=require_role("admin")) -> dict[str, Any]:
+        return _dashboard_payload()
+
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics(_user=Depends(require_metrics_access)) -> PlainTextResponse:
         return PlainTextResponse(prometheus_metrics(), media_type="text/plain; version=0.0.4")
@@ -735,6 +813,77 @@ def create_app() -> FastAPI:
     @app.get("/api/modules/overview")
     def modules_overview(_user=require_role("admin")) -> dict[str, Any]:
         return {"modules": list_module_overview()}
+
+    @app.get("/api/integrations/netbox")
+    def netbox_configuration(_user=require_role("admin")) -> dict[str, Any]:
+        module = find_module("netbox")
+        settings = module.settings if module and module.type == "netbox_mcp" else {}
+        return {
+            "configured": bool(module and module.type == "netbox_mcp"),
+            "netbox_url": str(settings.get("netbox_url", "")),
+            "timeout_seconds": module.timeout_seconds if module and module.type == "netbox_mcp" else 30.0,
+            "port": module.port if module and module.type == "netbox_mcp" else 0,
+            "token_configured": bool(
+                load_module_named_secret("netbox", "netbox_token")
+                or settings.get("netbox_token")
+                or settings.get("netbox_token_env")
+            ),
+        }
+
+    @app.put("/api/integrations/netbox")
+    def netbox_configure(body: NetBoxConfigureRequest, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
+        existing = find_module("netbox")
+        old_token = load_module_named_secret("netbox", "netbox_token")
+        new_token = body.token.strip()
+        module = ModuleConfig(
+            id="netbox",
+            name="NetBox MCP",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+            host=existing.host if existing and existing.type == "netbox_mcp" else "127.0.0.1",
+            port=body.port,
+            timeout_seconds=body.timeout_seconds,
+            tool_names=[
+                "discover_object_types",
+                "describe_object_type",
+                "get_inventory_statistics",
+                "get_objects",
+                "get_object_by_id",
+                "get_changelogs",
+                "call_endpoint",
+            ],
+            test_action="discover",
+            settings={
+                "netbox_url": body.netbox_url.strip(),
+                "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
+            },
+            notes="Harbor verwaltet diesen lokalen, read-only NetBox MCP Worker.",
+        )
+        try:
+            if new_token:
+                save_module_named_secret("netbox", "netbox_token", new_token)
+            upsert_module(module)
+        except Exception as exc:
+            if new_token:
+                if old_token:
+                    save_module_named_secret("netbox", "netbox_token", old_token)
+                else:
+                    delete_module_named_secret("netbox", "netbox_token")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_audit(
+            "integration.netbox.configure",
+            "netbox",
+            actor=_user.username,
+            detail={"netbox_url": body.netbox_url.strip()},
+        )
+        return {
+            "ok": True,
+            "message": "NetBox-Konfiguration gespeichert.",
+            "token_configured": bool(new_token or old_token),
+            "status": module_status(module),
+        }
 
     @app.get("/api/integrations/openstack")
     def openstack_configuration(_user=require_role("admin")) -> dict[str, Any]:
@@ -783,6 +932,20 @@ def create_app() -> FastAPI:
                 "list_subnets",
                 "list_ports",
                 "list_routers",
+                "list_floating_ips",
+                "list_security_groups",
+                "list_volumes",
+                "list_volume_snapshots",
+                "list_volume_backups",
+                "list_keypairs",
+                "list_server_groups",
+                "list_stacks",
+                "list_load_balancers",
+                "list_availability_zones",
+                "get_compute_limits",
+                "discover_resources",
+                "get_storage_statistics",
+                "get_project_statistics",
             ],
             test_action="discover",
             settings={
@@ -792,7 +955,7 @@ def create_app() -> FastAPI:
                 "project_id": project_id,
                 "project_name": project_name,
                 "project_domain_name": project_domain_name if project_name and not project_id else "",
-                "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
+                "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
             },
             notes="Harbor verwaltet diesen lokalen, read-only OpenStack MCP Worker.",
         )
@@ -905,7 +1068,21 @@ def create_app() -> FastAPI:
         if module is None:
             raise HTTPException(status_code=404, detail="Modul nicht gefunden.")
         try:
-            return discover_remote_module(module)
+            result = discover_remote_module(module)
+            source_tool = (
+                "discover_object_types"
+                if _is_netbox_module(module)
+                else "discover_resources"
+                if _is_openstack_module(module)
+                else ""
+            )
+            allowed_tools = _allowed_tools(_user)
+            if source_tool and (allowed_tools is None or source_tool in allowed_tools):
+                try:
+                    result["source_discovery"] = execute_module(module_id, source_tool, {})
+                except Exception as exc:
+                    result["source_discovery_error"] = str(exc)
+            return result
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -974,13 +1151,14 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail="Benutzer existiert bereits.")
         if body.role not in {"viewer", "operator", "admin"}:
             raise HTTPException(status_code=400, detail="Ungueltige Rolle.")
+        role = parse_user_role(body.role)
         if len(body.password) < 12:
             raise HTTPException(status_code=400, detail="Passwort muss mindestens 12 Zeichen lang sein.")
         users.append(
             HarborUser(
                 username=username,
                 password_hash=hash_password(body.password),
-                role=body.role,
+                role=role,
                 enabled=body.enabled,
                 allowed_modules=body.allowed_modules,
                 allowed_tools=body.allowed_tools,
@@ -1000,11 +1178,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Benutzername kann nicht geaendert werden.")
         if body.role not in {"viewer", "operator", "admin"}:
             raise HTTPException(status_code=400, detail="Ungueltige Rolle.")
+        role = parse_user_role(body.role)
         removes_active_admin = user.enabled and user.role == "admin" and (not body.enabled or body.role != "admin")
         active_admins = sum(item.enabled and item.role == "admin" for item in users)
         if removes_active_admin and active_admins <= 1:
             raise HTTPException(status_code=400, detail="Der letzte aktive Admin kann nicht deaktiviert oder herabgestuft werden.")
-        user.role = body.role
+        user.role = role
         user.enabled = body.enabled
         user.allowed_modules = body.allowed_modules
         user.allowed_tools = body.allowed_tools

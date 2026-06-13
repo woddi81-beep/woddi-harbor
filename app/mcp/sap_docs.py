@@ -138,7 +138,12 @@ class SapDocsBackend:
             raise ValueError("query is required.")
         limit = max(1, min(int(limit), 20))
         search_url = self._absolute_url("/http.svc/elasticsearch")
-        params = {"q": clean_query, "area": "content", "transtype": "standard,html,pdf,others", "size": limit}
+        params: dict[str, str | int] = {
+            "q": clean_query,
+            "area": "content",
+            "transtype": "standard,html,pdf,others",
+            "size": limit,
+        }
         with self._client() as client:
             response = client.get(search_url, params=params)
         response.raise_for_status()

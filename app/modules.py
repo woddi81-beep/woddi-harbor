@@ -34,7 +34,7 @@ from .config import (
     module_sources,
     resolve_module_source_path,
 )
-from .search import SearchIndexMeta, ensure_index, load_index_meta, search_index
+from .search import IndexKind, SearchIndexMeta, ensure_index, load_index_meta, search_index
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 QUERY_CACHE_TTL_SECONDS = 45.0
@@ -67,6 +67,8 @@ def _netbox_settings(module: ModuleConfig) -> tuple[str, str]:
         netbox_url = os.getenv(url_env, "").strip()
     if not netbox_token and token_env:
         netbox_token = os.getenv(token_env, "").strip()
+    if not netbox_token:
+        netbox_token = load_module_named_secret(module.id, "netbox_token")
     return netbox_url, netbox_token
 
 
@@ -83,6 +85,12 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
     token = _resolve("token", "token_env")
     if not token:
         token = load_module_named_secret(module.id, "openstack_token")
+    application_credential_secret = _resolve("application_credential_secret", "application_credential_secret_env")
+    if not application_credential_secret:
+        application_credential_secret = load_module_named_secret(module.id, "openstack_application_credential_secret")
+    password = _resolve("password", "password_env")
+    if not password:
+        password = load_module_named_secret(module.id, "openstack_password")
     project_id = _resolve("project_id", "project_id_env")
     project_name = _resolve("project_name", "project_name_env")
     project_domain_name = _resolve("project_domain_name", "project_domain_name_env")
@@ -97,9 +105,9 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
         "OS_AUTH_TYPE": auth_type or "v3applicationcredential",
         "OS_TOKEN": token,
         "OS_APPLICATION_CREDENTIAL_ID": _resolve("application_credential_id", "application_credential_id_env"),
-        "OS_APPLICATION_CREDENTIAL_SECRET": _resolve("application_credential_secret", "application_credential_secret_env"),
+        "OS_APPLICATION_CREDENTIAL_SECRET": application_credential_secret,
         "OS_USERNAME": _resolve("username", "username_env"),
-        "OS_PASSWORD": _resolve("password", "password_env"),
+        "OS_PASSWORD": password,
         "OS_PROJECT_ID": project_id,
         "OS_PROJECT_NAME": project_name,
         "OS_USER_DOMAIN_NAME": _resolve("user_domain_name", "user_domain_name_env"),
@@ -1444,7 +1452,7 @@ def warm_module_runtime_caches() -> dict[str, Any]:
     return {"checked": checked, "warmed": warmed, "timestamp": _timestamp()}
 
 
-def _run_reindex_job(module: ModuleConfig, kind: str, roots: list[tuple[str, str, Path]], index_path: Path, index_timeout: float | None, job_id: str) -> None:
+def _run_reindex_job(module: ModuleConfig, kind: IndexKind, roots: list[tuple[str, str, Path]], index_path: Path, index_timeout: float | None, job_id: str) -> None:
     started_at = time.monotonic()
     update_module_runtime_state(
         module.id,

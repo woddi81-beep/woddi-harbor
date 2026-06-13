@@ -11,7 +11,6 @@ from PyQt6.QtCore import QLockFile, QProcess, QTimer
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-
 ROOT = Path(__file__).resolve().parent.parent
 CLI = ROOT / ".venv" / "bin" / "woddi-harbor"
 CONFIG = ROOT / "config" / "harbor.json"

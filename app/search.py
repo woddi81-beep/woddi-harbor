@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from email import policy
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from bs4 import BeautifulSoup
 
@@ -104,6 +104,13 @@ class PreparedSearchIndex:
 
 _INDEX_CACHE: dict[str, CachedIndexEntry] = {}
 _PREPARED_SEARCH_CACHE: dict[str, PreparedSearchIndex] = {}
+
+
+def _parse_index_kind(value: object) -> IndexKind:
+    normalized = str(value)
+    if normalized not in {"docs", "maildir"}:
+        raise ValueError(f"Unsupported index kind: {normalized}")
+    return cast(IndexKind, normalized)
 
 
 def tokenize(text: str) -> list[str]:
@@ -401,7 +408,7 @@ def load_index(path: Path) -> SearchIndex | None:
         return None
     documents = [IndexedDocument(**raw) for raw in payload.get("documents", [])]
     return SearchIndex(
-        kind=str(payload.get("kind", "docs")),
+        kind=_parse_index_kind(payload.get("kind", "docs")),
         root=str(payload.get("root", "")),
         roots=[str(item) for item in payload.get("roots", [])] or ([str(payload.get("root", ""))] if payload.get("root") else []),
         built_at=str(payload.get("built_at", "")),
@@ -421,7 +428,7 @@ def load_index_meta(path: Path) -> SearchIndexMeta | None:
             payload = None
         if isinstance(payload, dict):
             return SearchIndexMeta(
-                kind=str(payload.get("kind", "docs")),
+                kind=_parse_index_kind(payload.get("kind", "docs")),
                 root=str(payload.get("root", "")),
                 roots=[str(item) for item in payload.get("roots", [])] or ([str(payload.get("root", ""))] if payload.get("root") else []),
                 built_at=str(payload.get("built_at", "")),

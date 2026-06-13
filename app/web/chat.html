@@ -9,28 +9,42 @@
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <h1 class="brand">Woddi Harbor</h1>
-      <p class="muted">Persistenter, modularer KI-Arbeitsplatz</p>
-      <button id="new-chat" class="primary">Neuer Chat</button>
-      <div id="sessions" class="stack" style="margin-top:1rem"></div>
-      <p><a href="/admin">Administration</a></p>
+      <div class="brand-block">
+        <span class="eyebrow">Local AI Control Plane</span>
+        <h1 class="brand">Woddi Harbor</h1>
+        <p class="muted">Sicherer KI-Arbeitsplatz für Infrastruktur und Wissen.</p>
+      </div>
+      <button id="new-chat" class="primary wide">Neuer Chat</button>
+      <div class="section-heading"><span>Verlauf</span><span id="session-count" class="count">0</span></div>
+      <div id="sessions" class="stack sessions"></div>
+      <div class="sidebar-footer">
+        <a class="nav-link" href="/admin">Administration</a>
+      </div>
     </aside>
     <main class="main">
       <div class="topbar">
         <div>
+          <span class="eyebrow">Assistant</span>
           <h2 id="chat-title">Neuer Chat</h2>
-          <div id="module-state" class="meta">Module werden geladen</div>
+          <div id="module-state" class="meta status-line"><span class="status-dot"></span>Module werden geladen</div>
         </div>
         <button id="stop" class="danger hidden">Antwort stoppen</button>
       </div>
-      <section class="panel">
+      <section class="panel chat-panel">
         <div id="messages" class="messages" aria-live="polite"></div>
         <form id="composer" class="composer">
-          <label class="module-picker">Kontextmodule<select id="module-select" multiple></select></label>
-          <textarea id="prompt" rows="2" maxlength="12000" placeholder="Frage an Harbor..." required></textarea>
-          <button class="primary" type="submit">Senden</button>
+          <label class="module-picker">Kontext
+            <select id="module-select" multiple aria-describedby="module-help"></select>
+            <span id="module-help" class="field-help">Leer lassen für automatische Auswahl</span>
+          </label>
+          <label class="prompt-field">
+            <span class="sr-only">Nachricht</span>
+            <textarea id="prompt" rows="2" maxlength="12000" placeholder="Frage zu Infrastruktur, Dokumenten oder Betrieb..." required></textarea>
+            <span class="composer-hint"><kbd>Enter</kbd> senden · <kbd>Shift</kbd> + <kbd>Enter</kbd> neue Zeile</span>
+          </label>
+          <button id="send" class="primary send-button" type="submit">Senden</button>
         </form>
-        <div id="notice" class="notice"></div>
+        <div id="notice" class="notice" role="status"></div>
       </section>
     </main>
   </div>

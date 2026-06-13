@@ -22,11 +22,15 @@ from .config import (
     SECRETS_DIR,
     HarborUser,
     ModuleConfig,
+    delete_module_named_secret,
     ensure_layout,
     find_module,
+    load_module_named_secret,
     load_modules,
     load_settings,
     load_users,
+    parse_user_role,
+    save_module_named_secret,
     save_settings,
     save_users,
     sync_service_profiles,
@@ -343,6 +347,10 @@ def init_admin(
 ) -> None:
     """Create the first local admin user."""
     ensure_layout()
+    try:
+        parsed_role = parse_user_role(role)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     if load_users():
         raise typer.BadParameter("Benutzer existieren bereits. Nutze `woddi-harbor user add`.")
     if generate:
@@ -352,7 +360,7 @@ def init_admin(
         password_confirm = getpass.getpass("Confirm Password: ")
         if password != password_confirm:
             raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
-    save_users([HarborUser(username=username, password_hash=hash_password(password), role=role, enabled=True)])
+    save_users([HarborUser(username=username, password_hash=hash_password(password), role=parsed_role, enabled=True)])
     if generate:
         password_path = SECRETS_DIR / "bootstrap-admin-password"
         password_path.write_text(password + "\n", encoding="utf-8")
@@ -647,11 +655,18 @@ def module_add_netbox_mcp(
         host=host,
         port=port,
         timeout_seconds=timeout_seconds,
-        tool_names=["get_objects", "get_object_by_id", "get_changelogs"],
+        tool_names=[
+            "discover_object_types",
+            "describe_object_type",
+            "get_inventory_statistics",
+            "get_objects",
+            "get_object_by_id",
+            "get_changelogs",
+            "call_endpoint",
+        ],
         test_action="discover",
         settings={
             "netbox_url": netbox_url,
-            "netbox_token": api_key,
             "netbox_token_env": api_key_env,
             "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
         },
@@ -660,7 +675,18 @@ def module_add_netbox_mcp(
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
-    upsert_module(module)
+    old_token = load_module_named_secret(module_id, "netbox_token")
+    try:
+        if api_key:
+            save_module_named_secret(module_id, "netbox_token", api_key)
+        upsert_module(module)
+    except Exception:
+        if api_key:
+            if old_token:
+                save_module_named_secret(module_id, "netbox_token", old_token)
+            else:
+                delete_module_named_secret(module_id, "netbox_token")
+        raise
     console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
 
 
@@ -718,7 +744,14 @@ def module_add_openstack_mcp(
         api_key=api_key,
         api_key_env=api_key_env,
         timeout_seconds=timeout_seconds,
-        tool_names=["list_servers", "list_projects", "list_images"],
+        tool_names=[
+            "discover_resources",
+            "get_storage_statistics",
+            "get_project_statistics",
+            "list_servers",
+            "list_projects",
+            "list_images",
+        ],
         test_action="discover",
         test_payload={},
         test_expect_contains=["list_servers"],
@@ -728,7 +761,7 @@ def module_add_openstack_mcp(
             "region_name_env": "OS_REGION_NAME",
             "application_credential_id_env": "OS_APPLICATION_CREDENTIAL_ID",
             "application_credential_secret_env": "OS_APPLICATION_CREDENTIAL_SECRET",
-            "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
+            "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
         },
         notes="Remote MCP endpoint fuer einen OpenStack MCP Server.",
     )
@@ -756,6 +789,9 @@ def module_add_openstack_local_mcp(
     application_credential_secret_env: str = typer.Option("OS_APPLICATION_CREDENTIAL_SECRET"),
 ) -> None:
     """Register a local OpenStack MCP server managed by Harbor."""
+    application_credential_secret_value = (
+        application_credential_secret if isinstance(application_credential_secret, str) else ""
+    )
     module = ModuleConfig(
         id=module_id,
         name=name,
@@ -766,7 +802,16 @@ def module_add_openstack_local_mcp(
         host=host,
         port=port,
         timeout_seconds=timeout_seconds,
-        tool_names=["list_servers", "list_projects", "list_images", "list_flavors", "list_networks"],
+        tool_names=[
+            "discover_resources",
+            "get_storage_statistics",
+            "get_project_statistics",
+            "list_servers",
+            "list_projects",
+            "list_images",
+            "list_flavors",
+            "list_networks",
+        ],
         test_action="discover",
         settings={
             "auth_type": "v3applicationcredential",
@@ -776,16 +821,30 @@ def module_add_openstack_local_mcp(
             "region_name_env": region_name_env,
             "application_credential_id": application_credential_id,
             "application_credential_id_env": application_credential_id_env,
-            "application_credential_secret": application_credential_secret,
             "application_credential_secret_env": application_credential_secret_env,
-            "upstream_repo": "https://github.com/dragomiralin/openstack-mcp-server",
+            "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
         },
         notes="Harbor startet den lokalen OpenStack MCP Worker und exponiert /mcp sowie /health.",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
-    upsert_module(module)
+    old_secret = load_module_named_secret(module_id, "openstack_application_credential_secret")
+    try:
+        if application_credential_secret_value:
+            save_module_named_secret(
+                module_id,
+                "openstack_application_credential_secret",
+                application_credential_secret_value,
+            )
+        upsert_module(module)
+    except Exception:
+        if application_credential_secret_value:
+            if old_secret:
+                save_module_named_secret(module_id, "openstack_application_credential_secret", old_secret)
+            else:
+                delete_module_named_secret(module_id, "openstack_application_credential_secret")
+        raise
     console.print(Panel.fit(f"Lokales OpenStack MCP-Modul registriert: {module_id}", title="Module"))
 
 
@@ -1019,6 +1078,7 @@ def user_add(
     """Add a new local user."""
     if role not in {"admin", "operator", "viewer"}:
         raise typer.BadParameter("role muss admin, operator oder viewer sein.")
+    parsed_role = parse_user_role(role)
     users = load_users()
     if any(user.username == username for user in users):
         raise typer.BadParameter(f"Benutzer existiert bereits: {username}")
@@ -1026,7 +1086,7 @@ def user_add(
     password_confirm = getpass.getpass("Confirm Password: ")
     if password != password_confirm:
         raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
-    users.append(HarborUser(username=username, password_hash=hash_password(password), role=role, enabled=True))
+    users.append(HarborUser(username=username, password_hash=hash_password(password), role=parsed_role, enabled=True))
     save_users(users)
     console.print(Panel.fit(f"Benutzer angelegt: {username}", title="User"))
 
@@ -1036,11 +1096,12 @@ def user_set_role(username: str, role: str) -> None:
     """Change a user's role."""
     if role not in {"admin", "operator", "viewer"}:
         raise typer.BadParameter("role muss admin, operator oder viewer sein.")
+    parsed_role = parse_user_role(role)
     users = load_users()
     changed = False
     for user in users:
         if user.username == username:
-            user.role = role
+            user.role = parsed_role
             changed = True
             break
     if not changed:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import sys
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
@@ -29,8 +30,8 @@ def create_worker_app(module_id: str) -> FastAPI:
     return install_worker_auth(create_app(netbox_url=netbox_url, netbox_token=netbox_token))
 
 
-def _install_signal_handlers(server: uvicorn.Server) -> dict[int, signal.Handlers]:
-    previous_handlers: dict[int, signal.Handlers] = {}
+def _install_signal_handlers(server: uvicorn.Server) -> dict[int, Any]:
+    previous_handlers: dict[int, Any] = {}
 
     def _request_shutdown(signum: int, _frame: object) -> None:
         server.should_exit = True
@@ -43,7 +44,7 @@ def _install_signal_handlers(server: uvicorn.Server) -> dict[int, signal.Handler
     return previous_handlers
 
 
-def _restore_signal_handlers(previous_handlers: dict[int, signal.Handlers]) -> None:
+def _restore_signal_handlers(previous_handlers: dict[int, Any]) -> None:
     for signum, handler in previous_handlers.items():
         signal.signal(signum, handler)
 

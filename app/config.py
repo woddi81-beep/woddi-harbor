@@ -9,11 +9,14 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 ModuleType = Literal["docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"]
 ServiceKind = Literal["harbor", "module"]
 UserRole = Literal["admin", "operator", "viewer"]
+MODULE_TYPES = frozenset({"docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"})
+SERVICE_KINDS = frozenset({"harbor", "module"})
+USER_ROLES = frozenset({"admin", "operator", "viewer"})
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = BASE_DIR / "config"
@@ -24,6 +27,27 @@ PID_DIR = RUNTIME_DIR / "pids"
 SECRETS_DIR = DATA_DIR / "secrets"
 INTERNAL_TOKEN_PATH = SECRETS_DIR / "worker.token"
 INTERNAL_ENV_PATH = SECRETS_DIR / "worker.env"
+
+
+def parse_module_type(value: object) -> ModuleType:
+    normalized = str(value).strip()
+    if normalized not in MODULE_TYPES:
+        raise ValueError(f"Ungueltiger Modultyp: {normalized}")
+    return cast(ModuleType, normalized)
+
+
+def parse_service_kind(value: object) -> ServiceKind:
+    normalized = str(value).strip()
+    if normalized not in SERVICE_KINDS:
+        raise ValueError(f"Ungueltige Service-Art: {normalized}")
+    return cast(ServiceKind, normalized)
+
+
+def parse_user_role(value: object) -> UserRole:
+    normalized = str(value).strip()
+    if normalized not in USER_ROLES:
+        raise ValueError(f"Ungueltige Rolle: {normalized}")
+    return cast(UserRole, normalized)
 
 
 @dataclass
@@ -325,7 +349,7 @@ def load_modules() -> list[ModuleConfig]:
         modules.append(
             ModuleConfig(
                 id=str(raw["id"]),
-                type=str(raw["type"]),
+                type=parse_module_type(raw["type"]),
                 enabled=bool(raw.get("enabled", True)),
                 name=str(raw.get("name", "")),
                 provider=str(raw.get("provider", "")),
@@ -370,7 +394,7 @@ def load_service_profiles() -> list[ServiceProfile]:
         profiles.append(
             ServiceProfile(
                 id=str(raw["id"]),
-                kind=str(raw["kind"]),
+                kind=parse_service_kind(raw["kind"]),
                 module_id=str(raw.get("module_id", "")),
                 enabled=bool(raw.get("enabled", True)),
                 autostart=bool(raw.get("autostart", False)),
@@ -421,7 +445,7 @@ def load_users() -> list[HarborUser]:
             HarborUser(
                 username=str(raw["username"]),
                 password_hash=str(raw["password_hash"]),
-                role=str(raw.get("role", "viewer")),
+                role=parse_user_role(raw.get("role", "viewer")),
                 enabled=bool(raw.get("enabled", True)),
                 allowed_modules=[str(item) for item in raw.get("allowed_modules", ["*"])],
                 allowed_tools=[str(item) for item in raw.get("allowed_tools", ["*"])],

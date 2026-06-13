@@ -16,6 +16,7 @@ from .config import (
     ModuleConfig,
     load_modules,
     load_settings,
+    parse_module_type,
     save_settings,
     save_system_prompt,
     sync_service_profiles,
@@ -566,7 +567,7 @@ class HarborTui(App[None]):
             module = ModuleConfig(
                 id=module_id,
                 name=values["name"].strip(),
-                type=module_type,
+                type=parse_module_type(module_type),
                 transport="local",
                 path=values["path"].strip(),
                 port=int(values["port"] or reserve_port()),

@@ -184,7 +184,7 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh cli module discover netbox
 ./harbor.sh cli module diagnose netbox
 ./harbor.sh cli module test netbox
-./harbor.sh cli module add-netbox-mcp netbox --endpoint http://127.0.0.1:8000/mcp
+./harbor.sh cli module add-netbox-mcp netbox --netbox-url https://netbox.example.com
 ./harbor.sh cli service check harbor
 ./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
@@ -295,7 +295,15 @@ curl -u admin:SECRET -X POST http://127.0.0.1:9680/api/modules/docs-local/start
 
 ## NetBox MCP Integration
 
-`woddi-harbor` kann standardkonforme HTTP-MCP-Endpunkte unter `/mcp` direkt discovery-en und Tools aufrufen. Das passt zum offiziellen `netbox-mcp-server` von NetBox Labs.
+`woddi-harbor` kann standardkonforme HTTP-MCP-Endpunkte unter `/mcp` direkt
+discovery-en und Tools aufrufen. Der lokale Worker orientiert sich am offiziellen
+`netboxlabs/netbox-mcp-server`: read-only, begrenzte Resultsets, native
+`fields`-Selektion und optionale Plugin-Endpunkt-Erkennung.
+
+Im Admin-Portal unter `/admin` im Bereich **Module** auf **NetBox einbinden**
+klicken. Der Token wird getrennt von `modules.local.json` im Secret-Store
+abgelegt. Fuer neue Installationen sollte ein reiner Read-only-Token verwendet
+werden.
 
 Schnellstart:
 
@@ -304,8 +312,17 @@ Schnellstart:
 ./harbor.sh cli module start netbox
 ./harbor.sh cli module discover netbox
 ./harbor.sh cli module test netbox
-./harbor.sh cli module call netbox get_objects '{"object_type":"dcim.devices","limit":5}'
+./harbor.sh cli module call netbox discover_object_types '{}'
+./harbor.sh cli module call netbox describe_object_type '{"object_type":"dcim.devices"}'
+./harbor.sh cli module call netbox get_inventory_statistics '{}'
+./harbor.sh cli module call netbox get_objects '{"object_type":"dcim.devices","limit":5,"fields":["id","name","status","site"]}'
 ```
+
+`discover_object_types` ermittelt auch Collections installierter NetBox-Plugins.
+`describe_object_type` trennt Felder aus dem OpenAPI-Schema von Feldern, die
+an einem echten Objekt beobachtet wurden. So bleiben optionale und aktuell
+unbelegte Felder erkennbar. `get_inventory_statistics` liefert kostengünstige
+Gesamtzahlen für ausgewählte Collections.
 
 Ein `Errno 111: Connection refused` bei der Diagnose bedeutet, dass der lokale
 MCP-Worker nicht auf seinem konfigurierten Port antwortet. Ab v0.3.8 liefert
@@ -321,7 +338,8 @@ Erwarteter Upstream laut Projekt-README:
 
 - HTTP-Transport aktivieren
 - Endpunkt auf `/mcp`
-- Tools wie `get_objects`, `get_object_by_id`, `get_changelogs`
+- Tools wie `discover_object_types`, `describe_object_type`, `get_objects`,
+  `get_object_by_id`, `get_changelogs`
 
 Mehr Details zum Upstream-Projekt:
 
@@ -351,10 +369,30 @@ CLI-Prozess und keine Abhängigkeit von `PATH` oder Symlinks:
 ./harbor.sh cli module start openstack
 ./harbor.sh cli module discover openstack
 ./harbor.sh cli module test openstack
+./harbor.sh cli module call openstack discover_resources '{}'
+./harbor.sh cli module call openstack get_storage_statistics '{}'
+./harbor.sh cli module call openstack get_project_statistics '{}'
 ./harbor.sh cli module call openstack list_servers '{}'
 ```
 
 Die OpenStack-Werkzeuge sind auf lesende `list`- und `show`-Operationen begrenzt.
+Der Funktionsumfang orientiert sich an den sicheren Mustern von
+`call518/MCP-OpenStack-Ops`, verwendet aber Harbors eigene kleine,
+projektgebundene Implementierung auf Basis des offiziellen `openstacksdk`.
+Abgedeckt sind Compute, Netzwerk, Floating IPs, Security Groups, Block Storage,
+Heat, Octavia, Availability Zones und Compute Limits. `discover_resources`
+zeigt pro verfügbarem Service die tatsächlich beobachteten Felder.
+`get_storage_statistics` berechnet Cinder-Auslastung in Prozent und ergänzt
+Volumen-, Snapshot- und Backup-Status sowie provisionierte GiB.
+`get_project_statistics` fasst Inventar und Compute-/Storage-Quoten zusammen.
+
+Im Admin-Portal zeigt die Aktion **Discovery** auf jeder Modulkarte die
+erkannten MCP-Tools und Capabilities direkt an.
+
+Mehr Details zu den Referenzen:
+
+- https://github.com/call518/MCP-OpenStack-Ops
+- https://github.com/openstack/openstacksdk
 
 ## Eigene MCP-Pakete
 

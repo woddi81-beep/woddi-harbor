@@ -170,6 +170,7 @@ def health_check_service(profile_id: str) -> dict:
             payload["runtime"] = {"ok": False, "url": api_url, "error": str(exc)}
             payload["ok"] = False
     elif profile.kind == "module":
-        payload["runtime"] = health_check_module(profile.module_id)
-        payload["ok"] = payload["ok"] and bool(payload["runtime"].get("ok"))
+        runtime = health_check_module(profile.module_id)
+        payload["runtime"] = runtime
+        payload["ok"] = payload["ok"] and bool(runtime.get("ok"))
     return payload

@@ -174,6 +174,70 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(snippets[0]["tool"], "list_servers")
         self.assertEqual(snippets[0]["results"][0]["Name"], "prod-api-01")
 
+    def test_context_for_chat_routes_openstack_storage_questions_to_statistics(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(module_id: str, action: str, payload: dict[str, object]) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "get_storage_statistics")
+            self.assertEqual(payload, {})
+            return {
+                "ok": True,
+                "data": {
+                    "structuredContent": {
+                        "data": {"quota": {"capacity_gib": {"used": 400, "limit": 1000, "percent": 40.0}}}
+                    }
+                },
+            }
+
+        with patch("app.control.load_modules", return_value=[module]), patch(
+            "app.control.execute_module",
+            side_effect=fake_execute,
+        ):
+            snippets, used_modules = _context_for_chat("Wie voll ist mein OpenStack Storage in Prozent?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "get_storage_statistics")
+        self.assertEqual(snippets[0]["results"][0]["quota"]["capacity_gib"]["percent"], 40.0)
+
+    def test_context_for_chat_routes_netbox_field_questions_to_description(self) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(module_id: str, action: str, payload: dict[str, object]) -> dict[str, object]:
+            self.assertEqual(module_id, "netbox")
+            self.assertEqual(action, "describe_object_type")
+            self.assertEqual(payload["object_type"], "dcim.devices")
+            return {
+                "ok": True,
+                "data": {
+                    "structuredContent": {
+                        "data": {"object_type": "dcim.devices", "schema_fields": [{"path": "custom_fields.owner"}]}
+                    }
+                },
+            }
+
+        with patch("app.control.load_modules", return_value=[module]), patch(
+            "app.control.execute_module",
+            side_effect=fake_execute,
+        ):
+            snippets, used_modules = _context_for_chat("Welche Felder werden bei NetBox Devices erfasst?", None)
+
+        self.assertEqual(used_modules, ["netbox"])
+        self.assertEqual(snippets[0]["tool"], "describe_object_type")
+        self.assertEqual(snippets[0]["results"][0]["schema_fields"][0]["path"], "custom_fields.owner")
+
     def test_build_messages_embeds_netbox_context(self) -> None:
         settings = HarborSettings(llm=LlmSettings(base_url="http://llm", model="test-model"))
         with patch(
