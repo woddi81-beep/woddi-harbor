@@ -17,7 +17,7 @@ from ..cache import BoundedTTLCache, SessionRegistry
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "netbox-mcp-server"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.3.1"
 DEFAULT_PAGE_LIMIT = 100
 MAX_PAGE_LIMIT = 200
 DEFAULT_MAX_PAGES = 10
@@ -871,14 +871,13 @@ def create_app(netbox_url: str) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        discovery = backend.discover_api_structure()
         return {
-            "ok": discovery.source != "unavailable",
+            "ok": True,
             "server": SERVER_NAME,
             "netbox_url": backend.base_url,
             "authentication": "anonymous",
             "read_only": True,
-            "discovery": discovery.to_summary(),
+            "upstream_check": "mcp_discovery",
             "cache": {
                 "responses": backend._response_cache.stats(),
                 "discovery": backend._discovery_cache.stats(),

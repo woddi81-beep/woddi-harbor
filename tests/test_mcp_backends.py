@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.mcp.netbox import NetBoxBackend
+from app.mcp.netbox import create_app as create_netbox_app
 from app.mcp.openstack import OpenStackBackend, OpenStackUserBackendRegistry
 
 
@@ -130,6 +132,19 @@ class Connection:
 
 
 class McpBackendTests(unittest.TestCase):
+    def test_netbox_health_does_not_block_on_upstream_discovery(self) -> None:
+        with patch.object(
+            NetBoxBackend,
+            "discover_api_structure",
+            side_effect=AssertionError("liveness must not call NetBox"),
+        ):
+            app = create_netbox_app("https://netbox.example")
+            health = next(route.endpoint for route in app.routes if route.path == "/health")
+            result = health()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["upstream_check"], "mcp_discovery")
+
     def test_openstack_registry_separates_users_and_rotates_tokens(self) -> None:
         created: list[OpenStackBackend] = []
 
