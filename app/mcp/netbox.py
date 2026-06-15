@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -214,6 +213,7 @@ class DiscoveryCache:
     api_root: dict[str, Any] = field(default_factory=dict)
     schema: dict[str, Any] = field(default_factory=dict, repr=False)
     source: str = "static"
+    error: str = ""
 
     def to_summary(self) -> dict[str, Any]:
         return {
@@ -222,19 +222,21 @@ class DiscoveryCache:
             "endpoint_path_count": len(self.endpoint_paths),
             "endpoint_path_sample": self.endpoint_paths[:25],
             "api_root_sections": sorted(self.api_root.keys()),
+            "error": self.error or None,
         }
 
 
 class NetBoxBackend:
-    def __init__(self, netbox_url: str, netbox_token: str, *, cache_ttl_seconds: float = 15.0, cache_max_entries: int = 256) -> None:
+    def __init__(self, netbox_url: str, *, cache_ttl_seconds: float = 15.0, cache_max_entries: int = 256) -> None:
         self.base_url = netbox_url.rstrip("/")
         parsed_base = urlparse(self.base_url)
         if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc or parsed_base.username or parsed_base.password:
             raise ValueError("NETBOX_URL must be an http(s) URL without embedded credentials.")
         self.api_base = f"{self.base_url}/api/"
-        self.token = netbox_token
-        self._discovery_cache: DiscoveryCache | None = None
-        self._discovery_cached_at = 0.0
+        self._discovery_cache = BoundedTTLCache[DiscoveryCache](
+            ttl_seconds=DISCOVERY_CACHE_TTL_SECONDS,
+            max_entries=1,
+        )
         self._response_cache = BoundedTTLCache[Any](ttl_seconds=cache_ttl_seconds, max_entries=cache_max_entries)
         self._client = httpx.Client(
             timeout=httpx.Timeout(30.0, connect=5.0),
@@ -246,14 +248,10 @@ class NetBoxBackend:
         self._client.close()
 
     def _headers(self) -> dict[str, str]:
-        headers = {
+        return {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        if self.token:
-            scheme = "Bearer" if self.token.startswith("nbt_") and "." in self.token else "Token"
-            headers["Authorization"] = f"{scheme} {self.token}"
-        return headers
 
     def _request(
         self,
@@ -268,19 +266,17 @@ class NetBoxBackend:
             raise ValueError("NetBox MCP is read-only; only GET requests are allowed.")
         url = self._resolve_url(path_or_url)
         cache_key = json.dumps([normalized_method, url, params or {}], ensure_ascii=True, sort_keys=True, default=str)
-        cached = self._response_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
-        response.raise_for_status()
-        if len(response.content) > MAX_RESPONSE_BYTES:
-            raise ValueError(f"NetBox response exceeded {MAX_RESPONSE_BYTES} bytes.")
-        if response.status_code == 204 or not response.content:
-            payload: Any = {}
-        else:
-            payload = response.json()
-        self._response_cache.set(cache_key, payload)
-        return payload
+
+        def load() -> Any:
+            response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
+            response.raise_for_status()
+            if len(response.content) > MAX_RESPONSE_BYTES:
+                raise ValueError(f"NetBox response exceeded {MAX_RESPONSE_BYTES} bytes.")
+            if response.status_code == 204 or not response.content:
+                return {}
+            return response.json()
+
+        return self._response_cache.get_or_load(cache_key, load)
 
     def _resolve_url(self, path_or_url: str) -> str:
         raw = path_or_url.strip()
@@ -320,10 +316,7 @@ class NetBoxBackend:
                 extracted[section] = {key: item for key, item in value.items() if isinstance(key, str)}
         return extracted
 
-    def discover_api_structure(self) -> DiscoveryCache:
-        if self._discovery_cache is not None and time.monotonic() - self._discovery_cached_at < DISCOVERY_CACHE_TTL_SECONDS:
-            return self._discovery_cache
-
+    def _load_api_structure(self) -> DiscoveryCache:
         schema_candidates = [
             "/api/schema/?format=json",
             "/api/schema/?format=openapi",
@@ -337,21 +330,17 @@ class NetBoxBackend:
             if isinstance(payload, dict):
                 schema_paths = self._extract_paths_from_schema(payload)
                 if schema_paths:
-                    self._discovery_cache = DiscoveryCache(
+                    return DiscoveryCache(
                         schema_paths=schema_paths,
                         endpoint_paths=schema_paths,
                         schema=payload,
                         source=candidate,
                     )
-                    self._discovery_cached_at = time.monotonic()
-                    return self._discovery_cache
 
         try:
             api_root_payload = self._request("GET", self.api_base)
-        except Exception:
-            self._discovery_cache = DiscoveryCache()
-            self._discovery_cached_at = time.monotonic()
-            return self._discovery_cache
+        except Exception as exc:
+            return DiscoveryCache(source="unavailable", error=str(exc))
 
         api_root = self._extract_api_root(api_root_payload if isinstance(api_root_payload, dict) else {})
         endpoint_paths: list[str] = []
@@ -360,13 +349,14 @@ class NetBoxBackend:
                 endpoint_paths.append(value)
             elif isinstance(value, dict):
                 endpoint_paths.extend(item for item in value.values() if isinstance(item, str))
-        self._discovery_cache = DiscoveryCache(
+        return DiscoveryCache(
             endpoint_paths=sorted(set(endpoint_paths)),
             api_root=api_root,
             source="/api/",
         )
-        self._discovery_cached_at = time.monotonic()
-        return self._discovery_cache
+
+    def discover_api_structure(self) -> DiscoveryCache:
+        return self._discovery_cache.get_or_load("api-structure", self._load_api_structure)
 
     @staticmethod
     def _object_type_from_path(path: str) -> str | None:
@@ -868,8 +858,8 @@ class NetBoxBackend:
         }
 
 
-def create_app(netbox_url: str, netbox_token: str) -> FastAPI:
-    backend = NetBoxBackend(netbox_url=netbox_url, netbox_token=netbox_token)
+def create_app(netbox_url: str) -> FastAPI:
+    backend = NetBoxBackend(netbox_url=netbox_url)
     sessions = SessionRegistry()
 
     @asynccontextmanager
@@ -883,11 +873,16 @@ def create_app(netbox_url: str, netbox_token: str) -> FastAPI:
     def health() -> dict[str, Any]:
         discovery = backend.discover_api_structure()
         return {
-            "ok": True,
+            "ok": discovery.source != "unavailable",
             "server": SERVER_NAME,
             "netbox_url": backend.base_url,
+            "authentication": "anonymous",
+            "read_only": True,
             "discovery": discovery.to_summary(),
-            "cache": backend._response_cache.stats(),
+            "cache": {
+                "responses": backend._response_cache.stats(),
+                "discovery": backend._discovery_cache.stats(),
+            },
         }
 
     @app.post("/mcp")

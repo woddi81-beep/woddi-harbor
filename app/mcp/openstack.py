@@ -17,7 +17,7 @@ from ..cache import BoundedTTLCache, SessionRegistry
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "openstack-mcp-server"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.3.1"
 DEFAULT_CACHE_TTL_SECONDS = 20.0
 DEFAULT_RESULT_LIMIT = 100
 MAX_RESULT_LIMIT = 500
@@ -66,32 +66,6 @@ def openstack_sdk_available() -> bool:
     return True
 
 
-def discover_accessible_projects(credentials: dict[str, str]) -> list[dict[str, str]]:
-    auth_url = credentials["OS_AUTH_URL"].rstrip("/")
-    token = credentials.get("OS_TOKEN", "")
-    timeout_seconds = _timeout_seconds(credentials)
-    target = f"{auth_url}/auth/projects"
-    timeout = httpx.Timeout(timeout_seconds, connect=min(10.0, timeout_seconds))
-    try:
-        response = httpx.get(
-            target,
-            headers={"X-Auth-Token": token, "Accept": "application/json"},
-            timeout=timeout,
-        )
-    except httpx.TimeoutException as exc:
-        raise RuntimeError(
-            f"OpenStack Projekt-Ermittlung an {target} hat nach {timeout_seconds:.0f}s nicht geantwortet."
-        ) from exc
-    response.raise_for_status()
-    payload = response.json()
-    projects = payload.get("projects", []) if isinstance(payload, dict) else []
-    return [
-        {"id": str(project.get("id", "")), "name": str(project.get("name", ""))}
-        for project in projects
-        if isinstance(project, dict) and project.get("id")
-    ]
-
-
 def create_openstack_connection(credentials: dict[str, str]) -> Any:
     try:
         from openstack.connection import Connection
@@ -109,39 +83,15 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         "timeout": _timeout_seconds(credentials),
         "connect_retries": 1,
     }
-    token = credentials.get("OS_TOKEN", "")
-    project_id = credentials.get("OS_PROJECT_ID", "")
-    project_name = credentials.get("OS_PROJECT_NAME", "")
-    if token:
-        options.update(
-            {
-                "auth_type": "v3token" if project_id or project_name else "token",
-                "token": token,
-                "project_id": project_id or None,
-                "project_name": project_name if not project_id else None,
-                "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") if project_name and not project_id else None,
-            }
-        )
-    elif credentials.get("OS_APPLICATION_CREDENTIAL_ID") and credentials.get("OS_APPLICATION_CREDENTIAL_SECRET"):
-        options.update(
-            {
-                "auth_type": "v3applicationcredential",
-                "application_credential_id": credentials["OS_APPLICATION_CREDENTIAL_ID"],
-                "application_credential_secret": credentials["OS_APPLICATION_CREDENTIAL_SECRET"],
-            }
-        )
-    else:
-        options.update(
-            {
-                "auth_type": credentials.get("OS_AUTH_TYPE") or "password",
-                "username": credentials.get("OS_USERNAME"),
-                "password": credentials.get("OS_PASSWORD"),
-                "project_id": project_id or None,
-                "project_name": project_name if not project_id else None,
-                "user_domain_name": credentials.get("OS_USER_DOMAIN_NAME") or "Default",
-                "project_domain_name": (credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default") if not project_id else None,
-            }
-        )
+    token = credentials.get("OS_TOKEN", "").strip()
+    if not token:
+        raise ValueError("OS_TOKEN fehlt. Harbor unterstuetzt fuer OpenStack ausschliesslich User-Tokens.")
+    options.update(
+        {
+            "auth_type": "token",
+            "token": token,
+        }
+    )
     return Connection(**{key: value for key, value in options.items() if value is not None})
 
 
@@ -249,9 +199,9 @@ class OpenStackBackend:
     cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS
     cache_max_entries: int = 256
     connection_factory: Callable[[dict[str, str]], Any] = create_openstack_connection
-    project_discovery: Callable[[dict[str, str]], list[dict[str, str]]] = discover_accessible_projects
     _cache: BoundedTTLCache[Any] = field(init=False, repr=False)
     _connection: Any = field(default=None, init=False, repr=False)
+    _project_context: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _connection_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -270,57 +220,45 @@ class OpenStackBackend:
             if self._connection is not None:
                 return self._connection
             connection = self.connection_factory(self.credentials)
-            token = self.credentials.get("OS_TOKEN", "")
-            has_explicit_scope = bool(self.credentials.get("OS_PROJECT_ID") or self.credentials.get("OS_PROJECT_NAME"))
-            if token and not has_explicit_scope:
-                timeout_seconds = _timeout_seconds(self.credentials)
-                try:
-                    connection.authorize()
-                    access = connection.session.auth.get_access(connection.session)
-                except Exception as exc:
-                    if _is_timeout_error(exc):
-                        raise RuntimeError(
-                            f"OpenStack Authentifizierung an {self.credentials['OS_AUTH_URL']} "
-                            f"hat nach {timeout_seconds:.0f}s nicht geantwortet."
-                        ) from exc
-                    raise
-                if not access.has_service_catalog():
-                    projects = self.project_discovery(self.credentials)
-                    if len(projects) == 1:
-                        scoped_credentials = {**self.credentials, "OS_PROJECT_ID": projects[0]["id"]}
-                        connection = self.connection_factory(scoped_credentials)
-                        self.credentials = scoped_credentials
-                    elif projects:
-                        choices = ", ".join(f"{project['name']} ({project['id']})" for project in projects)
-                        raise RuntimeError(
-                            "OpenStack Token ist ungescoped und hat Zugriff auf mehrere Projekte. "
-                            f"Konfiguriere eine Projekt-ID: {choices}"
-                        )
-                    else:
-                        raise RuntimeError(
-                            "OpenStack Token ist ungescoped und Keystone liefert kein erreichbares Projekt. "
-                            "Erzeuge einen projektgebundenen Token oder konfiguriere eine Projekt-ID."
-                        )
+            timeout_seconds = _timeout_seconds(self.credentials)
+            try:
+                connection.authorize()
+                access = connection.session.auth.get_access(connection.session)
+            except Exception as exc:
+                if _is_timeout_error(exc):
+                    raise RuntimeError(
+                        f"OpenStack Authentifizierung an {self.credentials['OS_AUTH_URL']} "
+                        f"hat nach {timeout_seconds:.0f}s nicht geantwortet."
+                    ) from exc
+                raise
+            project_id = str(getattr(access, "project_id", "") or "").strip()
+            project_name = str(getattr(access, "project_name", "") or "").strip()
+            project_scoped = bool(getattr(access, "project_scoped", project_id))
+            if not project_scoped or not project_id or not access.has_service_catalog():
+                raise RuntimeError(
+                    "OpenStack User-Token ist nicht projektgescoped. "
+                    "Erzeuge den Token im Zielprojekt; Harbor nimmt kein separates Projekt und fuehrt kein Rescoping durch."
+                )
+            self._project_context = {"id": project_id, "name": project_name}
             self._connection = connection
         return self._connection
 
     def _cached(self, operation: str, arguments: dict[str, Any], loader: Callable[[], Any]) -> Any:
         cache_key = json.dumps([operation, arguments], ensure_ascii=False, sort_keys=True, default=str)
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
-        try:
-            payload = loader()
-        except Exception as exc:
-            if _is_timeout_error(exc):
-                raise RuntimeError(
-                    f"OpenStack Operation {operation} hat nach "
-                    f"{_timeout_seconds(self.credentials):.0f}s nicht geantwortet. "
-                    "Pruefe Service-Katalog, Region, Routing und Firewall."
-                ) from exc
-            raise
-        self._cache.set(cache_key, payload)
-        return payload
+
+        def load() -> Any:
+            try:
+                return loader()
+            except Exception as exc:
+                if _is_timeout_error(exc):
+                    raise RuntimeError(
+                        f"OpenStack Operation {operation} hat nach "
+                        f"{_timeout_seconds(self.credentials):.0f}s nicht geantwortet. "
+                        "Pruefe Service-Katalog, Region, Routing und Firewall."
+                    ) from exc
+                raise
+
+        return self._cache.get_or_load(cache_key, load)
 
     @classmethod
     def _serialize(cls, resource: Any) -> dict[str, Any]:
@@ -414,25 +352,22 @@ class OpenStackBackend:
         return self._project_fields(rows[: self._limit(arguments)], arguments)
 
     def health(self) -> dict[str, Any]:
+        error = ""
+        try:
+            self._get_connection()
+        except Exception as exc:
+            error = str(exc)
         return {
-            "ok": openstack_sdk_available(),
+            "ok": openstack_sdk_available() and not error,
             "server": SERVER_NAME,
             "backend": "openstacksdk",
             "openstack_sdk": openstack_sdk_available(),
-            "auth_configured": bool(self.credentials.get("OS_AUTH_URL")),
+            "auth_configured": bool(self.credentials.get("OS_AUTH_URL") and self.credentials.get("OS_TOKEN")),
             "timeout_seconds": _timeout_seconds(self.credentials),
-            "scope_mode": "project_id"
-            if self.credentials.get("OS_PROJECT_ID")
-            else "project_name"
-            if self.credentials.get("OS_PROJECT_NAME")
-            else "catalog_or_auto",
-            "credential_mode": "token"
-            if self.credentials.get("OS_TOKEN")
-            else "application_credential"
-            if self.credentials.get("OS_APPLICATION_CREDENTIAL_ID") and self.credentials.get("OS_APPLICATION_CREDENTIAL_SECRET")
-            else "password"
-            if self.credentials.get("OS_USERNAME") and self.credentials.get("OS_PASSWORD")
-            else "unknown",
+            "scope_mode": "token_project",
+            "credential_mode": "user_token",
+            "project": self._project_context or None,
+            "error": error or None,
             "cache": self._cache.stats(),
             "tool_count": len(_tool_schema()),
         }
@@ -558,7 +493,7 @@ class OpenStackBackend:
 
     def _storage_statistics(self) -> dict[str, Any]:
         connection = self._get_connection()
-        project = self.credentials.get("OS_PROJECT_ID") or self.credentials.get("OS_PROJECT_NAME") or None
+        project = self._project_context.get("id") or None
         errors: dict[str, str] = {}
         try:
             limits = self._cached(
@@ -774,8 +709,8 @@ class OpenStackBackend:
                 errors["storage"] = json.dumps(storage["errors"], ensure_ascii=False)
             payload = {
                 "project": {
-                    "id": self.credentials.get("OS_PROJECT_ID") or None,
-                    "name": self.credentials.get("OS_PROJECT_NAME") or None,
+                    "id": self._project_context.get("id") or None,
+                    "name": self._project_context.get("name") or None,
                     "region": self.credentials.get("OS_REGION_NAME") or None,
                 },
                 "inventory": sections,
@@ -796,14 +731,7 @@ class OpenStackBackend:
             show_payload = self._resource_show("server", str(arguments["server"]).strip())
             return self._tool_result(name, arguments, self._project_fields(show_payload, arguments))
         if name == "list_projects":
-            project_arguments = {key: value for key, value in arguments.items() if key != "fields"}
-            payload = self._resource_list("project", project_arguments)
-            project_id = str(self.credentials.get("OS_PROJECT_ID", "")).strip()
-            project_name = str(self.credentials.get("OS_PROJECT_NAME", "")).strip().lower()
-            if project_id:
-                payload = [item for item in payload if str(item.get("id", "")) == project_id]
-            elif project_name:
-                payload = [item for item in payload if str(item.get("name", "")).lower() == project_name]
+            payload = [self._project_context.copy()]
             return self._tool_result(name, arguments, self._project_fields(payload, arguments))
         if name == "list_images":
             payload = self._list_resources(

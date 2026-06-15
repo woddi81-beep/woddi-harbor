@@ -138,8 +138,6 @@ async function action(raw) {
       form.netbox_url.value = configuration.netbox_url || "";
       form.timeout_seconds.value = configuration.timeout_seconds || 30;
       form.port.value = configuration.port || 0;
-      form.token.placeholder = configuration.token_configured ? "Gesetzt; leer lassen zum Beibehalten" : "Read-only Token";
-      $("netbox-token-state").textContent = configuration.token_configured ? "Ein Token ist sicher hinterlegt." : "Kein Token hinterlegt; nur für öffentliche NetBox-APIs geeignet.";
       $("netbox-dialog").showModal();
     } catch (error) { $("notice").textContent = error.message; }
     return;
@@ -149,7 +147,7 @@ async function action(raw) {
       const configuration = await api("/api/integrations/openstack");
       const form = $("openstack-form");
       form.reset();
-      for (const key of ["project_id", "project_name", "project_domain_name", "auth_url", "region_name", "timeout_seconds", "port"]) {
+      for (const key of ["auth_url", "region_name", "timeout_seconds", "port"]) {
         form[key].value = configuration[key] ?? "";
       }
       form.token.required = !configuration.token_configured;
@@ -250,8 +248,7 @@ $("openstack-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = {
-    project_id: form.project_id.value.trim(), project_name: form.project_name.value.trim(),
-    project_domain_name: form.project_domain_name.value.trim(), token: form.token.value,
+    token: form.token.value,
     auth_url: form.auth_url.value.trim(), region_name: form.region_name.value.trim(),
     timeout_seconds: Number(form.timeout_seconds.value || 60), port: Number(form.port.value || 0),
   };
@@ -261,7 +258,7 @@ $("netbox-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = {
-    netbox_url: form.netbox_url.value.trim(), token: form.token.value,
+    netbox_url: form.netbox_url.value.trim(),
     timeout_seconds: Number(form.timeout_seconds.value || 30), port: Number(form.port.value || 0),
   };
   if (await requestAndRender("/api/integrations/netbox", "PUT", JSON.stringify(payload))) $("netbox-dialog").close();

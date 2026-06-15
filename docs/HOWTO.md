@@ -105,12 +105,10 @@ Bei `Errno 111` den Log-Auszug in der strukturierten Diagnose prüfen. Der Fehle
 bedeutet, dass der lokale Worker nicht lauscht oder beim Start beendet wurde.
 
 OpenStack wird im Admin-Portal unter **Module**, **OpenStack einbinden**
-konfiguriert. Token und Identity/Auth URL sind Pflichtfelder; Projektname und
-Projektdomäne bleiben bei einem bereits projektgebundenen Token leer. Harbor
-verwendet das OpenStack Python SDK direkt. Bei einem leeren Service-Katalog
-ermittelt Harbor die erreichbaren Projekte automatisch. Gibt es mehrere, wird
-die gewünschte Projekt-ID im Admin-Portal eingetragen. Der Timeout gilt für
-Authentifizierung, Projekt-Ermittlung und Service-Abfragen. Danach:
+konfiguriert. Ein bereits projektgescoptes User-Token und die Identity/Auth URL
+sind Pflichtfelder. Harbor liest Projekt-ID und Projektname ausschließlich aus
+dem Token und führt kein Rescoping durch. Ungescopte Tokens werden abgewiesen.
+Der Timeout gilt für Authentifizierung und Service-Abfragen. Danach:
 
 ```bash
 .venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
@@ -229,8 +227,8 @@ Dokumente, Chats, Konfiguration oder Backups zu loeschen:
 
 In `deploy/nginx.conf.tpl` oder `deploy/Caddyfile` den Platzhalter
 `__HARBOR_HOSTNAME__` ersetzen. `./harbor.sh start` bindet Harbor standardmäßig
-auf `0.0.0.0:9680`; mit `HARBOR_HOST=127.0.0.1` kann der Zugriff bewusst auf
-Loopback begrenzt werden.
+auf `127.0.0.1:9680`. Ein externer Bind muss bewusst konfiguriert und durch
+Firewall sowie TLS-Reverse-Proxy geschützt werden.
 
 Ohne oeffentlichen DNS-Namen kann `deploy/Caddyfile.local` fuer
 `https://localhost:9443` verwendet werden. Es nutzt eine interne Caddy-CA; ohne

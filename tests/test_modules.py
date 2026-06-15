@@ -192,8 +192,11 @@ class FakeOpenStackNetwork:
 
 
 class FakeOpenStackAccess:
-    def __init__(self, has_catalog: bool = True) -> None:
+    def __init__(self, has_catalog: bool = True, *, project_id: str = "project-1", project_name: str = "production") -> None:
         self._has_catalog = has_catalog
+        self.project_id = project_id if has_catalog else ""
+        self.project_name = project_name if has_catalog else ""
+        self.project_scoped = bool(self.project_id)
 
     def has_service_catalog(self) -> bool:
         return self._has_catalog
@@ -328,21 +331,19 @@ class ModuleTests(unittest.TestCase):
         module = ModuleConfig(id="netbox", type="netbox_mcp", transport="local", port=41002)
         captured: dict[str, object] = {}
 
-        def fake_create_app(*, netbox_url: str, netbox_token: str):
+        def fake_create_app(*, netbox_url: str):
             captured["netbox_url"] = netbox_url
-            captured["netbox_token"] = netbox_token
             return FastAPI()
 
         with (
             patch("app.worker_netbox.find_module", return_value=module),
             patch("app.worker_netbox.create_app", side_effect=fake_create_app),
-            patch.dict("os.environ", {"NETBOX_URL": "https://netbox.example", "NETBOX_TOKEN": "secret"}, clear=False),
+            patch.dict("os.environ", {"NETBOX_URL": "https://netbox.example"}, clear=False),
         ):
             app = create_netbox_worker_app("netbox")
 
         self.assertIsNotNone(app)
         self.assertEqual(captured["netbox_url"], "https://netbox.example")
-        self.assertEqual(captured["netbox_token"], "secret")
 
     def test_netbox_module_validation_allows_empty_token(self) -> None:
         module = ModuleConfig(
@@ -359,9 +360,8 @@ class ModuleTests(unittest.TestCase):
         module = ModuleConfig(id="netbox", type="netbox_mcp", transport="local", port=41002)
         captured: dict[str, object] = {}
 
-        def fake_create_app(*, netbox_url: str, netbox_token: str):
+        def fake_create_app(*, netbox_url: str):
             captured["netbox_url"] = netbox_url
-            captured["netbox_token"] = netbox_token
             return FastAPI()
 
         with (
@@ -371,7 +371,6 @@ class ModuleTests(unittest.TestCase):
                 "os.environ",
                 {
                     "NETBOX_URL": "https://netbox.example",
-                    "NETBOX_TOKEN": "",
                     "HARBOR_INTERNAL_WORKER_TOKEN": "test-token",
                 },
                 clear=True,
@@ -381,10 +380,9 @@ class ModuleTests(unittest.TestCase):
 
         self.assertIsNotNone(app)
         self.assertEqual(captured["netbox_url"], "https://netbox.example")
-        self.assertEqual(captured["netbox_token"], "")
 
     def test_netbox_backend_omits_authorization_header_without_token(self) -> None:
-        backend = NetBoxBackend(netbox_url="https://netbox.example", netbox_token="")
+        backend = NetBoxBackend(netbox_url="https://netbox.example")
 
         self.assertNotIn("Authorization", backend._headers())
 
@@ -450,17 +448,10 @@ class ModuleTests(unittest.TestCase):
 
         self.assertEqual(modules_module.validate_module_config(module), [])
 
-    def test_create_openstack_worker_app_uses_env_credentials(self) -> None:
+    def test_create_openstack_worker_app_rejects_non_token_credentials(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
-        captured: dict[str, object] = {}
-
-        def fake_create_app(credentials: dict[str, str]):
-            captured["credentials"] = credentials
-            return FastAPI()
-
         with (
             patch("app.worker_openstack.find_module", return_value=module),
-            patch("app.worker_openstack.create_app", side_effect=fake_create_app),
             patch.dict(
                 "os.environ",
                 {
@@ -468,15 +459,11 @@ class ModuleTests(unittest.TestCase):
                     "OS_APPLICATION_CREDENTIAL_ID": "abc",
                     "OS_APPLICATION_CREDENTIAL_SECRET": "def",
                 },
-                clear=False,
+                clear=True,
             ),
         ):
-            app = create_openstack_worker_app("openstack")
-
-        self.assertIsNotNone(app)
-        credentials = captured["credentials"]
-        self.assertEqual(credentials["OS_AUTH_URL"], "https://openstack.example/v3")
-        self.assertEqual(credentials["OS_APPLICATION_CREDENTIAL_ID"], "abc")
+            with self.assertRaisesRegex(ValueError, "OS_TOKEN"):
+                create_openstack_worker_app("openstack")
 
     def test_create_openstack_worker_app_accepts_token_credentials(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
@@ -495,7 +482,6 @@ class ModuleTests(unittest.TestCase):
                     "OS_AUTH_URL": "https://openstack.example/v3",
                     "OS_AUTH_TYPE": "token",
                     "OS_TOKEN": "token-value",
-                    "OS_PROJECT_NAME": "demo",
                     "HARBOR_INTERNAL_WORKER_TOKEN": "worker-token",
                 },
                 clear=True,
@@ -506,7 +492,8 @@ class ModuleTests(unittest.TestCase):
         self.assertIsNotNone(app)
         credentials = captured["credentials"]
         self.assertEqual(credentials["OS_TOKEN"], "token-value")
-        self.assertEqual(credentials["OS_PROJECT_NAME"], "demo")
+        self.assertEqual(credentials["OS_AUTH_TYPE"], "token")
+        self.assertNotIn("OS_PROJECT_NAME", credentials)
 
     def test_openstack_backend_lists_servers_through_sdk(self) -> None:
         backend = OpenStackBackend(
@@ -534,39 +521,14 @@ class ModuleTests(unittest.TestCase):
         rows = result["structuredContent"]["data"]
         self.assertEqual(rows, [{"id": "network-1", "name": "private"}])
 
-    def test_openstack_backend_auto_scopes_single_project(self) -> None:
-        created_credentials: list[dict[str, str]] = []
-
-        def factory(credentials: dict[str, str]) -> FakeOpenStackConnection:
-            created_credentials.append(credentials)
-            return FakeOpenStackConnection(has_catalog=bool(credentials.get("OS_PROJECT_ID")))
-
-        backend = OpenStackBackend(
-            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "unscoped-token"},
-            connection_factory=factory,
-            project_discovery=lambda _credentials: [{"id": "project-1", "name": "production"}],
-        )
-
-        result = backend.call_tool("list_servers", {})
-
-        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod-api-01")
-        self.assertEqual(created_credentials[-1]["OS_PROJECT_ID"], "project-1")
-
-    def test_openstack_backend_reports_ambiguous_projects(self) -> None:
+    def test_openstack_backend_rejects_unscoped_token(self) -> None:
         backend = OpenStackBackend(
             credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "unscoped-token"},
             connection_factory=lambda _credentials: FakeOpenStackConnection(has_catalog=False),
-            project_discovery=lambda _credentials: [
-                {"id": "project-1", "name": "production"},
-                {"id": "project-2", "name": "testing"},
-            ],
         )
 
-        with self.assertRaisesRegex(RuntimeError, "mehrere Projekte") as context:
+        with self.assertRaisesRegex(RuntimeError, "nicht projektgescoped"):
             backend.call_tool("list_servers", {})
-
-        self.assertIn("project-1", str(context.exception))
-        self.assertIn("project-2", str(context.exception))
 
     def test_openstack_backend_reports_compute_timeout_with_operation(self) -> None:
         connection = FakeOpenStackConnection()
@@ -575,7 +537,6 @@ class ModuleTests(unittest.TestCase):
             credentials={
                 "OS_AUTH_URL": "https://identity.example/v3",
                 "OS_TOKEN": "token",
-                "OS_PROJECT_ID": "project-1",
                 "OS_TIMEOUT": "90",
             },
             connection_factory=lambda _credentials: connection,
@@ -603,7 +564,7 @@ class ModuleTests(unittest.TestCase):
             },
         )
 
-    def test_openstack_sdk_connection_scopes_unscoped_token(self) -> None:
+    def test_openstack_sdk_connection_ignores_separate_project_name(self) -> None:
         connection = create_openstack_connection(
             {
                 "OS_AUTH_URL": "https://identity.example/v3",
@@ -613,11 +574,13 @@ class ModuleTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(connection.config.config["auth_type"], "v3token")
-        self.assertEqual(connection.config.config["auth"]["project_name"], "production")
-        self.assertEqual(connection.config.config["auth"]["project_domain_name"], "Default")
+        self.assertEqual(connection.config.config["auth_type"], "token")
+        self.assertEqual(
+            connection.config.config["auth"],
+            {"auth_url": "https://identity.example/v3", "token": "unscoped-token"},
+        )
 
-    def test_openstack_sdk_connection_scopes_token_by_project_id(self) -> None:
+    def test_openstack_sdk_connection_ignores_separate_project_id(self) -> None:
         connection = create_openstack_connection(
             {
                 "OS_AUTH_URL": "https://identity.example/v3",
@@ -628,8 +591,8 @@ class ModuleTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(connection.config.config["auth_type"], "v3token")
-        self.assertEqual(connection.config.config["auth"]["project_id"], "project-1")
+        self.assertEqual(connection.config.config["auth_type"], "token")
+        self.assertNotIn("project_id", connection.config.config["auth"])
         self.assertNotIn("project_name", connection.config.config["auth"])
         self.assertEqual(connection.config.config["timeout"], "60.0")
 
@@ -664,8 +627,8 @@ class ModuleTests(unittest.TestCase):
             settings = modules_module._openstack_settings(module)
 
         self.assertEqual(settings["OS_AUTH_TYPE"], "token")
-        self.assertEqual(settings["OS_PROJECT_NAME"], "")
-        self.assertEqual(settings["OS_PROJECT_DOMAIN_NAME"], "")
+        self.assertNotIn("OS_PROJECT_NAME", settings)
+        self.assertNotIn("OS_PROJECT_DOMAIN_NAME", settings)
 
     def test_module_diagnostics_reports_connection_refused_without_raising(self) -> None:
         module = ModuleConfig(

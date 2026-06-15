@@ -62,34 +62,30 @@
     <form id="netbox-form" class="stack">
       <h3>NetBox einbinden</h3>
       <label>NetBox URL<input name="netbox_url" type="url" required placeholder="https://netbox.example.com"></label>
-      <label>API-Token<input name="token" type="password" autocomplete="new-password" placeholder="Read-only Token"></label>
-      <p id="netbox-token-state" class="muted"></p>
       <div class="form-grid">
         <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="30"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <p class="muted">Verwende einen NetBox-Token mit ausschließlich lesenden Rechten. Harbor speichert ihn getrennt von der Modulkonfiguration.</p>
+      <p class="muted">Harbor greift anonym auf die öffentliche NetBox-API zu. Der Adapter erlaubt ausschließlich GET-Anfragen und folgt keinen Links auf andere Hosts.</p>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="netbox-dialog">Abbrechen</button></div>
     </form>
   </dialog>
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
       <h3>OpenStack einbinden</h3>
-      <label>Projekt-ID (optional)<input name="project_id" autocomplete="off" placeholder="Empfohlen für ungescopte Tokens"></label>
-      <label>Projektname (optional)<input name="project_name" autocomplete="off" placeholder="Nur für ungescopte Tokens"></label>
-      <label>Projektdomäne (optional)<input name="project_domain_name" autocomplete="off" placeholder="Default"></label>
       <label>
-        <span>OpenStack Token <span class="help" title="openstack token issue" aria-label="openstack token issue">?</span></span>
-        <input name="token" type="password" autocomplete="new-password" placeholder="Token eingeben">
+        <span>Projektgescoptes User-Token <span class="help" title="Das Zielprojekt wird ausschließlich aus dem Token gelesen." aria-label="Hinweis zum Projektkontext">?</span></span>
+        <input name="token" type="password" autocomplete="new-password" placeholder="User-Token eingeben">
       </label>
       <p id="openstack-token-state" class="muted"></p>
+      <p class="muted">Harbor nimmt keine separate Projekt-ID an und führt kein Rescoping durch. Dadurch bleibt der Worker sicher im Projektkontext des Tokens.</p>
       <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3"></label>
       <div class="form-grid">
         <label>Region<input name="region_name" placeholder="RegionOne"></label>
         <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="60"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <p class="muted">Bei einem bereits projektgebundenen Token bleiben alle Projektfelder leer. Bei einem ungescopten Token ist die Projekt-ID am zuverlässigsten; alternativ Projektname und Domäne angeben. Harbor wählt automatisch, wenn der Token genau ein Projekt erreicht.</p>
+      <p class="muted">Ein ungescoptes Token wird abgewiesen. Erzeuge das User-Token deshalb direkt im gewünschten OpenStack-Projekt.</p>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="openstack-dialog">Abbrechen</button></div>
     </form>
   </dialog>

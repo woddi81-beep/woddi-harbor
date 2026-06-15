@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -88,6 +88,7 @@ DEFAULT_LOG_PATH = Path("~/.harbor/logs/harbor.log").expanduser()
 _WARMUP_STOP = threading.Event()
 _WARMUP_THREAD: threading.Thread | None = None
 _DASHBOARD_CACHE = BoundedTTLCache[dict[str, Any]](ttl_seconds=2.0, max_entries=1)
+_LLM_HEALTH_CACHE = BoundedTTLCache[dict[str, Any]](ttl_seconds=5.0, max_entries=4)
 
 
 class ExecuteRequest(BaseModel):
@@ -158,9 +159,6 @@ class BackupCreateRequest(BaseModel):
 
 
 class OpenStackConfigureRequest(BaseModel):
-    project_id: str = Field(default="", max_length=255)
-    project_name: str = Field(default="", max_length=255)
-    project_domain_name: str = Field(default="", max_length=255)
     token: str = Field(default="", max_length=8192)
     auth_url: str = Field(min_length=1, max_length=2048)
     region_name: str = Field(default="", max_length=255)
@@ -170,7 +168,6 @@ class OpenStackConfigureRequest(BaseModel):
 
 class NetBoxConfigureRequest(BaseModel):
     netbox_url: str = Field(min_length=1, max_length=2048)
-    token: str = Field(default="", max_length=8192)
     timeout_seconds: float = Field(default=30.0, ge=5.0, le=600.0)
     port: int = Field(default=0, ge=0, le=65535)
 
@@ -187,7 +184,15 @@ def _record_activity(kind: str, label: str, detail: str = "") -> None:
 
 
 def _llm_health(settings: HarborSettings) -> dict[str, Any]:
-    result = llm_health(settings)
+    cache_key = json.dumps(
+        {
+            "provider": settings.llm.provider,
+            "base_url": settings.llm.base_url,
+            "model": settings.llm.model,
+        },
+        sort_keys=True,
+    )
+    result = _LLM_HEALTH_CACHE.get_or_load(cache_key, lambda: llm_health(settings))
     return {**result, "connected": result["ok"]}
 
 
@@ -216,9 +221,10 @@ def _system_stats() -> dict[str, Any]:
 
 
 def _dashboard_payload() -> dict[str, Any]:
-    cached = _DASHBOARD_CACHE.get("dashboard")
-    if cached is not None:
-        return cached
+    return _DASHBOARD_CACHE.get_or_load("dashboard", _load_dashboard_payload)
+
+
+def _load_dashboard_payload() -> dict[str, Any]:
     settings = load_settings()
     modules = list_module_overview()
     llm = _llm_health(settings)
@@ -257,7 +263,6 @@ def _dashboard_payload() -> dict[str, Any]:
         "activity": list(RECENT_ACTIVITY),
         "stats": _system_stats(),
     }
-    _DASHBOARD_CACHE.set("dashboard", payload)
     return payload
 
 
@@ -726,7 +731,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.4.2", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version="0.5.0", lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
@@ -788,15 +793,18 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/ready")
-    def readiness() -> dict[str, Any]:
+    def readiness() -> JSONResponse:
         settings = load_settings()
         database = initialize_database()
-        return {
-            "ok": bool(settings.llm.base_url and settings.llm.model),
+        llm = _llm_health(settings)
+        users_configured = bool(load_users())
+        payload = {
+            "ok": bool(llm["ok"] and users_configured),
             "database": str(database),
-            "llm_configured": bool(settings.llm.base_url and settings.llm.model),
-            "users_configured": bool(load_users()),
+            "llm": {"ok": bool(llm["ok"]), "status": str(llm.get("status", "unknown"))},
+            "users_configured": users_configured,
         }
+        return JSONResponse(payload, status_code=200 if payload["ok"] else 503)
 
     @app.get("/api/dashboard")
     def dashboard(_user=require_role("admin")) -> dict[str, Any]:
@@ -823,18 +831,13 @@ def create_app() -> FastAPI:
             "netbox_url": str(settings.get("netbox_url", "")),
             "timeout_seconds": module.timeout_seconds if module and module.type == "netbox_mcp" else 30.0,
             "port": module.port if module and module.type == "netbox_mcp" else 0,
-            "token_configured": bool(
-                load_module_named_secret("netbox", "netbox_token")
-                or settings.get("netbox_token")
-                or settings.get("netbox_token_env")
-            ),
+            "authentication": "anonymous",
+            "read_only": True,
         }
 
     @app.put("/api/integrations/netbox")
     def netbox_configure(body: NetBoxConfigureRequest, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         existing = find_module("netbox")
-        old_token = load_module_named_secret("netbox", "netbox_token")
-        new_token = body.token.strip()
         module = ModuleConfig(
             id="netbox",
             name="NetBox MCP",
@@ -859,18 +862,12 @@ def create_app() -> FastAPI:
                 "netbox_url": body.netbox_url.strip(),
                 "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
             },
-            notes="Harbor verwaltet diesen lokalen, read-only NetBox MCP Worker.",
+            notes="Harbor verwaltet diesen lokalen, anonymen und strikt read-only NetBox MCP Worker.",
         )
         try:
-            if new_token:
-                save_module_named_secret("netbox", "netbox_token", new_token)
             upsert_module(module)
+            delete_module_named_secret("netbox", "netbox_token")
         except Exception as exc:
-            if new_token:
-                if old_token:
-                    save_module_named_secret("netbox", "netbox_token", old_token)
-                else:
-                    delete_module_named_secret("netbox", "netbox_token")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         record_audit(
             "integration.netbox.configure",
@@ -880,8 +877,9 @@ def create_app() -> FastAPI:
         )
         return {
             "ok": True,
-            "message": "NetBox-Konfiguration gespeichert.",
-            "token_configured": bool(new_token or old_token),
+            "message": "NetBox-Konfiguration anonym und read-only gespeichert.",
+            "authentication": "anonymous",
+            "read_only": True,
             "status": module_status(module),
         }
 
@@ -891,14 +889,12 @@ def create_app() -> FastAPI:
         settings = module.settings if module and module.type == "openstack_mcp" else {}
         return {
             "configured": bool(module and module.type == "openstack_mcp"),
-            "project_id": str(settings.get("project_id", "")),
-            "project_name": str(settings.get("project_name", "")),
-            "project_domain_name": str(settings.get("project_domain_name", "")),
             "auth_url": str(settings.get("auth_url", "")),
             "region_name": str(settings.get("region_name", "")),
             "timeout_seconds": module.timeout_seconds if module and module.type == "openstack_mcp" else 60.0,
             "port": module.port if module and module.type == "openstack_mcp" else 0,
             "token_configured": bool(load_module_named_secret("openstack", "openstack_token")),
+            "scope_mode": "project_from_token",
         }
 
     @app.put("/api/integrations/openstack")
@@ -907,12 +903,7 @@ def create_app() -> FastAPI:
         old_token = load_module_named_secret("openstack", "openstack_token")
         new_token = body.token.strip()
         if not new_token and not old_token:
-            raise HTTPException(status_code=400, detail="OpenStack Token fehlt.")
-        project_id = body.project_id.strip()
-        project_name = body.project_name.strip()
-        project_domain_name = body.project_domain_name.strip()
-        if project_name and not project_id and not project_domain_name:
-            project_domain_name = "Default"
+            raise HTTPException(status_code=400, detail="OpenStack User-Token fehlt.")
         module = ModuleConfig(
             id="openstack",
             name="OpenStack MCP",
@@ -949,20 +940,19 @@ def create_app() -> FastAPI:
             ],
             test_action="discover",
             settings={
-                "auth_type": "v3token" if project_id or project_name else "token",
+                "auth_type": "token",
                 "auth_url": body.auth_url.strip(),
                 "region_name": body.region_name.strip(),
-                "project_id": project_id,
-                "project_name": project_name,
-                "project_domain_name": project_domain_name if project_name and not project_id else "",
                 "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
             },
-            notes="Harbor verwaltet diesen lokalen, read-only OpenStack MCP Worker.",
+            notes="Harbor nutzt ausschliesslich den Projektkontext des projektgescopten User-Tokens.",
         )
         try:
             if new_token:
                 save_module_named_secret("openstack", "openstack_token", new_token)
             upsert_module(module)
+            delete_module_named_secret("openstack", "openstack_application_credential_secret")
+            delete_module_named_secret("openstack", "openstack_password")
         except Exception as exc:
             if new_token:
                 if old_token:
@@ -975,10 +965,8 @@ def create_app() -> FastAPI:
             "openstack",
             actor=_user.username,
             detail={
-                "project_id": project_id,
-                "project_name": project_name,
-                "project_domain_name": project_domain_name if project_name and not project_id else "",
                 "auth_url": body.auth_url.strip(),
+                "scope_mode": "project_from_token",
             },
         )
         return {

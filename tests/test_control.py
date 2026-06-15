@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
 
 from app.auth import current_user, require_metrics_access
 from app.config import HarborSettings, HarborUser, LlmSettings, ModuleConfig
-from app.control import OpenStackConfigureRequest, _build_messages, _context_for_chat, create_app
+from app.control import NetBoxConfigureRequest, OpenStackConfigureRequest, _build_messages, _context_for_chat, create_app
 from app.modules import module_status
 
 
@@ -264,9 +266,6 @@ class OpenStackConfigurationTests(unittest.TestCase):
             transport="local",
             settings={
                 "auth_url": "https://identity.example/v3",
-                "project_id": "",
-                "project_name": "demo",
-                "project_domain_name": "Default",
                 "region_name": "RegionOne",
             },
         )
@@ -278,8 +277,9 @@ class OpenStackConfigurationTests(unittest.TestCase):
             result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
 
         self.assertTrue(result["token_configured"])
-        self.assertEqual(result["project_id"], "")
-        self.assertEqual(result["project_domain_name"], "Default")
+        self.assertEqual(result["scope_mode"], "project_from_token")
+        self.assertNotIn("project_id", result)
+        self.assertNotIn("project_name", result)
         self.assertNotIn("token", {key: value for key, value in result.items() if key != "token_configured"})
         self.assertNotIn("super-secret-token", str(result))
 
@@ -292,9 +292,6 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         endpoint = self._endpoint("openstack_configure")
         body = OpenStackConfigureRequest(
-            project_id="",
-            project_name="demo",
-            project_domain_name="Default",
             token="super-secret-token",
             auth_url="https://identity.example/v3",
             region_name="RegionOne",
@@ -304,6 +301,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
             patch("app.control.load_module_named_secret", return_value=""),
             patch("app.control.save_module_named_secret") as save_secret,
             patch("app.control.upsert_module", side_effect=fake_upsert),
+            patch("app.control.delete_module_named_secret"),
             patch("app.control.module_status", return_value={"id": "openstack"}),
             patch("app.control.record_audit"),
         ):
@@ -312,9 +310,9 @@ class OpenStackConfigurationTests(unittest.TestCase):
         module = captured["module"]
         save_secret.assert_called_once_with("openstack", "openstack_token", "super-secret-token")
         self.assertNotIn("token", module.settings)
-        self.assertEqual(module.settings["auth_type"], "v3token")
-        self.assertEqual(module.settings["project_id"], "")
-        self.assertEqual(module.settings["project_domain_name"], "Default")
+        self.assertEqual(module.settings["auth_type"], "token")
+        self.assertNotIn("project_id", module.settings)
+        self.assertNotIn("project_name", module.settings)
         self.assertTrue(result["token_configured"])
 
     def test_openstack_configure_accepts_project_scoped_token_without_project(self) -> None:
@@ -326,7 +324,6 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         endpoint = self._endpoint("openstack_configure")
         body = OpenStackConfigureRequest(
-            project_id="",
             token="project-scoped-token",
             auth_url="https://identity.example/v3",
             region_name="RegionOne",
@@ -336,6 +333,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
             patch("app.control.load_module_named_secret", return_value=""),
             patch("app.control.save_module_named_secret"),
             patch("app.control.upsert_module", side_effect=fake_upsert),
+            patch("app.control.delete_module_named_secret"),
             patch("app.control.module_status", return_value={"id": "openstack"}),
             patch("app.control.record_audit"),
         ):
@@ -343,8 +341,65 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         module = captured["module"]
         self.assertEqual(module.settings["auth_type"], "token")
-        self.assertEqual(module.settings["project_name"], "")
-        self.assertEqual(module.settings["project_domain_name"], "")
+        self.assertNotIn("project_name", module.settings)
+        self.assertNotIn("project_domain_name", module.settings)
+
+    def test_netbox_configure_removes_legacy_token_and_uses_anonymous_access(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_upsert(module: ModuleConfig) -> ModuleConfig:
+            captured["module"] = module
+            return module
+
+        endpoint = self._endpoint("netbox_configure")
+        body = NetBoxConfigureRequest(netbox_url="https://netbox.example")
+        with (
+            patch("app.control.find_module", return_value=None),
+            patch("app.control.upsert_module", side_effect=fake_upsert),
+            patch("app.control.delete_module_named_secret") as delete_secret,
+            patch("app.control.module_status", return_value={"id": "netbox"}),
+            patch("app.control.record_audit"),
+        ):
+            result = endpoint(body=body, _user=HarborUser(username="operator", password_hash="unused", role="operator"))
+
+        module = captured["module"]
+        delete_secret.assert_called_once_with("netbox", "netbox_token")
+        self.assertNotIn("netbox_token", module.settings)
+        self.assertEqual(result["authentication"], "anonymous")
+        self.assertTrue(result["read_only"])
+
+
+class ReadinessTests(unittest.TestCase):
+    @staticmethod
+    def _endpoint():
+        application = create_app()
+        return next(route.endpoint for route in application.routes if getattr(route, "name", "") == "readiness")
+
+    def test_readiness_returns_503_when_llm_is_unreachable(self) -> None:
+        endpoint = self._endpoint()
+        with (
+            patch("app.control.load_settings", return_value=HarborSettings()),
+            patch("app.control.initialize_database", return_value=Path("/tmp/harbor.db")),
+            patch("app.control.load_users", return_value=[HarborUser(username="admin", password_hash="x", role="admin")]),
+            patch("app.control._llm_health", return_value={"ok": False, "status": "error"}),
+        ):
+            response = endpoint()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(json.loads(response.body)["ok"])
+
+    def test_readiness_returns_200_when_dependencies_are_ready(self) -> None:
+        endpoint = self._endpoint()
+        with (
+            patch("app.control.load_settings", return_value=HarborSettings()),
+            patch("app.control.initialize_database", return_value=Path("/tmp/harbor.db")),
+            patch("app.control.load_users", return_value=[HarborUser(username="admin", password_hash="x", role="admin")]),
+            patch("app.control._llm_health", return_value={"ok": True, "status": "connected"}),
+        ):
+            response = endpoint()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(json.loads(response.body)["ok"])
 
 
 if __name__ == "__main__":

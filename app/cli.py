@@ -636,15 +636,11 @@ def module_add_netbox_mcp(
     module_id: str = typer.Argument("netbox"),
     name: str = typer.Option("NetBox MCP"),
     netbox_url: str = typer.Option(..., help="Basis-URL der NetBox-Instanz, z. B. https://netbox.example.com"),
-    api_key: str = typer.Option("", help="NetBox API-Token"),
-    api_key_env: str = typer.Option("", help="ENV-Name fuer das NetBox API-Token"),
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
     timeout_seconds: float = typer.Option(30.0),
 ) -> None:
-    """Register a local NetBox MCP server managed by Harbor."""
-    if api_key and api_key_env:
-        raise typer.BadParameter("Nutze entweder --api-key oder --api-key-env.")
+    """Register an anonymous read-only NetBox MCP server managed by Harbor."""
     module = ModuleConfig(
         id=module_id,
         name=name,
@@ -667,26 +663,15 @@ def module_add_netbox_mcp(
         test_action="discover",
         settings={
             "netbox_url": netbox_url,
-            "netbox_token_env": api_key_env,
             "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
         },
-        notes="Harbor startet den lokalen NetBox MCP Worker und exponiert /mcp sowie /health.",
+        notes="Harbor startet den anonymen, strikt read-only NetBox MCP Worker.",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
-    old_token = load_module_named_secret(module_id, "netbox_token")
-    try:
-        if api_key:
-            save_module_named_secret(module_id, "netbox_token", api_key)
-        upsert_module(module)
-    except Exception:
-        if api_key:
-            if old_token:
-                save_module_named_secret(module_id, "netbox_token", old_token)
-            else:
-                delete_module_named_secret(module_id, "netbox_token")
-        raise
+    upsert_module(module)
+    delete_module_named_secret(module_id, "netbox_token")
     console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
 
 
@@ -755,14 +740,7 @@ def module_add_openstack_mcp(
         test_action="discover",
         test_payload={},
         test_expect_contains=["list_servers"],
-        settings={
-            "auth_type": "v3applicationcredential",
-            "auth_url_env": "OS_AUTH_URL",
-            "region_name_env": "OS_REGION_NAME",
-            "application_credential_id_env": "OS_APPLICATION_CREDENTIAL_ID",
-            "application_credential_secret_env": "OS_APPLICATION_CREDENTIAL_SECRET",
-            "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
-        },
+        settings={"upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops"},
         notes="Remote MCP endpoint fuer einen OpenStack MCP Server.",
     )
     errors = validate_module_config(module)
@@ -783,15 +761,11 @@ def module_add_openstack_local_mcp(
     auth_url_env: str = typer.Option("OS_AUTH_URL"),
     region_name: str = typer.Option("", help="OpenStack Region"),
     region_name_env: str = typer.Option("OS_REGION_NAME"),
-    application_credential_id: str = typer.Option("", help="OpenStack Application Credential ID"),
-    application_credential_id_env: str = typer.Option("OS_APPLICATION_CREDENTIAL_ID"),
-    application_credential_secret: str = typer.Option("", help="OpenStack Application Credential Secret"),
-    application_credential_secret_env: str = typer.Option("OS_APPLICATION_CREDENTIAL_SECRET"),
+    token: str = typer.Option("", help="Projektgescoptes OpenStack User-Token"),
+    token_env: str = typer.Option("OS_TOKEN", help="ENV-Name fuer das User-Token"),
 ) -> None:
-    """Register a local OpenStack MCP server managed by Harbor."""
-    application_credential_secret_value = (
-        application_credential_secret if isinstance(application_credential_secret, str) else ""
-    )
+    """Register a token-only local OpenStack MCP server managed by Harbor."""
+    token_value = token if isinstance(token, str) else ""
     module = ModuleConfig(
         id=module_id,
         name=name,
@@ -814,36 +788,32 @@ def module_add_openstack_local_mcp(
         ],
         test_action="discover",
         settings={
-            "auth_type": "v3applicationcredential",
+            "auth_type": "token",
             "auth_url": auth_url,
             "auth_url_env": auth_url_env,
             "region_name": region_name,
             "region_name_env": region_name_env,
-            "application_credential_id": application_credential_id,
-            "application_credential_id_env": application_credential_id_env,
-            "application_credential_secret_env": application_credential_secret_env,
+            "token_env": token_env,
             "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
         },
-        notes="Harbor startet den lokalen OpenStack MCP Worker und exponiert /mcp sowie /health.",
+        notes="Harbor nutzt ausschliesslich den Projektkontext des projektgescopten User-Tokens.",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
-    old_secret = load_module_named_secret(module_id, "openstack_application_credential_secret")
+    old_secret = load_module_named_secret(module_id, "openstack_token")
     try:
-        if application_credential_secret_value:
-            save_module_named_secret(
-                module_id,
-                "openstack_application_credential_secret",
-                application_credential_secret_value,
-            )
+        if token_value:
+            save_module_named_secret(module_id, "openstack_token", token_value)
         upsert_module(module)
+        delete_module_named_secret(module_id, "openstack_application_credential_secret")
+        delete_module_named_secret(module_id, "openstack_password")
     except Exception:
-        if application_credential_secret_value:
+        if token_value:
             if old_secret:
-                save_module_named_secret(module_id, "openstack_application_credential_secret", old_secret)
+                save_module_named_secret(module_id, "openstack_token", old_secret)
             else:
-                delete_module_named_secret(module_id, "openstack_application_credential_secret")
+                delete_module_named_secret(module_id, "openstack_token")
         raise
     console.print(Panel.fit(f"Lokales OpenStack MCP-Modul registriert: {module_id}", title="Module"))
 

@@ -18,26 +18,16 @@ def _openstack_credentials() -> dict[str, str]:
         "OS_REGION_NAME": "",
         "OS_INTERFACE": "",
         "OS_TIMEOUT": "30",
-        "OS_AUTH_TYPE": "",
+        "OS_AUTH_TYPE": "token",
         "OS_TOKEN": "",
-        "OS_APPLICATION_CREDENTIAL_ID": "",
-        "OS_APPLICATION_CREDENTIAL_SECRET": "",
-        "OS_USERNAME": "",
-        "OS_PASSWORD": "",
-        "OS_PROJECT_ID": "",
-        "OS_PROJECT_NAME": "",
-        "OS_USER_DOMAIN_NAME": "",
-        "OS_PROJECT_DOMAIN_NAME": "",
     }
     import os
 
     resolved = {key: os.getenv(key, "").strip() for key in fields}
     if not resolved["OS_AUTH_URL"]:
         raise ValueError("OS_AUTH_URL fehlt.")
-    has_application_credential = resolved["OS_APPLICATION_CREDENTIAL_ID"] and resolved["OS_APPLICATION_CREDENTIAL_SECRET"]
-    has_password = resolved["OS_USERNAME"] and resolved["OS_PASSWORD"]
-    if not resolved["OS_TOKEN"] and not has_application_credential and not has_password:
-        raise ValueError("OpenStack Credentials fehlen.")
+    if not resolved["OS_TOKEN"]:
+        raise ValueError("OS_TOKEN fehlt.")
     return resolved
 
 

@@ -127,7 +127,7 @@ run_cli() {
 start_harbor() {
   install_project
   "$VENV_DIR/bin/woddi-harbor" init >/dev/null
-  local host="${HARBOR_HOST:-0.0.0.0}"
+  local host="${HARBOR_HOST:-127.0.0.1}"
   local port="${HARBOR_PORT:-9680}"
   log "Starte woddi-harbor auf ${host}:${port}"
   exec "$VENV_DIR/bin/woddi-harbor" serve --host "$host" --port "$port"

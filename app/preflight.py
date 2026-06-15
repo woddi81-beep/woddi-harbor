@@ -5,8 +5,9 @@ import stat
 from typing import Any
 
 from .config import CONFIG_DIR, INTERNAL_TOKEN_PATH, load_modules, load_settings, load_users
+from .llm import llm_health
 from .mcp.openstack import openstack_sdk_available
-from .modules import validation_errors_by_module
+from .modules import health_check_module, validation_errors_by_module
 from .sources import source_overview
 from .state import DATABASE_PATH, initialize_database
 
@@ -23,11 +24,8 @@ def production_check() -> dict[str, Any]:
 
     add("users", bool(users), f"{len(users)} Benutzer konfiguriert")
     add("admin", any(user.enabled and user.role == "admin" for user in users), "Mindestens ein aktiver Admin")
-    add(
-        "llm",
-        bool(settings.llm.base_url and settings.llm.model),
-        f"{settings.llm.model or 'kein Modell'} via {settings.llm.base_url or 'keine URL'}",
-    )
+    llm = llm_health(settings)
+    add("llm", bool(llm["ok"]), str(llm.get("detail", "LLM-Status unbekannt")))
     add(
         "llm_secret",
         not bool(settings.llm.api_key),
@@ -42,6 +40,26 @@ def production_check() -> dict[str, Any]:
     validation = validation_errors_by_module(modules)
     invalid = {module_id: errors for module_id, errors in validation.items() if errors}
     add("modules", not invalid, f"{len(modules)} Module, {len(invalid)} ungueltig: {invalid}")
+    integration_health: dict[str, str] = {}
+    for module in modules:
+        if not module.enabled or module.type not in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
+            continue
+        try:
+            result = health_check_module(module.id)
+            if not result.get("ok"):
+                integration_health[module.id] = str(
+                    result.get("validation_errors")
+                    or result.get("remote")
+                    or result.get("local")
+                    or "nicht erreichbar"
+                )
+        except Exception as exc:
+            integration_health[module.id] = str(exc)
+    add(
+        "integrations",
+        not integration_health,
+        f"Nicht betriebsbereit: {integration_health}" if integration_health else "Alle aktivierten Integrationen betriebsbereit",
+    )
     openstack_modules = [module.id for module in modules if module.type == "openstack_mcp" and module.enabled]
     sdk_available = openstack_sdk_available()
     add(

@@ -20,6 +20,7 @@ from uuid import uuid4
 
 import httpx
 
+from .cache import BoundedTTLCache
 from .config import (
     BASE_DIR,
     LOG_DIR,
@@ -43,7 +44,10 @@ WARMUP_INTERVAL_SECONDS = 20.0
 MODULE_MUTATION_LOCK_PATH = RUNTIME_DIR / "locks" / "modules.lock"
 
 
-_QUERY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_QUERY_CACHE = BoundedTTLCache[dict[str, Any]](
+    ttl_seconds=QUERY_CACHE_TTL_SECONDS,
+    max_entries=512,
+)
 _REINDEX_LOCK = threading.Lock()
 _REINDEX_THREADS: dict[str, threading.Thread] = {}
 _HEALTH_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
@@ -58,18 +62,12 @@ def _local_netbox_health_url(module: ModuleConfig) -> str:
     return f"{module_url(module)}/health"
 
 
-def _netbox_settings(module: ModuleConfig) -> tuple[str, str]:
+def _netbox_url(module: ModuleConfig) -> str:
     netbox_url = str(module.settings.get("netbox_url", "")).strip()
-    netbox_token = str(module.settings.get("netbox_token", "")).strip()
     url_env = str(module.settings.get("netbox_url_env", "")).strip()
-    token_env = str(module.settings.get("netbox_token_env", "")).strip()
     if not netbox_url and url_env:
         netbox_url = os.getenv(url_env, "").strip()
-    if not netbox_token and token_env:
-        netbox_token = os.getenv(token_env, "").strip()
-    if not netbox_token:
-        netbox_token = load_module_named_secret(module.id, "netbox_token")
-    return netbox_url, netbox_token
+    return netbox_url
 
 
 def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
@@ -85,33 +83,13 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
     token = _resolve("token", "token_env")
     if not token:
         token = load_module_named_secret(module.id, "openstack_token")
-    application_credential_secret = _resolve("application_credential_secret", "application_credential_secret_env")
-    if not application_credential_secret:
-        application_credential_secret = load_module_named_secret(module.id, "openstack_application_credential_secret")
-    password = _resolve("password", "password_env")
-    if not password:
-        password = load_module_named_secret(module.id, "openstack_password")
-    project_id = _resolve("project_id", "project_id_env")
-    project_name = _resolve("project_name", "project_name_env")
-    project_domain_name = _resolve("project_domain_name", "project_domain_name_env")
-    auth_type = _resolve("auth_type", "auth_type_env")
-    if token:
-        auth_type = "v3token" if project_id or project_name else "token"
     return {
         "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
         "OS_REGION_NAME": _resolve("region_name", "region_name_env"),
         "OS_INTERFACE": _resolve("interface", "interface_env"),
         "OS_TIMEOUT": str(max(1.0, module.timeout_seconds)),
-        "OS_AUTH_TYPE": auth_type or "v3applicationcredential",
+        "OS_AUTH_TYPE": "token",
         "OS_TOKEN": token,
-        "OS_APPLICATION_CREDENTIAL_ID": _resolve("application_credential_id", "application_credential_id_env"),
-        "OS_APPLICATION_CREDENTIAL_SECRET": application_credential_secret,
-        "OS_USERNAME": _resolve("username", "username_env"),
-        "OS_PASSWORD": password,
-        "OS_PROJECT_ID": project_id,
-        "OS_PROJECT_NAME": project_name,
-        "OS_USER_DOMAIN_NAME": _resolve("user_domain_name", "user_domain_name_env"),
-        "OS_PROJECT_DOMAIN_NAME": project_domain_name if project_name and not project_id else "",
     }
 
 
@@ -135,9 +113,10 @@ def _local_mcp_server_name(module: ModuleConfig) -> str:
 
 def _local_mcp_auth_configured(module: ModuleConfig) -> bool:
     if module.type == "netbox_mcp":
-        return bool(_netbox_settings(module)[1])
+        return False
     if module.type == "openstack_mcp":
-        return bool(_openstack_settings(module).get("OS_AUTH_URL"))
+        settings = _openstack_settings(module)
+        return bool(settings.get("OS_AUTH_URL") and settings.get("OS_TOKEN"))
     return False
 
 
@@ -430,9 +409,7 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
     env["HARBOR_INTERNAL_WORKER_TOKEN"] = internal_worker_token()
     command = module_worker_command(module)
     if module.type == "netbox_mcp":
-        netbox_url, netbox_token = _netbox_settings(module)
-        env["NETBOX_URL"] = netbox_url
-        env["NETBOX_TOKEN"] = netbox_token
+        env["NETBOX_URL"] = _netbox_url(module)
     if module.type == "openstack_mcp":
         env.update({key: value for key, value in _openstack_settings(module).items() if value})
     _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
@@ -524,7 +501,7 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
     if module.type == "netbox_mcp":
         if module.transport != "local":
             errors.append("netbox_mcp muss lokal sein.")
-        netbox_url, _netbox_token = _netbox_settings(module)
+        netbox_url = _netbox_url(module)
         if not netbox_url:
             errors.append("NetBox URL fehlt.")
         else:
@@ -543,11 +520,8 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
             parsed = urlparse(openstack["OS_AUTH_URL"])
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 errors.append(f"OpenStack Auth URL ungueltig: {openstack['OS_AUTH_URL']}")
-        has_app_creds = bool(openstack["OS_APPLICATION_CREDENTIAL_ID"] and openstack["OS_APPLICATION_CREDENTIAL_SECRET"])
-        has_password_creds = bool(openstack["OS_USERNAME"] and openstack["OS_PASSWORD"])
-        has_token = bool(openstack["OS_TOKEN"])
-        if not has_app_creds and not has_password_creds and not has_token:
-            errors.append("OpenStack Credentials fehlen.")
+        if not openstack["OS_TOKEN"]:
+            errors.append("OpenStack User-Token fehlt.")
         if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
     if module.type == "sap_docs_mcp":
@@ -1381,7 +1355,7 @@ def _query_cache_get(module: ModuleConfig, action: str, payload: dict[str, Any],
                 if time.time() - cached_at <= PERSISTENT_QUERY_CACHE_TTL_SECONDS:
                     result = raw.get("result")
                     if isinstance(result, dict):
-                        _QUERY_CACHE[key] = (time.monotonic(), result)
+                        _QUERY_CACHE.set(key, result)
                         state = load_module_runtime_state(module.id)
                         update_module_runtime_state(
                             module.id,
@@ -1394,19 +1368,15 @@ def _query_cache_get(module: ModuleConfig, action: str, payload: dict[str, Any],
         state = load_module_runtime_state(module.id)
         update_module_runtime_state(module.id, query_cache_misses=int(state.get("query_cache_misses", 0)) + 1)
         return None
-    cached_at, result = cached
-    if time.monotonic() - cached_at > QUERY_CACHE_TTL_SECONDS:
-        _QUERY_CACHE.pop(key, None)
-        return None
     state = load_module_runtime_state(module.id)
     update_module_runtime_state(module.id, query_cache_hits=int(state.get("query_cache_hits", 0)) + 1)
-    return json.loads(json.dumps(result, ensure_ascii=False))
+    return json.loads(json.dumps(cached, ensure_ascii=False))
 
 
 def _query_cache_set(module: ModuleConfig, action: str, payload: dict[str, Any], index_built_at: str, result: dict[str, Any]) -> None:
     key = _query_cache_key(module, action, payload, index_built_at)
     serialized = json.loads(json.dumps(result, ensure_ascii=False))
-    _QUERY_CACHE[key] = (time.monotonic(), serialized)
+    _QUERY_CACHE.set(key, serialized)
     disk_path = _query_cache_disk_path(module, action, payload, index_built_at)
     disk_path.parent.mkdir(parents=True, exist_ok=True)
     disk_path.write_text(json.dumps({"cached_at": time.time(), "result": serialized}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1416,15 +1386,13 @@ def _query_cache_set(module: ModuleConfig, action: str, payload: dict[str, Any],
 
 def _clear_module_query_cache(module_id: str) -> None:
     prefix = f'"module_id":"{module_id}"'
-    for key in list(_QUERY_CACHE):
-        if prefix in key:
-            _QUERY_CACHE.pop(key, None)
+    _QUERY_CACHE.delete_matching(lambda key: prefix in key)
     shutil.rmtree(module_query_cache_dir(module_id), ignore_errors=True)
 
 
 def _module_query_cache_count(module_id: str) -> int:
     prefix = f'"module_id":"{module_id}"'
-    memory_entries = sum(1 for key in _QUERY_CACHE if prefix in key)
+    memory_entries = _QUERY_CACHE.count_matching(lambda key: prefix in key)
     disk_entries = 0
     cache_dir = module_query_cache_dir(module_id)
     if cache_dir.exists():

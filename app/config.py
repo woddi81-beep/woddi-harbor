@@ -66,7 +66,7 @@ class LlmSettings:
 @dataclass
 class HarborSettings:
     name: str = "Harbor"
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 9680
     api_workers: int = 4
     system_prompt_path: str = "config/system_prompt.txt"
@@ -290,9 +290,7 @@ def load_settings() -> HarborSettings:
         max_tokens=int(llm_payload.get("max_tokens", 1200)),
     )
     legacy_listen_config = "listen_configured" not in payload
-    configured_host = str(payload.get("host", "0.0.0.0")).strip() or "0.0.0.0"
-    if legacy_listen_config and configured_host in {"127.0.0.1", "::1", "localhost"}:
-        configured_host = "0.0.0.0"
+    configured_host = str(payload.get("host", "127.0.0.1")).strip() or "127.0.0.1"
     settings = HarborSettings(
         name=str(payload.get("name", "Harbor")),
         host=configured_host,

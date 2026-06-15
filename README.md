@@ -62,7 +62,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.3.8.md`
+- `docs/RELEASE_NOTES_v0.5.0.md`
 
 ## Struktur
 
@@ -301,9 +301,9 @@ discovery-en und Tools aufrufen. Der lokale Worker orientiert sich am offizielle
 `fields`-Selektion und optionale Plugin-Endpunkt-Erkennung.
 
 Im Admin-Portal unter `/admin` im Bereich **Module** auf **NetBox einbinden**
-klicken. Der Token wird getrennt von `modules.local.json` im Secret-Store
-abgelegt. Fuer neue Installationen sollte ein reiner Read-only-Token verwendet
-werden.
+klicken. Harbor verwendet bewusst keinen NetBox-Token, weil die Zielinstanz
+anonym lesbar ist. Der lokale Adapter akzeptiert ausschließlich GET-Anfragen,
+begrenzt Antwortgrößen und folgt keinen Links auf andere Hosts.
 
 Schnellstart:
 
@@ -348,14 +348,13 @@ Mehr Details zum Upstream-Projekt:
 ## OpenStack MCP Integration
 
 Im Admin-Portal unter `/admin` im Bereich **Module** auf **OpenStack einbinden**
-klicken. Erforderlich sind OpenStack Token und Identity/Auth URL. Projektname
-und Projektdomäne bleiben bei einem bereits projektgebundenen Token leer;
-Region und lokaler Port sind optional. Das Token wird nicht in
+klicken. Erforderlich sind ein projektgescoptes OpenStack User-Token und die
+Identity/Auth URL; Region und lokaler Port sind optional. Das Token wird nicht in
 `config/modules.local.json` gespeichert und nie an den Browser zurückgegeben.
 
-Liefert ein Token keinen Service-Katalog, fragt Harbor die erreichbaren Projekte
-bei Keystone ab. Bei genau einem Projekt scoped Harbor automatisch. Bei mehreren
-Projekten muss im Admin-Portal die Projekt-ID ausgewählt werden.
+Projekt-ID und Projektname werden ausschließlich aus dem Token gelesen. Harbor
+nimmt keine separaten Projektfelder an und führt kein Rescoping durch. Ein
+ungescoptes Token oder ein Token ohne Service-Katalog wird klar abgewiesen.
 
 Der OpenStack-Dialog enthält einen Timeout für Keystone- und Service-Aufrufe.
 Für langsam erreichbare private Clouds sind `60` bis `120` Sekunden sinnvoll.

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 - 2026-06-15
+
+### Changed
+
+- OpenStack accepts only a project-scoped user token and derives the project
+  context from that token
+- NetBox uses anonymous access and remains strictly limited to read-only GET
+  requests
+- Harbor and `harbor.sh` bind to `127.0.0.1` by default
+- Readiness and the production gate verify live LLM and integration health
+- Response, discovery, dashboard and query caches are bounded and coalesce
+  concurrent loads
+
+### Removed
+
+- OpenStack password, application-credential and project-rescoping paths
+- NetBox token storage and authorization headers
+
 ## 0.4.2 - 2026-06-12
 
 ### Added

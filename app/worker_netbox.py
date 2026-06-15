@@ -13,12 +13,11 @@ from .mcp.netbox import create_app
 from .worker_security import install_worker_auth
 
 
-def _netbox_credentials() -> tuple[str, str]:
+def _netbox_url() -> str:
     netbox_url = os.getenv("NETBOX_URL", "").strip()
-    netbox_token = os.getenv("NETBOX_TOKEN", "").strip()
     if not netbox_url:
         raise ValueError("NETBOX_URL fehlt.")
-    return netbox_url, netbox_token
+    return netbox_url
 
 
 def create_worker_app(module_id: str) -> FastAPI:
@@ -26,8 +25,7 @@ def create_worker_app(module_id: str) -> FastAPI:
     if module is None:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
 
-    netbox_url, netbox_token = _netbox_credentials()
-    return install_worker_auth(create_app(netbox_url=netbox_url, netbox_token=netbox_token))
+    return install_worker_auth(create_app(netbox_url=_netbox_url()))
 
 
 def _install_signal_handlers(server: uvicorn.Server) -> dict[int, Any]:

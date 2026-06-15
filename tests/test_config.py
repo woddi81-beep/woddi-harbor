@@ -5,11 +5,11 @@ import json
 from app.config import HarborSettings, load_settings
 
 
-def test_default_harbor_settings_bind_externally() -> None:
-    assert HarborSettings().host == "0.0.0.0"
+def test_default_harbor_settings_bind_to_loopback() -> None:
+    assert HarborSettings().host == "127.0.0.1"
 
 
-def test_load_settings_migrates_legacy_loopback_bind(tmp_path, monkeypatch) -> None:
+def test_load_settings_preserves_legacy_loopback_bind(tmp_path, monkeypatch) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     harbor_path = config_dir / "harbor.json"
@@ -35,9 +35,9 @@ def test_load_settings_migrates_legacy_loopback_bind(tmp_path, monkeypatch) -> N
 
     settings = load_settings()
 
-    assert settings.host == "0.0.0.0"
+    assert settings.host == "127.0.0.1"
     persisted = json.loads(harbor_path.read_text(encoding="utf-8"))
-    assert persisted["host"] == "0.0.0.0"
+    assert persisted["host"] == "127.0.0.1"
     assert persisted["listen_configured"] is True
 
 

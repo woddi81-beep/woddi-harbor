@@ -86,15 +86,16 @@ class CliModuleTests(unittest.TestCase):
         with (
             patch("app.cli.validate_module_config", return_value=[]),
             patch("app.cli.upsert_module", side_effect=fake_upsert),
+            patch("app.cli.delete_module_named_secret"),
             patch("app.cli.console.print"),
         ):
-            module_add_netbox_mcp(module_id="netbox", netbox_url="https://netbox.example", api_key="", api_key_env="")
+            module_add_netbox_mcp(module_id="netbox", netbox_url="https://netbox.example")
 
         module = captured["module"]
         self.assertEqual(module.type, "netbox_mcp")
         self.assertEqual(module.transport, "local")
         self.assertNotIn("netbox_token", module.settings)
-        self.assertEqual(module.settings["netbox_token_env"], "")
+        self.assertNotIn("netbox_token_env", module.settings)
 
 
 if __name__ == "__main__":

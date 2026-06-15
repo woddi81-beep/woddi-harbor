@@ -102,11 +102,36 @@ class Connection:
     def __init__(self) -> None:
         self.compute = Compute()
         self.block_storage = BlockStorage()
+        self.session = type(
+            "Session",
+            (),
+            {
+                "auth": type(
+                    "Auth",
+                    (),
+                    {
+                        "get_access": lambda _self, _session: type(
+                            "Access",
+                            (),
+                            {
+                                "project_id": "project-1",
+                                "project_name": "production",
+                                "project_scoped": True,
+                                "has_service_catalog": lambda _self: True,
+                            },
+                        )()
+                    },
+                )()
+            },
+        )()
+
+    def authorize(self) -> str:
+        return "token"
 
 
 class McpBackendTests(unittest.TestCase):
     def test_netbox_fields_use_native_filter_and_response_cache(self) -> None:
-        backend = NetBoxBackend("https://netbox.example", "token")
+        backend = NetBoxBackend("https://netbox.example")
         backend._client.close()
         client = FakeHTTPClient([{"count": 1, "results": [{"id": 1, "name": "edge"}], "next": None, "previous": None}])
         backend._client = client  # type: ignore[assignment]
@@ -126,7 +151,7 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual(backend._response_cache.stats()["hits"], 1)
 
     def test_netbox_rejects_cross_origin_and_write_calls(self) -> None:
-        backend = NetBoxBackend("https://netbox.example", "")
+        backend = NetBoxBackend("https://netbox.example")
         self.addCleanup(backend.close)
 
         with self.assertRaisesRegex(ValueError, "configured origin"):
@@ -134,17 +159,14 @@ class McpBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "read-only"):
             backend.call_tool("call_endpoint", {"path": "dcim/devices/", "method": "POST"})
 
-    def test_netbox_supports_v1_and_v2_token_schemes(self) -> None:
-        legacy = NetBoxBackend("https://netbox.example", "legacy-token")
-        modern = NetBoxBackend("https://netbox.example", "nbt_key.secret")
-        self.addCleanup(legacy.close)
-        self.addCleanup(modern.close)
+    def test_netbox_always_uses_anonymous_headers(self) -> None:
+        backend = NetBoxBackend("https://netbox.example")
+        self.addCleanup(backend.close)
 
-        self.assertEqual(legacy._headers()["Authorization"], "Token legacy-token")
-        self.assertEqual(modern._headers()["Authorization"], "Bearer nbt_key.secret")
+        self.assertNotIn("Authorization", backend._headers())
 
     def test_netbox_rejects_cross_origin_pagination_links(self) -> None:
-        backend = NetBoxBackend("https://netbox.example", "")
+        backend = NetBoxBackend("https://netbox.example")
         backend._client.close()
         backend._client = FakeHTTPClient(  # type: ignore[assignment]
             [{"count": 2, "results": [{"id": 1}], "next": "https://attacker.example/api/devices/?offset=1", "previous": None}]
@@ -204,7 +226,7 @@ class McpBackendTests(unittest.TestCase):
             "count": 1,
             "results": [{"id": 1, "name": "edge", "custom_fields": {"owner": "network"}}],
         }
-        backend = NetBoxBackend("https://netbox.example", "token")
+        backend = NetBoxBackend("https://netbox.example")
         backend._client.close()
         backend._client = FakeHTTPClient([schema, sample])  # type: ignore[assignment]
 
@@ -219,7 +241,7 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual(described["filter_parameters"][0]["name"], "status")
 
     def test_netbox_inventory_statistics_use_collection_counts(self) -> None:
-        backend = NetBoxBackend("https://netbox.example", "token")
+        backend = NetBoxBackend("https://netbox.example")
         backend._client.close()
         backend._client = FakeHTTPClient(
             [
