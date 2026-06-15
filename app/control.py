@@ -46,6 +46,7 @@ from .mcp_lifecycle import (
     create_instance,
     install_package,
     lifecycle_overview,
+    reconcile_desired_instances,
     restart_instance,
     rollback_instance,
     start_instance,
@@ -725,6 +726,12 @@ def create_app() -> FastAPI:
     async def lifespan(_app: FastAPI):
         global _WARMUP_THREAD
         _WARMUP_STOP.clear()
+        try:
+            reconciliation = reconcile_desired_instances()
+            if not reconciliation["ok"]:
+                _record_activity("mcp-reconcile", "startup", json.dumps(reconciliation, ensure_ascii=False))
+        except Exception as exc:
+            _record_activity("mcp-reconcile", "startup", str(exc))
         if _WARMUP_THREAD is None or not _WARMUP_THREAD.is_alive():
             _WARMUP_THREAD = threading.Thread(target=_warmup_loop, daemon=True, name="harbor-warmup")
             _WARMUP_THREAD.start()

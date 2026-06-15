@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -11,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .config import DATA_DIR, LOG_DIR, PID_DIR
+from .config import DATA_DIR, LOG_DIR, PID_DIR, RUNTIME_DIR
 from .state import (
     change_mcp_instance_version,
     find_mcp_instance,
@@ -26,6 +27,7 @@ from .state import (
 )
 
 MCP_PACKAGE_DIR = DATA_DIR / "mcp" / "packages"
+RECONCILE_LOCK_PATH = RUNTIME_DIR / "locks" / "mcp-reconcile.lock"
 ALLOWED_DRIVERS = {"http", "process", "systemd", "container"}
 
 
@@ -292,6 +294,41 @@ def stop_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
 def restart_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
     stop_instance(instance_id, actor=actor)
     return start_instance(instance_id, actor=actor)
+
+
+def reconcile_desired_instances(*, actor: str = "startup") -> dict[str, Any]:
+    RECONCILE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    with RECONCILE_LOCK_PATH.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        for instance in list_mcp_instances():
+            instance_id = str(instance["id"])
+            desired_state = str(instance.get("desired_state", "stopped"))
+            try:
+                status = instance_status(instance_id)
+                if desired_state == "running" and not status["running"]:
+                    status = start_instance(instance_id, actor=actor)
+                    action = "started"
+                elif desired_state != "running" and status["running"]:
+                    status = stop_instance(instance_id, actor=actor)
+                    action = "stopped"
+                else:
+                    action = "unchanged"
+                results.append(
+                    {
+                        "id": instance_id,
+                        "ok": True,
+                        "action": action,
+                        "running": bool(status["running"]),
+                    }
+                )
+            except Exception as exc:
+                results.append({"id": instance_id, "ok": False, "action": "error", "error": str(exc)})
+    return {
+        "ok": all(bool(item["ok"]) for item in results),
+        "instance_count": len(results),
+        "results": results,
+    }
 
 
 def upgrade_instance(instance_id: str, version: str, *, actor: str = "system") -> dict[str, Any]:

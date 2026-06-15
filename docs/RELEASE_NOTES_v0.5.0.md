@@ -10,6 +10,7 @@ integrations.
   are bounded.
 - `/api/ready` returns HTTP 503 when the configured LLM is unavailable.
 - `production-check` verifies live LLM and enabled integration health.
+- Managed MCP instances restore their persisted desired state on Harbor startup.
 - New installations bind to `127.0.0.1` unless an external address is explicitly
   configured.
 

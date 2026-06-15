@@ -12,6 +12,7 @@
 - Readiness and the production gate verify live LLM and integration health
 - Response, discovery, dashboard and query caches are bounded and coalesce
   concurrent loads
+- MCP instances restore their persisted desired state after a Harbor restart
 
 ### Removed
 
