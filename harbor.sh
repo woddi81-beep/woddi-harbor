@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$ROOT_DIR/.venv"
+VENV_DIR="${HARBOR_VENV_DIR:-$ROOT_DIR/.venv}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 detect_os() {
@@ -136,14 +136,20 @@ install_project() {
   ensure_venv
   "$PYTHON_BIN" "$ROOT_DIR/tools/verify_installation.py" --source-only
   log "Installiere woddi-harbor in die virtuelle Umgebung"
-  "$VENV_DIR/bin/python" -m pip install --no-build-isolation -e "$ROOT_DIR"
+  if "$VENV_DIR/bin/python" -c 'import setuptools.build_meta, wheel' >/dev/null 2>&1; then
+    "$VENV_DIR/bin/python" -m pip install --no-build-isolation -e "$ROOT_DIR"
+  else
+    log "Initialisiere die Python-Build-Umgebung"
+    "$VENV_DIR/bin/python" -m pip install -e "$ROOT_DIR"
+  fi
   "$VENV_DIR/bin/python" "$ROOT_DIR/tools/verify_installation.py"
 }
 
 run_cli() {
   ensure_venv
   if [[ ! -x "$VENV_DIR/bin/woddi-harbor" ]]; then
-    fail "Harbor CLI ist nicht installiert. Zuerst ./harbor.sh install ausfuehren."
+    log "Harbor CLI fehlt; fuehre die Erstinstallation automatisch aus"
+    install_project
   fi
   exec "$VENV_DIR/bin/woddi-harbor" "$@"
 }

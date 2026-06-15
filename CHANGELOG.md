@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.3 - 2026-06-15
+
+### Fixed
+
+- Forwarded `harbor.sh` commands automatically install the local CLI when a
+  checkout has no prepared virtual environment yet
+- Fresh production checkouts no longer fail with a manual-install prerequisite
+  for commands such as `./harbor.sh status`
+- Fresh Python virtual environments use isolated build dependencies instead of
+  failing on a missing `setuptools.build_meta`
+
 ## 0.5.2 - 2026-06-15
 
 ### Added
