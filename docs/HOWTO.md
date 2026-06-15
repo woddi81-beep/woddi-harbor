@@ -5,7 +5,9 @@
 ```bash
 git clone https://github.com/woddi81-beep/woddi-harbor.git
 cd woddi-harbor
-git checkout v0.3.8
+git checkout main
+git pull --ff-only
+./harbor.sh version
 scripts/install_production.sh manual
 ```
 
@@ -21,7 +23,7 @@ sudo scripts/install_production.sh system
 ## 2. Ersten Administrator anlegen
 
 ```bash
-.venv/bin/woddi-harbor init-admin --username admin
+./harbor.sh init-admin --username admin
 ```
 
 Ohne aktiven Administrator bleiben geschützte Endpunkte gesperrt.
@@ -31,7 +33,7 @@ Ohne aktiven Administrator bleiben geschützte Endpunkte gesperrt.
 Ollama:
 
 ```bash
-.venv/bin/woddi-harbor llm set \
+./harbor.sh llm set \
   --base-url http://LLM-SERVER:11434 \
   --model llama3:8b
 ```
@@ -40,7 +42,7 @@ OpenAI-kompatibler Endpunkt mit Secret aus einer Umgebungsvariable:
 
 ```bash
 export HARBOR_LLM_API_KEY='...'
-.venv/bin/woddi-harbor llm set \
+./harbor.sh llm set \
   --base-url http://LLM-SERVER:8000/v1 \
   --model MODEL \
   --api-key-env HARBOR_LLM_API_KEY
@@ -52,11 +54,11 @@ Die beiden produktiven Markdown-Repositories werden direkt als lokale Quellen
 konfiguriert:
 
 ```bash
-.venv/bin/woddi-harbor source configure-docs \
+./harbor.sh source configure-docs \
   --operations-path /opt/woddi-ai/doku/documentation-operation-main \
   --customer-path /opt/woddi-ai/doku/documentation-customer-main
-.venv/bin/woddi-harbor source sync operation-docs
-.venv/bin/woddi-harbor source sync customer-docs
+./harbor.sh source sync operation-docs
+./harbor.sh source sync customer-docs
 ```
 
 Harbor kopiert `.md`, `.markdown`, `.html`, `.htm` und `.png` in seine verwalteten
@@ -66,7 +68,7 @@ hostspezifischen Pfade werden in der nicht versionierten Datei
 `config/sources.local.json` gespeichert. Anschliessend:
 
 ```bash
-.venv/bin/woddi-harbor source list
+./harbor.sh source list
 ```
 
 Der Reindex lokaler Dokumentmodule erfolgt direkt und benoetigt keinen laufenden
@@ -79,13 +81,13 @@ Für eine Git-Quelle wird in `config/sources.json` ein Eintrag mit `kind: "git"`
 ## 5. Benutzer verwalten
 
 ```bash
-.venv/bin/woddi-harbor user add alice --role viewer
-.venv/bin/woddi-harbor user set-role alice operator
-.venv/bin/woddi-harbor user set-permissions alice \
+./harbor.sh user add alice --role viewer
+./harbor.sh user set-role alice operator
+./harbor.sh user set-permissions alice \
   --modules 10,11 \
   --tools search
-.venv/bin/woddi-harbor user passwd alice
-.venv/bin/woddi-harbor user disable alice
+./harbor.sh user passwd alice
+./harbor.sh user disable alice
 ```
 
 Alternativ stehen diese Funktionen im Admin-Portal unter `/admin` bereit.
@@ -95,10 +97,10 @@ Alternativ stehen diese Funktionen im Admin-Portal unter `/admin` bereit.
 NetBox ohne Token:
 
 ```bash
-.venv/bin/woddi-harbor module add-netbox-mcp netbox \
+./harbor.sh module add-netbox-mcp netbox \
   --netbox-url http://NETBOX-SERVER
-.venv/bin/woddi-harbor module start netbox
-.venv/bin/woddi-harbor module diagnose netbox
+./harbor.sh module start netbox
+./harbor.sh module diagnose netbox
 ```
 
 Bei `Errno 111` den Log-Auszug in der strukturierten Diagnose prüfen. Der Fehler
@@ -112,20 +114,20 @@ Der Timeout gilt für Authentifizierung und Service-Abfragen. Danach:
 
 ```bash
 .venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
-.venv/bin/woddi-harbor module start openstack
-.venv/bin/woddi-harbor module discover openstack
-.venv/bin/woddi-harbor module test openstack
+./harbor.sh module start openstack
+./harbor.sh module discover openstack
+./harbor.sh module test openstack
 ```
 
 ## 7. Module verwalten
 
 ```bash
-.venv/bin/woddi-harbor module list
-.venv/bin/woddi-harbor module start 10
-.venv/bin/woddi-harbor module test 10
-.venv/bin/woddi-harbor module reindex 10
-.venv/bin/woddi-harbor module diagnose 10
-.venv/bin/woddi-harbor module stop 10
+./harbor.sh module list
+./harbor.sh module start 10
+./harbor.sh module test 10
+./harbor.sh module reindex 10
+./harbor.sh module diagnose 10
+./harbor.sh module stop 10
 ```
 
 ## 8. MCP-Paket installieren und steuern
@@ -146,37 +148,37 @@ prozessbasierten Server:
 Installation und Lifecycle:
 
 ```bash
-.venv/bin/woddi-harbor mcp install /pfad/example-mcp
-.venv/bin/woddi-harbor mcp create example \
+./harbor.sh mcp install /pfad/example-mcp
+./harbor.sh mcp create example \
   --package-id example-mcp \
   --version 1.0.0
-.venv/bin/woddi-harbor mcp start example
-.venv/bin/woddi-harbor mcp restart example
-.venv/bin/woddi-harbor mcp stop example
+./harbor.sh mcp start example
+./harbor.sh mcp restart example
+./harbor.sh mcp stop example
 ```
 
 Das mitgelieferte eigene MCP kann ohne weitere Python-Abhaengigkeiten
 End-to-End betrieben werden:
 
 ```bash
-.venv/bin/woddi-harbor mcp install examples/harbor-ops-mcp
-.venv/bin/woddi-harbor mcp create harbor-ops \
+./harbor.sh mcp install examples/harbor-ops-mcp
+./harbor.sh mcp create harbor-ops \
   --package-id harbor-ops-mcp --version 1.0.0 \
   --config-json '{"env":{"MCP_PORT":"61000"}}'
-.venv/bin/woddi-harbor mcp start harbor-ops
-.venv/bin/woddi-harbor module add-mcp harbor-ops-tools \
+./harbor.sh mcp start harbor-ops
+./harbor.sh module add-mcp harbor-ops-tools \
   http://127.0.0.1:61000/mcp --remote-protocol mcp
-.venv/bin/woddi-harbor module discover harbor-ops-tools
-.venv/bin/woddi-harbor module call harbor-ops-tools harbor_echo \
+./harbor.sh module discover harbor-ops-tools
+./harbor.sh module call harbor-ops-tools harbor_echo \
   --payload '{"message":"Harbor MCP E2E"}'
 ```
 
 Upgrade und Rollback:
 
 ```bash
-.venv/bin/woddi-harbor mcp install /pfad/example-mcp-1.1.0
-.venv/bin/woddi-harbor mcp upgrade example --version 1.1.0
-.venv/bin/woddi-harbor mcp rollback example
+./harbor.sh mcp install /pfad/example-mcp-1.1.0
+./harbor.sh mcp upgrade example --version 1.1.0
+./harbor.sh mcp rollback example
 ```
 
 ## 8. Services starten
@@ -187,8 +189,8 @@ systemd ist optional. Fuer manuellen Betrieb genuegen `./harbor.sh start` und
 Fuer direkten Zugriff aus einem geschuetzten Netz:
 
 ```bash
-.venv/bin/woddi-harbor server set --host 0.0.0.0 --port 9680
-.venv/bin/woddi-harbor server show
+./harbor.sh server set --host 0.0.0.0 --port 9680
+./harbor.sh server show
 ./harbor.sh start
 ```
 
@@ -207,7 +209,7 @@ Status:
 ```bash
 systemctl --user status woddi-harbor.service
 systemctl --user status woddi-harbor-jobs.service
-.venv/bin/woddi-harbor service check harbor
+./harbor.sh service check harbor
 ```
 
 Alle Harbor-Komponenten beenden:
@@ -243,8 +245,8 @@ curl -fsS https://HARBOR-HOST/api/health
 ## 10. Backup und Restore
 
 ```bash
-.venv/bin/woddi-harbor backup create --label manual
-.venv/bin/woddi-harbor backup restore \
+./harbor.sh backup create --label manual
+./harbor.sh backup restore \
   data/backups/harbor-DATUM-manual.tar.gz --yes
 ```
 
@@ -264,7 +266,7 @@ LLM- und MCP-Lasttests nur gegen dafür vorgesehene Test-Upstreams ausführen.
 ## 12. Produktionsfreigabe
 
 ```bash
-.venv/bin/woddi-harbor production-check
+./harbor.sh production-check
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/ruff check app tests tools
 .venv/bin/python tools/security_check.py

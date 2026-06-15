@@ -36,6 +36,7 @@ usage() {
 Usage: ./harbor.sh [command] [args...]
 
 Commands:
+  version [--short]   Show the checked-out Harbor version
   bootstrap           Show distro-specific dependency hints
   install             Create venv and install woddi-harbor into it
   init                Initialize Harbor config/layout
@@ -43,15 +44,18 @@ Commands:
   console             Open the interactive Harbor console
   stop                Stop all Harbor runtime components
   uninstall-runtime   Remove managed services; preserve data and configuration
-  cli [args...]       Run woddi-harbor CLI inside the venv
+  cli [args...]       Compatibility form for forwarding CLI commands
   activate-hint       Print the correct activation command for the current shell
   help                Show this help
 
+Any other command is forwarded to the Harbor CLI inside the virtual environment.
+
 Examples:
+  ./harbor.sh version
   ./harbor.sh start
   ./harbor.sh console
-  ./harbor.sh cli status
-  ./harbor.sh cli llm set --base-url http://llm:8000/v1 --model my-model
+  ./harbor.sh status
+  ./harbor.sh llm set --base-url http://llm:8000/v1 --model my-model
 EOF
 }
 
@@ -103,6 +107,23 @@ ensure_python() {
   command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "python3 nicht gefunden. $(bootstrap_hint)"
 }
 
+show_version() {
+  if [[ $# -gt 1 || ($# -eq 1 && "$1" != "--short") ]]; then
+    fail "Usage: ./harbor.sh version [--short]"
+  fi
+
+  ensure_python
+  local version
+  version="$(cd "$ROOT_DIR" && "$PYTHON_BIN" -c 'from app.version import __version__; print(__version__)')" \
+    || fail "Version konnte nicht aus app/version.py gelesen werden."
+
+  if [[ "${1:-}" == "--short" ]]; then
+    printf '%s\n' "$version"
+  else
+    printf 'woddi-harbor %s\n' "$version"
+  fi
+}
+
 ensure_venv() {
   ensure_python
   if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -121,6 +142,9 @@ install_project() {
 
 run_cli() {
   ensure_venv
+  if [[ ! -x "$VENV_DIR/bin/woddi-harbor" ]]; then
+    fail "Harbor CLI ist nicht installiert. Zuerst ./harbor.sh install ausfuehren."
+  fi
   exec "$VENV_DIR/bin/woddi-harbor" "$@"
 }
 
@@ -139,6 +163,13 @@ if [[ $# -gt 0 ]]; then
 fi
 
 case "$cmd" in
+  version)
+    show_version "$@"
+    ;;
+  --version|-V)
+    [[ $# -eq 0 ]] || fail "Usage: ./harbor.sh $cmd"
+    show_version
+    ;;
   bootstrap)
     bootstrap_hint
     ;;
@@ -174,6 +205,6 @@ case "$cmd" in
     usage
     ;;
   *)
-    fail "Unbekannter Befehl: $cmd"
+    run_cli "$cmd" "$@"
     ;;
 esac

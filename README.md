@@ -37,15 +37,15 @@ Der Name passt bewusst zum Zielbild:
 Harbor blockiert geschuetzte Endpunkte, solange kein initialer Admin existiert:
 
 ```bash
-./harbor.sh cli init-admin --username admin
+./harbor.sh init-admin --username admin
 ```
 
 Vor einem Rollout:
 
 ```bash
-./harbor.sh cli version
-./harbor.sh cli production-check
-./harbor.sh cli backup create --label pre-release
+./harbor.sh version
+./harbor.sh production-check
+./harbor.sh backup create --label pre-release
 ```
 
 Ein externer Bind ist nur hinter einem TLS-Reverse-Proxy vorgesehen. Lokale Worker
@@ -63,7 +63,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.5.1.md`
+- `docs/RELEASE_NOTES_v0.5.2.md`
 
 ## Struktur
 
@@ -150,15 +150,15 @@ cd /srv/http/woddi-harbor
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 
-woddi-harbor init
-woddi-harbor llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL> --api-key-env HARBOR_LLM_API_KEY
-woddi-harbor module add-docs docs-local /pfad/zur/dokumentation
-woddi-harbor module add-maildir mails-local /pfad/zu/maildirs
-woddi-harbor module add-mcp netbox http://127.0.0.1:9010
+./harbor.sh init
+./harbor.sh llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL> --api-key-env HARBOR_LLM_API_KEY
+./harbor.sh module add-docs docs-local /pfad/zur/dokumentation
+./harbor.sh module add-maildir mails-local /pfad/zu/maildirs
+./harbor.sh module add-mcp netbox http://127.0.0.1:9010
 
-woddi-harbor module start docs-local
-woddi-harbor module start mails-local
-woddi-harbor serve --host 127.0.0.1 --port 9680
+./harbor.sh module start docs-local
+./harbor.sh module start mails-local
+./harbor.sh serve --host 127.0.0.1 --port 9680
 ```
 
 Wenn du die virtuelle Umgebung interaktiv aktivieren willst:
@@ -177,25 +177,25 @@ Praktische Wrapper-Aufrufe:
 ./harbor.sh bootstrap
 ./harbor.sh install
 ./harbor.sh console
-./harbor.sh cli init-admin --username admin
-./harbor.sh cli onboard --llm-base-url http://<LLM-HOST>:<PORT>/v1 --llm-model <MODEL>
-./harbor.sh cli status
-./harbor.sh cli module check docs-local
-./harbor.sh cli module reindex docs-local
-./harbor.sh cli module discover netbox
-./harbor.sh cli module diagnose netbox
-./harbor.sh cli module test netbox
-./harbor.sh cli module add-netbox-mcp netbox --netbox-url https://netbox.example.com
-./harbor.sh cli service check harbor
-./harbor.sh cli llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
+./harbor.sh init-admin --username admin
+./harbor.sh onboard --llm-base-url http://<LLM-HOST>:<PORT>/v1 --llm-model <MODEL>
+./harbor.sh status
+./harbor.sh module check docs-local
+./harbor.sh module reindex docs-local
+./harbor.sh module discover netbox
+./harbor.sh module diagnose netbox
+./harbor.sh module test netbox
+./harbor.sh module add-netbox-mcp netbox --netbox-url https://netbox.example.com
+./harbor.sh service check harbor
+./harbor.sh llm set --base-url http://<LLM-HOST>:<PORT>/v1 --model <MODEL>
 ```
 
 Generische Pflege bestehender Module:
 
 ```bash
-./harbor.sh cli module set netbox --provider netbox-mcp-server --remote-protocol mcp --base-url http://127.0.0.1:8000/mcp
-./harbor.sh cli module set netbox --test-action get_objects --test-payload '{"object_type":"dcim.devices","limit":1}' --test-expect-contains device
-./harbor.sh cli module remove netbox
+./harbor.sh module set netbox --provider netbox-mcp-server --remote-protocol mcp --base-url http://127.0.0.1:8000/mcp
+./harbor.sh module set netbox --test-action get_objects --test-payload '{"object_type":"dcim.devices","limit":1}' --test-expect-contains device
+./harbor.sh module remove netbox
 ```
 
 ## Linux-Kompatibilitaet
@@ -211,7 +211,7 @@ Generische Pflege bestehender Module:
 Schneller Vorab-Check:
 
 ```bash
-woddi-harbor check-prerequisites
+./harbor.sh check-prerequisites
 ```
 
 Ubuntu/Debian Bootstrap:
@@ -242,22 +242,22 @@ Fuer produktionsnahen Betrieb auf `Ubuntu` oder `SLES` kann Harbor User- oder Sy
 Profiles ansehen:
 
 ```bash
-woddi-harbor service list
+./harbor.sh service list
 ```
 
 Harbor als User-Service installieren:
 
 ```bash
-woddi-harbor service install harbor --mode user --enable --start
-woddi-harbor service check harbor
+./harbor.sh service install harbor --mode user --enable --start
+./harbor.sh service check harbor
 ```
 
 Lokales Modul als User-Service installieren:
 
 ```bash
-woddi-harbor service install module:docs-local --mode user --enable --start
-woddi-harbor module check docs-local
-woddi-harbor service check module:docs-local
+./harbor.sh service install module:docs-local --mode user --enable --start
+./harbor.sh module check docs-local
+./harbor.sh service check module:docs-local
 ```
 
 Der gleiche Flow funktioniert mit `--mode system`, sofern du die noetigen Rechte hast.
@@ -273,16 +273,16 @@ Die HTTP-Control-Plane kann mit lokalen Benutzern und Rollen abgesichert werden:
 Initialen Admin anlegen:
 
 ```bash
-woddi-harbor init-admin --username admin
+./harbor.sh init-admin --username admin
 ```
 
 Weitere Benutzer verwalten:
 
 ```bash
-woddi-harbor user list
-woddi-harbor user add alice --role operator
-woddi-harbor user set-role alice admin
-woddi-harbor user disable alice
+./harbor.sh user list
+./harbor.sh user add alice --role operator
+./harbor.sh user set-role alice admin
+./harbor.sh user disable alice
 ```
 
 Sobald mindestens ein Benutzer existiert, erwarten die API-Endpunkte HTTP Basic Auth.
@@ -309,14 +309,14 @@ begrenzt Antwortgrößen und folgt keinen Links auf andere Hosts.
 Schnellstart:
 
 ```bash
-./harbor.sh cli module add-netbox-mcp netbox --netbox-url http://NETBOX-SERVER
-./harbor.sh cli module start netbox
-./harbor.sh cli module discover netbox
-./harbor.sh cli module test netbox
-./harbor.sh cli module call netbox discover_object_types '{}'
-./harbor.sh cli module call netbox describe_object_type '{"object_type":"dcim.devices"}'
-./harbor.sh cli module call netbox get_inventory_statistics '{}'
-./harbor.sh cli module call netbox get_objects '{"object_type":"dcim.devices","limit":5,"fields":["id","name","status","site"]}'
+./harbor.sh module add-netbox-mcp netbox --netbox-url http://NETBOX-SERVER
+./harbor.sh module start netbox
+./harbor.sh module discover netbox
+./harbor.sh module test netbox
+./harbor.sh module call netbox discover_object_types '{}'
+./harbor.sh module call netbox describe_object_type '{"object_type":"dcim.devices"}'
+./harbor.sh module call netbox get_inventory_statistics '{}'
+./harbor.sh module call netbox get_objects '{"object_type":"dcim.devices","limit":5,"fields":["id","name","status","site"]}'
 ```
 
 `discover_object_types` ermittelt auch Collections installierter NetBox-Plugins.
@@ -330,9 +330,9 @@ MCP-Worker nicht auf seinem konfigurierten Port antwortet. Ab v0.3.8 liefert
 `module diagnose` dafür ein strukturiertes Ergebnis samt Start-Hinweis:
 
 ```bash
-./harbor.sh cli module diagnose netbox
-./harbor.sh cli module start netbox
-./harbor.sh cli module diagnose netbox
+./harbor.sh module diagnose netbox
+./harbor.sh module start netbox
+./harbor.sh module diagnose netbox
 ```
 
 Erwarteter Upstream laut Projekt-README:
@@ -366,13 +366,13 @@ CLI-Prozess und keine Abhängigkeit von `PATH` oder Symlinks:
 ```bash
 .venv/bin/python -m pip install -e . --no-build-isolation
 .venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
-./harbor.sh cli module start openstack
-./harbor.sh cli module discover openstack
-./harbor.sh cli module test openstack
-./harbor.sh cli module call openstack discover_resources '{}'
-./harbor.sh cli module call openstack get_storage_statistics '{}'
-./harbor.sh cli module call openstack get_project_statistics '{}'
-./harbor.sh cli module call openstack list_servers '{}'
+./harbor.sh module start openstack
+./harbor.sh module discover openstack
+./harbor.sh module test openstack
+./harbor.sh module call openstack discover_resources '{}'
+./harbor.sh module call openstack get_storage_statistics '{}'
+./harbor.sh module call openstack get_project_statistics '{}'
+./harbor.sh module call openstack list_servers '{}'
 ```
 
 Die OpenStack-Werkzeuge sind auf lesende `list`- und `show`-Operationen begrenzt.
@@ -411,12 +411,12 @@ Ein lokales Paket enthaelt `mcp-package.json`:
 Lifecycle:
 
 ```bash
-woddi-harbor mcp install /path/to/example-mcp
-woddi-harbor mcp create example --package-id example-mcp --version 1.0.0
-woddi-harbor mcp start example
-woddi-harbor mcp upgrade example --version 1.1.0
-woddi-harbor mcp rollback example
-woddi-harbor mcp stop example
+./harbor.sh mcp install /path/to/example-mcp
+./harbor.sh mcp create example --package-id example-mcp --version 1.0.0
+./harbor.sh mcp start example
+./harbor.sh mcp upgrade example --version 1.1.0
+./harbor.sh mcp rollback example
+./harbor.sh mcp stop example
 ```
 
 Die Registry kennt `http`, `process`, `systemd` und `container`. Direkt lokal
@@ -426,27 +426,27 @@ benoetigen freigegebene Betriebsprofile.
 Chat:
 
 ```bash
-woddi-harbor chat "Welche Billing-Hinweise finde ich in der Doku?"
+./harbor.sh chat "Welche Billing-Hinweise finde ich in der Doku?"
 ```
 
 Direkter MCP-Aufruf:
 
 ```bash
-woddi-harbor module call netbox health '{}'
-woddi-harbor module call netbox search '{"query":"router"}'
+./harbor.sh module call netbox health '{}'
+./harbor.sh module call netbox search '{"query":"router"}'
 ```
 
 Remote-MCP-Capabilities pruefen:
 
 ```bash
-woddi-harbor module discover netbox
+./harbor.sh module discover netbox
 ```
 
 Lokale Suchindizes gezielt neu bauen:
 
 ```bash
-woddi-harbor module reindex docs-local
-woddi-harbor module reindex maildir-local
+./harbor.sh module reindex docs-local
+./harbor.sh module reindex maildir-local
 ```
 
 ## API

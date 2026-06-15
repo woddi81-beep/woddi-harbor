@@ -1,6 +1,6 @@
 # Release Process
 
-1. Run `woddi-harbor production-check`.
+1. Run `./harbor.sh production-check`.
 2. Run tests, Ruff, Mypy and `pip-audit`.
 3. Update `CHANGELOG.md` and `app/version.py`.
 4. Add `docs/RELEASE_NOTES_vX.Y.Z.md` and reference it from the release workflow.

@@ -1,11 +1,25 @@
 # Changelog
 
+## 0.5.2 - 2026-06-15
+
+### Added
+
+- Direct source-version reporting through `./harbor.sh version`,
+  `./harbor.sh --version`, `./harbor.sh -V` and
+  `./harbor.sh version --short`
+- Consistent `harbor.sh` commands in operator documentation and runtime hints
+
+### Fixed
+
+- Removed the obsolete `v0.3.8` checkout from the production how-to
+- Installation verification now rejects stale package metadata and no longer
+  recommends an obsolete release
+
 ## 0.5.1 - 2026-06-15
 
 ### Added
 
-- `woddi-harbor version`, `woddi-harbor version --short` and
-  `woddi-harbor --version`
+- Version reporting in the internal Python CLI
 - Runtime version reporting in `/api/health`
 - One shared application version for package metadata, CLI, API and MCP clients
 
@@ -197,7 +211,7 @@
 
 - Real reference-document importer with source manifests and quality verification
 - Resilient Ollama/OpenAI-compatible LLM health checks, retries and timeout controls
-- Canonical interactive console through `woddi-harbor console`
+- Canonical interactive console through `./harbor.sh console`
 - Idempotent `runtime stop-all` and `runtime uninstall` commands
 - Own process-based MCP example with full discovery and tool-call flow
 - Hardware release gate for the 128 GiB / four-socket production target

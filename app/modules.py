@@ -802,7 +802,7 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
             payload["remote"] = {"ok": False, "error": str(exc)}
             payload["errors"].append(f"Discovery: {exc}")
     if not payload["ok"] and module.transport == "local":
-        payload["hint"] = f"Lokalen Worker pruefen oder starten: woddi-harbor module start {module.id}"
+        payload["hint"] = f"Lokalen Worker pruefen oder starten: ./harbor.sh module start {module.id}"
     return payload
 
 

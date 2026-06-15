@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import sys
 from pathlib import Path
 
@@ -39,6 +40,17 @@ def verify(project_root: Path, *, source_only: bool = False) -> list[str]:
         module_file = Path(getattr(module, "__file__", "")).resolve()
         if expected_package not in module_file.parents and module_file != expected_package / "__init__.py":
             errors.append(f"Falsches Python-Paket fuer {module_name}: {module_file}")
+
+    try:
+        source_version = str(importlib.import_module("app.version").__version__)
+        installed_version = importlib.metadata.version("woddi-harbor")
+    except (AttributeError, importlib.metadata.PackageNotFoundError) as exc:
+        errors.append(f"Paketversion konnte nicht geprueft werden: {exc}")
+    else:
+        if installed_version != source_version:
+            errors.append(
+                f"Installierte Version {installed_version} stimmt nicht mit dem Checkout {source_version} ueberein"
+            )
     return errors
 
 
@@ -51,7 +63,7 @@ def main() -> None:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         print(
-            "Checkout reparieren: git fetch --tags && git checkout v0.3.7",
+            "Checkout aktualisieren: git checkout main && git pull --ff-only && ./harbor.sh install",
             file=sys.stderr,
         )
         raise SystemExit(2)

@@ -4,8 +4,8 @@
 
 ```bash
 scripts/install_production.sh manual
-.venv/bin/woddi-harbor init-admin --username admin
-.venv/bin/woddi-harbor production-check
+./harbor.sh init-admin --username admin
+./harbor.sh production-check
 ./harbor.sh start
 ```
 
@@ -17,8 +17,8 @@ Deployment-Optionen.
 ## Backup und Restore
 
 ```bash
-./harbor.sh cli backup create --label daily
-./harbor.sh cli backup restore data/backups/harbor-...tar.gz --yes
+./harbor.sh backup create --label daily
+./harbor.sh backup restore data/backups/harbor-...tar.gz --yes
 ```
 
 Vor Restore wird automatisch ein Safety-Backup erzeugt.

@@ -133,7 +133,7 @@ def root(
     if ctx.invoked_subcommand is not None:
         return
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        console.print("Interaktive Konsole benötigt ein Terminal. Nutze `woddi-harbor --help` für Automatisierung.")
+        console.print("Interaktive Konsole benötigt ein Terminal. Nutze `./harbor.sh --help` für Automatisierung.")
         raise typer.Exit(code=2)
     _open_console()
 
@@ -360,7 +360,7 @@ def onboard(
     if mcp_base_url:
         upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
     sync_service_profiles()
-    console.print(Panel.fit("Onboarding gespeichert. Danach `woddi-harbor console` starten.", title="Onboard"))
+    console.print(Panel.fit("Onboarding gespeichert. Danach `./harbor.sh console` starten.", title="Onboard"))
 
 
 @app.command("init-admin")
@@ -376,7 +376,7 @@ def init_admin(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     if load_users():
-        raise typer.BadParameter("Benutzer existieren bereits. Nutze `woddi-harbor user add`.")
+        raise typer.BadParameter("Benutzer existieren bereits. Nutze `./harbor.sh user add`.")
     if generate:
         password = secrets.token_urlsafe(32)
     else:
@@ -412,7 +412,7 @@ def check_prerequisites() -> None:
     _check("venv", venv_ok, "Python venv module available" if venv_ok else "python3-venv/python311-venv missing")
     _check("git", shutil.which("git") is not None, shutil.which("git") or "git missing")
     _check("systemctl", shutil.which("systemctl") is not None, shutil.which("systemctl") or "optional")
-    _check("layout", True, "config/, data/, logs/ are created by `woddi-harbor init`")
+    _check("layout", True, "config/, data/, logs/ are created by `./harbor.sh init`")
 
 
 @app.command("production-check")
@@ -448,13 +448,13 @@ def console_command(
 
 @app.command(hidden=True)
 def tui() -> None:
-    """Compatibility alias for `woddi-harbor console`."""
+    """Compatibility alias for `./harbor.sh console`."""
     _open_console()
 
 
 @app.command("console-ui", hidden=True)
 def console_ui() -> None:
-    """Compatibility alias for `woddi-harbor console --simple`."""
+    """Compatibility alias for `./harbor.sh console --simple`."""
     _open_console(simple=True)
 
 

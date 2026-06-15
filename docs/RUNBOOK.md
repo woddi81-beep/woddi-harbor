@@ -2,7 +2,7 @@
 
 ## Harbor nicht bereit
 
-`woddi-harbor production-check` und `/api/ready` pruefen. Fehlende Benutzer, LLM-
+`./harbor.sh production-check` und `/api/ready` pruefen. Fehlende Benutzer, LLM-
 Konfiguration, ungesunde Quellen oder Dateirechte zuerst beheben.
 
 ## Jobs bleiben queued
@@ -22,5 +22,5 @@ Harbor bleibt administrierbar, Chat-Anfragen liefern einen kontrollierten Fehler
 
 ## Restore
 
-API und Job-Worker stoppen, `woddi-harbor backup restore DATEI --yes` ausfuehren,
+API und Job-Worker stoppen, `./harbor.sh backup restore DATEI --yes` ausfuehren,
 `production-check` starten und danach alle Services kontrolliert hochfahren.
