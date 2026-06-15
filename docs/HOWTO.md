@@ -107,16 +107,25 @@ Bei `Errno 111` den Log-Auszug in der strukturierten Diagnose prüfen. Der Fehle
 bedeutet, dass der lokale Worker nicht lauscht oder beim Start beendet wurde.
 
 OpenStack wird im Admin-Portal unter **Module**, **OpenStack einbinden**
-konfiguriert. Ein bereits projektgescoptes User-Token und die Identity/Auth URL
-sind Pflichtfelder. Harbor liest Projekt-ID und Projektname ausschließlich aus
-dem Token und führt kein Rescoping durch. Ungescopte Tokens werden abgewiesen.
-Der Timeout gilt für Authentifizierung und Service-Abfragen. Danach:
+konfiguriert. Die Identity/Auth URL ist eine gemeinsame Infrastrukturangabe.
+Jeder Benutzer hinterlegt oder erneuert sein eigenes projektgescoptes User-Token
+im OpenStack-Bereich der Chat-Seitenleiste. Harbor liest Projekt-ID und
+Projektname ausschließlich aus diesem Token und führt kein Rescoping durch.
+Tokens, SDK-Verbindungen und Caches werden nicht zwischen Harbor-Benutzern
+geteilt. Ungescopte Tokens werden abgewiesen. Der Timeout gilt für
+Authentifizierung und Service-Abfragen.
+
+Browser-Aufrufe verwenden automatisch das Token des angemeldeten Harbor-
+Benutzers. Fuer einen einmaligen CLI-Test wird das Token nur an den aufrufenden
+Prozess uebergeben:
 
 ```bash
 .venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
 ./harbor.sh module start openstack
+export OS_TOKEN='PROJEKTGESCOPTES_USER_TOKEN'
 ./harbor.sh module discover openstack
 ./harbor.sh module test openstack
+unset OS_TOKEN
 ```
 
 ## 7. Module verwalten

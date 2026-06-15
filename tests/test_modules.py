@@ -9,7 +9,13 @@ from fastapi import FastAPI
 
 from app import cli
 from app import modules as modules_module
-from app.config import ModuleConfig, load_module_named_secret, save_module_named_secret
+from app.config import (
+    ModuleConfig,
+    load_module_named_secret,
+    load_user_named_secret,
+    save_module_named_secret,
+    save_user_named_secret,
+)
 from app.mcp.netbox import NetBoxBackend
 from app.mcp.openstack import OpenStackBackend, create_openstack_connection
 from app.modules import (
@@ -448,24 +454,36 @@ class ModuleTests(unittest.TestCase):
 
         self.assertEqual(modules_module.validate_module_config(module), [])
 
-    def test_create_openstack_worker_app_rejects_non_token_credentials(self) -> None:
+    def test_create_openstack_worker_app_starts_without_shared_cloud_credentials(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
+        captured: dict[str, object] = {}
+
+        def fake_create_app(credentials: dict[str, str]):
+            captured["credentials"] = credentials
+            return FastAPI()
+
         with (
             patch("app.worker_openstack.find_module", return_value=module),
+            patch("app.worker_openstack.create_app", side_effect=fake_create_app),
             patch.dict(
                 "os.environ",
                 {
                     "OS_AUTH_URL": "https://openstack.example/v3",
                     "OS_APPLICATION_CREDENTIAL_ID": "abc",
                     "OS_APPLICATION_CREDENTIAL_SECRET": "def",
+                    "HARBOR_INTERNAL_WORKER_TOKEN": "worker-token",
                 },
                 clear=True,
             ),
         ):
-            with self.assertRaisesRegex(ValueError, "OS_TOKEN"):
-                create_openstack_worker_app("openstack")
+            app = create_openstack_worker_app("openstack")
 
-    def test_create_openstack_worker_app_accepts_token_credentials(self) -> None:
+        self.assertIsNotNone(app)
+        credentials = captured["credentials"]
+        self.assertEqual(credentials["OS_TOKEN"], "")
+        self.assertNotIn("OS_APPLICATION_CREDENTIAL_ID", credentials)
+
+    def test_create_openstack_worker_app_drops_environment_token(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
         captured: dict[str, object] = {}
 
@@ -491,7 +509,7 @@ class ModuleTests(unittest.TestCase):
 
         self.assertIsNotNone(app)
         credentials = captured["credentials"]
-        self.assertEqual(credentials["OS_TOKEN"], "token-value")
+        self.assertEqual(credentials["OS_TOKEN"], "")
         self.assertEqual(credentials["OS_AUTH_TYPE"], "token")
         self.assertNotIn("OS_PROJECT_NAME", credentials)
 
@@ -596,7 +614,7 @@ class ModuleTests(unittest.TestCase):
         self.assertNotIn("project_name", connection.config.config["auth"])
         self.assertEqual(connection.config.config["timeout"], "60.0")
 
-    def test_openstack_module_validation_accepts_named_token(self) -> None:
+    def test_openstack_module_validation_requires_only_shared_auth_url(self) -> None:
         module = ModuleConfig(
             id="openstack",
             type="openstack_mcp",
@@ -609,8 +627,7 @@ class ModuleTests(unittest.TestCase):
                 "auth_type": "v3token",
             },
         )
-        with patch("app.modules.load_module_named_secret", return_value="token-value"):
-            self.assertEqual(modules_module.validate_module_config(module), [])
+        self.assertEqual(modules_module.validate_module_config(module), [])
 
     def test_openstack_settings_do_not_rescope_project_scoped_token(self) -> None:
         module = ModuleConfig(
@@ -623,10 +640,10 @@ class ModuleTests(unittest.TestCase):
                 "project_domain_name": "Default",
             },
         )
-        with patch("app.modules.load_module_named_secret", return_value="token-value"):
-            settings = modules_module._openstack_settings(module)
+        settings = modules_module._openstack_settings(module, "token-value")
 
         self.assertEqual(settings["OS_AUTH_TYPE"], "token")
+        self.assertEqual(settings["OS_TOKEN"], "token-value")
         self.assertNotIn("OS_PROJECT_NAME", settings)
         self.assertNotIn("OS_PROJECT_DOMAIN_NAME", settings)
 
@@ -658,6 +675,18 @@ class ModuleTests(unittest.TestCase):
                 path = save_module_named_secret("openstack", "openstack_token", "token-value")
                 self.assertEqual(load_module_named_secret("openstack", "openstack_token"), "token-value")
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_user_named_secrets_are_private_and_separated(self) -> None:
+        with tempfile.TemporaryDirectory() as secret_dir:
+            with patch("app.config.SECRETS_DIR", Path(secret_dir)):
+                alice_path = save_user_named_secret("alice", "openstack_token", "alice-token")
+                bob_path = save_user_named_secret("bob", "openstack_token", "bob-token")
+
+                self.assertNotEqual(alice_path.parent, bob_path.parent)
+                self.assertEqual(load_user_named_secret("alice", "openstack_token"), "alice-token")
+                self.assertEqual(load_user_named_secret("bob", "openstack_token"), "bob-token")
+                self.assertEqual(alice_path.parent.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(alice_path.stat().st_mode & 0o777, 0o600)
 
     def test_validation_errors_by_module_detects_duplicate_ports(self) -> None:
         modules = [

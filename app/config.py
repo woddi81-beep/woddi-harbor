@@ -529,6 +529,42 @@ def delete_module_named_secret(module_id: str, secret_name: str) -> None:
     module_named_secret_path(module_id, secret_name).unlink(missing_ok=True)
 
 
+def user_named_secret_path(username: str, secret_name: str) -> Path:
+    normalized_username = username.strip()
+    if not normalized_username:
+        raise ValueError("Benutzername darf nicht leer sein.")
+    if not secret_name or any(
+        character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for character in secret_name
+    ):
+        raise ValueError("Ungueltiger Wert fuer secret_name.")
+    user_id = hashlib.sha256(normalized_username.encode("utf-8")).hexdigest()
+    return SECRETS_DIR / "users" / user_id / f"{secret_name}.secret"
+
+
+def load_user_named_secret(username: str, secret_name: str) -> str:
+    path = user_named_secret_path(username, secret_name)
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def save_user_named_secret(username: str, secret_name: str, value: str) -> Path:
+    secret = value.strip()
+    if not secret:
+        raise ValueError("Secret darf nicht leer sein.")
+    path = user_named_secret_path(username, secret_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    path.write_text(secret + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def delete_user_named_secret(username: str, secret_name: str) -> None:
+    user_named_secret_path(username, secret_name).unlink(missing_ok=True)
+
+
 def find_module(module_id: str) -> ModuleConfig | None:
     for module in load_modules():
         if module.id == module_id:

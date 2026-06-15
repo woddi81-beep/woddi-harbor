@@ -150,6 +150,9 @@ run_cli() {
   if [[ ! -x "$VENV_DIR/bin/woddi-harbor" ]]; then
     log "Harbor CLI fehlt; fuehre die Erstinstallation automatisch aus"
     install_project
+  elif ! "$VENV_DIR/bin/python" "$ROOT_DIR/tools/verify_installation.py" >/dev/null 2>&1; then
+    log "Installierte Harbor-Version ist nicht aktuell; aktualisiere die virtuelle Umgebung"
+    install_project
   fi
   exec "$VENV_DIR/bin/woddi-harbor" "$@"
 }

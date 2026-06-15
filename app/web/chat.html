@@ -18,6 +18,16 @@
       <div class="section-heading"><span>Verlauf</span><span id="session-count" class="count">0</span></div>
       <div id="sessions" class="stack sessions"></div>
       <div class="sidebar-footer">
+        <section id="openstack-credential" class="credential-card" aria-live="polite">
+          <div class="credential-head">
+            <span class="credential-icon" aria-hidden="true">OS</span>
+            <div>
+              <strong>OpenStack</strong>
+              <span id="openstack-token-status">Tokenstatus wird geladen</span>
+            </div>
+          </div>
+          <button id="openstack-token-open" type="button">Token erneuern</button>
+        </section>
         <a class="nav-link" href="/admin">Administration</a>
       </div>
     </aside>
@@ -48,6 +58,25 @@
       </section>
     </main>
   </div>
+  <dialog id="openstack-token-dialog">
+    <form id="openstack-token-form" class="stack">
+      <div>
+        <span class="eyebrow">Persönlicher Projektzugriff</span>
+        <h3>OpenStack User-Token</h3>
+      </div>
+      <p id="openstack-token-owner" class="muted"></p>
+      <label>
+        Projektgescoptes User-Token
+        <input name="token" type="password" autocomplete="new-password" maxlength="8192" required placeholder="Neues Token eingeben">
+      </label>
+      <p class="muted">Das Token wird nur deinem Harbor-Benutzer zugeordnet. Andere Benutzer erhalten weder Zugriff auf das Token noch auf deinen OpenStack-Cache oder Projektkontext.</p>
+      <div class="row">
+        <button class="primary" type="submit">Token speichern</button>
+        <button id="openstack-token-remove" class="danger hidden" type="button">Token entfernen</button>
+        <button id="openstack-token-cancel" type="button">Abbrechen</button>
+      </div>
+    </form>
+  </dialog>
   <script src="/static/chat.js" defer></script>
 </body>
 </html>

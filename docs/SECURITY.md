@@ -4,6 +4,11 @@
 - Harbor bindet produktiv nur an Loopback und wird ueber einen TLS-Reverse-Proxy
   veroeffentlicht.
 - Lokale Worker benoetigen einen internen Bearer-Token mit Dateimodus `0600`.
+- OpenStack User-Tokens werden pro Harbor-Benutzer getrennt gespeichert, nur
+  fuer dessen interne Requests an den Worker weitergegeben und nie von Status-
+  Endpunkten zurueckgegeben.
+- OpenStack SDK-Verbindungen und Antwort-Caches sind pro Harbor-Benutzer
+  getrennt; eine Tokenrotation verwirft nur den betroffenen Benutzerkontext.
 - Modul- und Tool-Allowlisten werden serverseitig erzwungen.
 - MCP-Pakete werden vor Installation validiert; absolute Process-Executables und
   Pfadfluchten sind verboten.

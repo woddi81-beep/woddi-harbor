@@ -24,7 +24,7 @@ TOKEN="$(tr -d '\r\n' <"$TOKEN_FILE")"
 printf 'HARBOR_METRICS_TOKEN=%s\n' "$TOKEN" >"$ENV_FILE"
 sed "s|__HARBOR_METRICS_TOKEN__|$TOKEN|g" "$ROOT/deploy/prometheus.local.yml.tpl" >"$CONFIG_FILE"
 
-"$ROOT/.venv/bin/woddi-harbor" service install harbor --mode user --enable
+"$ROOT/harbor.sh" service install harbor --mode user --enable
 systemctl --user restart woddi-harbor.service
 
 if docker container inspect woddi-harbor-prometheus >/dev/null 2>&1; then

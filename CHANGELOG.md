@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 - 2026-06-15
+
+### Added
+
+- OpenStack User-Tokens can be renewed and removed directly from the chat UI
+- Token status identifies the current Harbor user without returning the token
+- Per-user OpenStack backend and cache isolation with bounded idle eviction
+
+### Changed
+
+- OpenStack Auth URL, region and timeout remain shared infrastructure settings,
+  while every Harbor user has a separate project-scoped token
+- OpenStack workers start without cloud credentials and receive the current
+  user's token only for that user's internal request
+- Discovery, tests, direct calls and chat context use the authenticated user's
+  OpenStack credential
+
+### Security
+
+- Legacy shared OpenStack token, password and application-credential secrets are
+  removed during startup and configuration changes
+- Token rotation invalidates only the affected user's SDK connection and cache
+
+### Fixed
+
+- `harbor.sh` now detects and refreshes a stale installed CLI after `git pull`
+  before forwarding commands
+
 ## 0.5.3 - 2026-06-15
 
 ### Fixed

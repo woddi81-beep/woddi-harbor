@@ -80,6 +80,15 @@ kbd { padding: .08rem .28rem; border: 1px solid var(--line); border-bottom-width
 .muted, .meta { color: var(--muted); font-size: .84rem; }
 .brand-block .muted { margin: 0; line-height: 1.5; }
 .sidebar-footer { display: grid; gap: .75rem; margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--line-soft); }
+.credential-card { display: grid; gap: .65rem; padding: .75rem; border: 1px solid var(--line-soft); border-radius: 11px; background: rgba(15, 29, 41, .72); }
+.credential-card.ready { border-color: rgba(82, 213, 173, .3); background: var(--accent-soft); }
+.credential-card.warning { border-color: rgba(239, 191, 105, .32); }
+.credential-head { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .55rem; align-items: center; }
+.credential-head > div { display: grid; gap: .12rem; min-width: 0; }
+.credential-head strong { font-size: .82rem; }
+.credential-head span:not(.credential-icon) { color: var(--muted); font-size: .7rem; line-height: 1.35; }
+.credential-icon { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 8px; color: var(--accent-strong); background: rgba(82, 213, 173, .13); font-size: .68rem; font-weight: 850; letter-spacing: .04em; }
+.credential-card button { width: 100%; padding: .45rem .55rem; font-size: .75rem; }
 .nav-link { display: block; padding: .6rem .7rem; border: 1px solid var(--line-soft); border-radius: 9px; text-decoration: none; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; margin-top: .25rem; color: var(--muted); font-size: .72rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .count { min-width: 1.5rem; padding: .12rem .38rem; border-radius: 999px; color: var(--accent); background: var(--accent-soft); text-align: center; }

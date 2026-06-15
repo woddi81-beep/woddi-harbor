@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.mcp.netbox import NetBoxBackend
-from app.mcp.openstack import OpenStackBackend
+from app.mcp.openstack import OpenStackBackend, OpenStackUserBackendRegistry
 
 
 class FakeHTTPResponse:
@@ -130,6 +130,36 @@ class Connection:
 
 
 class McpBackendTests(unittest.TestCase):
+    def test_openstack_registry_separates_users_and_rotates_tokens(self) -> None:
+        created: list[OpenStackBackend] = []
+
+        class Backend(OpenStackBackend):
+            def __init__(self, credentials: dict[str, str]) -> None:
+                super().__init__(credentials, connection_factory=lambda _credentials: Connection())
+                self.closed = False
+                created.append(self)
+
+            def close(self) -> None:
+                self.closed = True
+                super().close()
+
+        registry = OpenStackUserBackendRegistry(
+            {"OS_AUTH_URL": "https://identity.example/v3"},
+            backend_factory=Backend,
+        )
+        self.addCleanup(registry.close)
+
+        alice_first = registry.get("alice", "token-a")
+        self.assertIs(alice_first, registry.get("alice", "token-a"))
+        bob = registry.get("bob", "token-a")
+        self.assertIsNot(alice_first, bob)
+
+        alice_rotated = registry.get("alice", "token-b")
+        self.assertIsNot(alice_first, alice_rotated)
+        self.assertTrue(alice_first.closed)  # type: ignore[attr-defined]
+        self.assertFalse(bob.closed)  # type: ignore[attr-defined]
+        self.assertNotIn("token-a", str(registry.stats()))
+
     def test_netbox_fields_use_native_filter_and_response_cache(self) -> None:
         backend = NetBoxBackend("https://netbox.example")
         backend._client.close()

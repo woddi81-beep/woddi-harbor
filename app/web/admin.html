@@ -78,7 +78,7 @@
         <input name="token" type="password" autocomplete="new-password" placeholder="User-Token eingeben">
       </label>
       <p id="openstack-token-state" class="muted"></p>
-      <p class="muted">Harbor nimmt keine separate Projekt-ID an und führt kein Rescoping durch. Dadurch bleibt der Worker sicher im Projektkontext des Tokens.</p>
+      <p class="muted">Das Token wird ausschließlich deinem aktuell angemeldeten Harbor-Benutzer zugeordnet. Harbor nimmt keine separate Projekt-ID an und führt kein Rescoping durch.</p>
       <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3"></label>
       <div class="form-grid">
         <label>Region<input name="region_name" placeholder="RegionOne"></label>

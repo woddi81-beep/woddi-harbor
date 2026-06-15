@@ -25,13 +25,12 @@ from .config import (
     delete_module_named_secret,
     ensure_layout,
     find_module,
-    load_module_named_secret,
     load_modules,
     load_settings,
     load_users,
     parse_user_role,
-    save_module_named_secret,
     save_settings,
+    save_user_named_secret,
     save_users,
     sync_service_profiles,
 )
@@ -787,9 +786,16 @@ def module_add_openstack_local_mcp(
     region_name_env: str = typer.Option("OS_REGION_NAME"),
     token: str = typer.Option("", help="Projektgescoptes OpenStack User-Token"),
     token_env: str = typer.Option("OS_TOKEN", help="ENV-Name fuer das User-Token"),
+    user: str = typer.Option("", help="Harbor-Benutzer, dem das Token exklusiv gehoert"),
 ) -> None:
     """Register a token-only local OpenStack MCP server managed by Harbor."""
-    token_value = token if isinstance(token, str) else ""
+    token_value = token.strip() if isinstance(token, str) else ""
+    normalized_user = user.strip() if isinstance(user, str) else ""
+    if token_value and not normalized_user:
+        raise typer.BadParameter("--user ist erforderlich, wenn --token gesetzt wird.")
+    token_env_name = token_env.strip() if isinstance(token_env, str) else ""
+    if normalized_user and not token_value and token_env_name:
+        token_value = os.getenv(token_env_name, "").strip()
     module = ModuleConfig(
         id=module_id,
         name=name,
@@ -817,7 +823,6 @@ def module_add_openstack_local_mcp(
             "auth_url_env": auth_url_env,
             "region_name": region_name,
             "region_name_env": region_name_env,
-            "token_env": token_env,
             "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
         },
         notes="Harbor nutzt ausschliesslich den Projektkontext des projektgescopten User-Tokens.",
@@ -825,20 +830,12 @@ def module_add_openstack_local_mcp(
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
-    old_secret = load_module_named_secret(module_id, "openstack_token")
-    try:
-        if token_value:
-            save_module_named_secret(module_id, "openstack_token", token_value)
-        upsert_module(module)
-        delete_module_named_secret(module_id, "openstack_application_credential_secret")
-        delete_module_named_secret(module_id, "openstack_password")
-    except Exception:
-        if token_value:
-            if old_secret:
-                save_module_named_secret(module_id, "openstack_token", old_secret)
-            else:
-                delete_module_named_secret(module_id, "openstack_token")
-        raise
+    upsert_module(module)
+    if token_value and normalized_user:
+        save_user_named_secret(normalized_user, "openstack_token", token_value)
+    delete_module_named_secret(module_id, "openstack_token")
+    delete_module_named_secret(module_id, "openstack_application_credential_secret")
+    delete_module_named_secret(module_id, "openstack_password")
     console.print(Panel.fit(f"Lokales OpenStack MCP-Modul registriert: {module_id}", title="Module"))
 
 

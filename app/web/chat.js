@@ -3,6 +3,7 @@ const state = {
   controller: null,
   modules: [],
   pendingFrame: 0,
+  openstack: null,
 };
 const $ = (id) => document.getElementById(id);
 
@@ -89,6 +90,24 @@ async function loadModules() {
   }));
   $("module-state").lastChild.textContent = active.length ? `${active.length} Module verfügbar` : "Keine Module verfügbar";
   $("module-state").classList.toggle("unavailable", !active.length);
+}
+
+async function loadOpenStackCredential() {
+  const configuration = await api("/api/integrations/openstack");
+  state.openstack = configuration;
+  const configured = Boolean(configuration.token_configured);
+  const ready = Boolean(configuration.configured);
+  $("openstack-credential").classList.toggle("ready", configured && ready);
+  $("openstack-credential").classList.toggle("warning", !configured || !ready);
+  $("openstack-token-status").textContent = !ready
+    ? "Integration noch nicht eingerichtet"
+    : configured
+      ? `Token für ${configuration.token_owner} aktiv`
+      : `Token für ${configuration.token_owner} fehlt`;
+  $("openstack-token-open").textContent = configured ? "Token erneuern" : "Token hinterlegen";
+  $("openstack-token-remove").classList.toggle("hidden", !configured);
+  $("openstack-token-owner").textContent =
+    `Dieses Token gilt ausschließlich für den Harbor-Benutzer ${configuration.token_owner}.`;
 }
 
 async function loadSessions() {
@@ -228,6 +247,39 @@ function resizePrompt() {
 $("composer").addEventListener("submit", send);
 $("new-chat").addEventListener("click", resetChat);
 $("stop").addEventListener("click", () => state.controller?.abort());
+$("openstack-token-open").addEventListener("click", () => {
+  $("openstack-token-form").reset();
+  $("openstack-token-dialog").showModal();
+  $("openstack-token-form").token.focus();
+});
+$("openstack-token-cancel").addEventListener("click", () => $("openstack-token-dialog").close());
+$("openstack-token-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    await api("/api/integrations/openstack/token", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: form.token.value }),
+    });
+    $("openstack-token-dialog").close();
+    $("notice").textContent = "Dein OpenStack User-Token wurde gespeichert.";
+    await loadOpenStackCredential();
+  } catch (error) {
+    $("notice").textContent = error.message;
+  }
+});
+$("openstack-token-remove").addEventListener("click", async () => {
+  if (!confirm("Dein persönliches OpenStack User-Token wirklich entfernen?")) return;
+  try {
+    await api("/api/integrations/openstack/token", { method: "DELETE" });
+    $("openstack-token-dialog").close();
+    $("notice").textContent = "Dein OpenStack User-Token wurde entfernt.";
+    await loadOpenStackCredential();
+  } catch (error) {
+    $("notice").textContent = error.message;
+  }
+});
 $("prompt").addEventListener("input", resizePrompt);
 $("prompt").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
@@ -237,6 +289,6 @@ $("prompt").addEventListener("keydown", (event) => {
 });
 
 emptyState();
-Promise.all([loadModules(), loadSessions()])
+Promise.all([loadModules(), loadSessions(), loadOpenStackCredential()])
   .then(() => state.sessionId ? openSession(state.sessionId, "Chat") : $("prompt").focus())
   .catch((error) => { $("notice").textContent = error.message; });

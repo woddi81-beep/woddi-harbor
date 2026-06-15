@@ -152,7 +152,9 @@ async function action(raw) {
       }
       form.token.required = !configuration.token_configured;
       form.token.placeholder = configuration.token_configured ? "Gesetzt; leer lassen zum Beibehalten" : "Token eingeben";
-      $("openstack-token-state").textContent = configuration.token_configured ? "Ein Token ist sicher hinterlegt." : "Noch kein Token hinterlegt.";
+      $("openstack-token-state").textContent = configuration.token_configured
+        ? `Ein persönliches Token für ${configuration.token_owner} ist hinterlegt.`
+        : `Für ${configuration.token_owner} ist noch kein Token hinterlegt.`;
       $("openstack-dialog").showModal();
     } catch (error) { $("notice").textContent = error.message; }
     return;

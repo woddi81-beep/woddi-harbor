@@ -9,7 +9,7 @@ python3 tools/verify_installation.py --source-only
 python3 -m venv .venv
 .venv/bin/python -m pip install --no-build-isolation -e .
 .venv/bin/python tools/verify_installation.py
-.venv/bin/woddi-harbor init
+./harbor.sh init
 
 if [[ "$MODE" == "manual" ]]; then
   echo "Manuelle Installation abgeschlossen. Es wurden keine systemd-Units installiert."
@@ -29,7 +29,7 @@ else
 fi
 
 mkdir -p "$UNIT_DIR"
-.venv/bin/woddi-harbor service install harbor --mode "$MODE" --enable
+./harbor.sh service install harbor --mode "$MODE" --enable
 sed "s|__HARBOR_WORKDIR__|$ROOT|g" systemd/woddi-harbor-jobs.service.tpl >"$UNIT_DIR/woddi-harbor-jobs.service"
 sed "s|__HARBOR_WORKDIR__|$ROOT|g" systemd/woddi-harbor-backup.service.tpl >"$UNIT_DIR/woddi-harbor-backup.service"
 cp systemd/woddi-harbor-backup.timer "$UNIT_DIR/woddi-harbor-backup.timer"

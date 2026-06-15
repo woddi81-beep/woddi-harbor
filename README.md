@@ -63,7 +63,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.5.3.md`
+- `docs/RELEASE_NOTES_v0.6.0.md`
 
 ## Struktur
 
@@ -349,13 +349,15 @@ Mehr Details zum Upstream-Projekt:
 ## OpenStack MCP Integration
 
 Im Admin-Portal unter `/admin` im Bereich **Module** auf **OpenStack einbinden**
-klicken. Erforderlich sind ein projektgescoptes OpenStack User-Token und die
-Identity/Auth URL; Region und lokaler Port sind optional. Das Token wird nicht in
+klicken. Die Identity/Auth URL wird gemeinsam konfiguriert; Region und lokaler
+Port sind optional. Jeder Harbor-Benutzer hinterlegt danach sein eigenes
+projektgescoptes OpenStack User-Token direkt im Chat. Das Token wird nicht in
 `config/modules.local.json` gespeichert und nie an den Browser zurückgegeben.
 
 Projekt-ID und Projektname werden ausschließlich aus dem Token gelesen. Harbor
 nimmt keine separaten Projektfelder an und führt kein Rescoping durch. Ein
 ungescoptes Token oder ein Token ohne Service-Katalog wird klar abgewiesen.
+SDK-Verbindungen und OpenStack-Caches sind pro Harbor-Benutzer getrennt.
 
 Der OpenStack-Dialog enthält einen Timeout für Keystone- und Service-Aufrufe.
 Für langsam erreichbare private Clouds sind `60` bis `120` Sekunden sinnvoll.
@@ -367,12 +369,14 @@ CLI-Prozess und keine Abhängigkeit von `PATH` oder Symlinks:
 .venv/bin/python -m pip install -e . --no-build-isolation
 .venv/bin/python -c 'import importlib.metadata; print(importlib.metadata.version("openstacksdk"))'
 ./harbor.sh module start openstack
+export OS_TOKEN='PROJEKTGESCOPTES_USER_TOKEN'
 ./harbor.sh module discover openstack
 ./harbor.sh module test openstack
 ./harbor.sh module call openstack discover_resources '{}'
 ./harbor.sh module call openstack get_storage_statistics '{}'
 ./harbor.sh module call openstack get_project_statistics '{}'
 ./harbor.sh module call openstack list_servers '{}'
+unset OS_TOKEN
 ```
 
 Die OpenStack-Werkzeuge sind auf lesende `list`- und `show`-Operationen begrenzt.

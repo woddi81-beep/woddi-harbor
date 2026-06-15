@@ -29,7 +29,6 @@ from .config import (
     ModuleConfig,
     find_module,
     internal_worker_token,
-    load_module_named_secret,
     load_modules,
     module_secret,
     module_sources,
@@ -43,6 +42,8 @@ QUERY_CACHE_TTL_SECONDS = 45.0
 PERSISTENT_QUERY_CACHE_TTL_SECONDS = 600.0
 WARMUP_INTERVAL_SECONDS = 20.0
 MODULE_MUTATION_LOCK_PATH = RUNTIME_DIR / "locks" / "modules.lock"
+OPENSTACK_TOKEN_HEADER = "X-Harbor-OpenStack-Token"
+OPENSTACK_USER_HEADER = "X-Harbor-User"
 
 
 _QUERY_CACHE = BoundedTTLCache[dict[str, Any]](
@@ -71,7 +72,7 @@ def _netbox_url(module: ModuleConfig) -> str:
     return netbox_url
 
 
-def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
+def _openstack_settings(module: ModuleConfig, token: str = "") -> dict[str, str]:
     def _resolve(primary_key: str, env_key: str) -> str:
         direct = str(module.settings.get(primary_key, "")).strip()
         if direct:
@@ -81,16 +82,13 @@ def _openstack_settings(module: ModuleConfig) -> dict[str, str]:
             return os.getenv(env_name, "").strip()
         return ""
 
-    token = _resolve("token", "token_env")
-    if not token:
-        token = load_module_named_secret(module.id, "openstack_token")
     return {
         "OS_AUTH_URL": _resolve("auth_url", "auth_url_env"),
         "OS_REGION_NAME": _resolve("region_name", "region_name_env"),
         "OS_INTERFACE": _resolve("interface", "interface_env"),
         "OS_TIMEOUT": str(max(1.0, module.timeout_seconds)),
         "OS_AUTH_TYPE": "token",
-        "OS_TOKEN": token,
+        "OS_TOKEN": token.strip(),
     }
 
 
@@ -112,11 +110,11 @@ def _local_mcp_server_name(module: ModuleConfig) -> str:
     return ""
 
 
-def _local_mcp_auth_configured(module: ModuleConfig) -> bool:
+def _local_mcp_auth_configured(module: ModuleConfig, openstack_token: str = "") -> bool:
     if module.type == "netbox_mcp":
         return False
     if module.type == "openstack_mcp":
-        settings = _openstack_settings(module)
+        settings = _openstack_settings(module, openstack_token)
         return bool(settings.get("OS_AUTH_URL") and settings.get("OS_TOKEN"))
     return False
 
@@ -151,11 +149,15 @@ def _auth_headers(module: ModuleConfig, *, force_auth: bool = False) -> dict[str
     return headers
 
 
-def _local_worker_headers() -> dict[str, str]:
-    return {
+def _local_worker_headers(*, openstack_token: str = "", openstack_user: str = "") -> dict[str, str]:
+    headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {internal_worker_token()}",
     }
+    if openstack_token.strip():
+        headers[OPENSTACK_TOKEN_HEADER] = openstack_token.strip()
+        headers[OPENSTACK_USER_HEADER] = openstack_user.strip() or "cli"
+    return headers
 
 
 def _redact_mapping(value: Any) -> Any:
@@ -412,7 +414,13 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
     if module.type == "netbox_mcp":
         env["NETBOX_URL"] = _netbox_url(module)
     if module.type == "openstack_mcp":
-        env.update({key: value for key, value in _openstack_settings(module).items() if value})
+        env.update(
+            {
+                key: value
+                for key, value in _openstack_settings(module).items()
+                if value and key != "OS_TOKEN"
+            }
+        )
     _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         return subprocess.Popen(
@@ -521,8 +529,6 @@ def validate_module_config(module: ModuleConfig) -> list[str]:
             parsed = urlparse(openstack["OS_AUTH_URL"])
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 errors.append(f"OpenStack Auth URL ungueltig: {openstack['OS_AUTH_URL']}")
-        if not openstack["OS_TOKEN"]:
-            errors.append("OpenStack User-Token fehlt.")
         if module.port < 0 or module.port > 65535:
             errors.append(f"Port ungueltig: {module.port}")
     if module.type == "sap_docs_mcp":
@@ -837,7 +843,12 @@ def _contains_expected_terms(output_text: str, expected_terms: list[str]) -> boo
     return all(term.lower() in normalized for term in expected_terms)
 
 
-def module_test(module_id: str) -> dict[str, Any]:
+def module_test(
+    module_id: str,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
@@ -854,13 +865,23 @@ def module_test(module_id: str) -> dict[str, Any]:
     output_summary = ""
     try:
         if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"} and action == "discover":
-            result = discover_remote_module(module)
+            result = discover_remote_module(
+                module,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
             connected = bool(result.get("ok"))
             tools = result.get("tools") or result.get("actions") or []
             meaningful_output = bool(tools)
             output_summary = json.dumps(tools, ensure_ascii=False)
         else:
-            result = execute_module(module.id, action, payload)
+            result = execute_module(
+                module.id,
+                action,
+                payload,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
             connected = bool(result.get("ok", True))
             result_data = result.get("data", result)
             if module.type in {"docs", "maildir"} and action == "search":
@@ -939,8 +960,14 @@ def _mcp_request(
     params: dict[str, Any] | None,
     *,
     request_id: int | None,
+    openstack_token: str = "",
+    openstack_user: str = "",
 ) -> tuple[dict[str, Any], str | None]:
-    headers = _local_worker_headers() if _is_local_mcp_module(module) else _auth_headers(module)
+    headers = (
+        _local_worker_headers(openstack_token=openstack_token, openstack_user=openstack_user)
+        if _is_local_mcp_module(module)
+        else _auth_headers(module)
+    )
     if session_id:
         headers["mcp-session-id"] = session_id
     body: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -960,7 +987,13 @@ def _mcp_request(
     return payload, next_session_id
 
 
-def _mcp_session(client: httpx.Client, module: ModuleConfig) -> str | None:
+def _mcp_session(
+    client: httpx.Client,
+    module: ModuleConfig,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> str | None:
     response, session_id = _mcp_request(
         client,
         module,
@@ -972,14 +1005,37 @@ def _mcp_session(client: httpx.Client, module: ModuleConfig) -> str | None:
             "clientInfo": {"name": "woddi-harbor", "version": __version__},
         },
         request_id=1,
+        openstack_token=openstack_token,
+        openstack_user=openstack_user,
     )
-    _mcp_request(client, module, session_id, "notifications/initialized", {}, request_id=None)
+    _mcp_request(
+        client,
+        module,
+        session_id,
+        "notifications/initialized",
+        {},
+        request_id=None,
+        openstack_token=openstack_token,
+        openstack_user=openstack_user,
+    )
     return session_id or response.get("result", {}).get("sessionId")
 
 
-def _call_mcp_tool(module: ModuleConfig, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _call_mcp_tool(
+    module: ModuleConfig,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     with httpx.Client(timeout=module.timeout_seconds) as client:
-        session_id = _mcp_session(client, module)
+        session_id = _mcp_session(
+            client,
+            module,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
         payload, _ = _mcp_request(
             client,
             module,
@@ -987,13 +1043,24 @@ def _call_mcp_tool(module: ModuleConfig, tool_name: str, arguments: dict[str, An
             "tools/call",
             {"name": tool_name, "arguments": arguments},
             request_id=3,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
         )
     return payload.get("result", payload)
 
 
-def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
+def discover_remote_module(
+    module: ModuleConfig,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     if _is_local_mcp_module(module):
-        return discover_standard_mcp_module(module)
+        return discover_standard_mcp_module(
+            module,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
     if module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
         return discover_standard_mcp_module(module)
     base_url = module.base_url.rstrip("/")
@@ -1114,7 +1181,12 @@ def discover_remote_module(module: ModuleConfig) -> dict[str, Any]:
     }
 
 
-def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
+def discover_standard_mcp_module(
+    module: ModuleConfig,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     tools: list[str] = []
     session_id: str | None = None
@@ -1132,11 +1204,31 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
                     "clientInfo": {"name": "woddi-harbor", "version": __version__},
                 },
                 request_id=1,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
             )
             attempts.append({"label": "initialize", "ok": True, "body": initialize_payload})
-            _mcp_request(client, module, session_id, "notifications/initialized", {}, request_id=None)
+            _mcp_request(
+                client,
+                module,
+                session_id,
+                "notifications/initialized",
+                {},
+                request_id=None,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
             attempts.append({"label": "notifications/initialized", "ok": True})
-            tools_payload, session_id = _mcp_request(client, module, session_id, "tools/list", {}, request_id=2)
+            tools_payload, session_id = _mcp_request(
+                client,
+                module,
+                session_id,
+                "tools/list",
+                {},
+                request_id=2,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
             attempts.append({"label": "tools/list", "ok": True, "body": tools_payload})
             for item in tools_payload.get("result", {}).get("tools", []):
                 if isinstance(item, dict) and str(item.get("name", "")).strip():
@@ -1154,7 +1246,13 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
             "ok": False,
             "base_url": endpoint,
             "protocol": "mcp",
-            "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _local_mcp_auth_configured(module))),
+            "auth_configured": bool(
+                module_secret(module)
+                or (
+                    _is_local_mcp_module(module)
+                    and _local_mcp_auth_configured(module, openstack_token)
+                )
+            ),
             "session_id": session_id or "",
             "tools": [],
             "attempts": attempts,
@@ -1171,7 +1269,13 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
         "ok": True,
         "base_url": endpoint,
         "protocol": "mcp",
-        "auth_configured": bool(module_secret(module) or (_is_local_mcp_module(module) and _local_mcp_auth_configured(module))),
+        "auth_configured": bool(
+            module_secret(module)
+            or (
+                _is_local_mcp_module(module)
+                and _local_mcp_auth_configured(module, openstack_token)
+            )
+        ),
         "session_id": session_id or "",
         "tools": deduped_tools,
         "capabilities": ["tools"],
@@ -1259,7 +1363,14 @@ def restart_module(module_id: str) -> dict[str, Any]:
     return start_module(module_id)
 
 
-def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+def execute_module(
+    module_id: str,
+    action: str,
+    payload: dict[str, Any],
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
@@ -1273,12 +1384,33 @@ def execute_module(module_id: str, action: str, payload: dict[str, Any]) -> dict
                 if action == "health":
                     return {"ok": True, "data": health_check_module(module_id)}
                 if action in {"discover", "capabilities", "tools/list", "list_tools"}:
-                    return {"ok": True, "data": discover_standard_mcp_module(module)}
+                    return {
+                        "ok": True,
+                        "data": discover_standard_mcp_module(
+                            module,
+                            openstack_token=openstack_token,
+                            openstack_user=openstack_user,
+                        ),
+                    }
                 tool_name = str(payload.get("tool") or action).strip()
                 arguments = payload.get("arguments")
                 if not isinstance(arguments, dict):
                     arguments = {key: value for key, value in payload.items() if key != "tool"}
-                result = _call_mcp_tool(module, tool_name, arguments)
+                effective_openstack_token = openstack_token.strip()
+                if module.type == "openstack_mcp" and not effective_openstack_token:
+                    effective_openstack_token = os.getenv("OS_TOKEN", "").strip()
+                if module.type == "openstack_mcp" and not effective_openstack_token:
+                    raise ValueError(
+                        "OpenStack User-Token fehlt fuer diesen Benutzer. "
+                        "Token in der Harbor-Weboberflaeche erneuern."
+                    )
+                result = _call_mcp_tool(
+                    module,
+                    tool_name,
+                    arguments,
+                    openstack_token=effective_openstack_token,
+                    openstack_user=openstack_user,
+                )
                 update_module_runtime_state(module.id, last_execute_error="", last_error="")
                 return {"ok": True, "data": result, "tool": tool_name}
             headers = _auth_headers(module)

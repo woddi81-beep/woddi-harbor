@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Any
 
 import httpx
@@ -21,6 +23,10 @@ SERVER_VERSION = "0.3.1"
 DEFAULT_CACHE_TTL_SECONDS = 20.0
 DEFAULT_RESULT_LIMIT = 100
 MAX_RESULT_LIMIT = 500
+OPENSTACK_TOKEN_HEADER = "X-Harbor-OpenStack-Token"
+OPENSTACK_USER_HEADER = "X-Harbor-User"
+USER_BACKEND_IDLE_TTL_SECONDS = 4 * 60 * 60
+MAX_USER_BACKENDS = 128
 RESOURCE_CATALOG: dict[str, dict[str, str]] = {
     "server": {"service": "compute", "tool": "list_servers"},
     "project": {"service": "identity", "tool": "list_projects"},
@@ -839,20 +845,102 @@ class OpenStackBackend:
         return {"content": [{"type": "text", "text": f"{tool_name} completed successfully."}], "structuredContent": summary}
 
 
+@dataclass
+class _UserBackendEntry:
+    token_digest: str
+    backend: OpenStackBackend
+    last_used: float
+
+
+class OpenStackUserBackendRegistry:
+    def __init__(
+        self,
+        base_credentials: dict[str, str],
+        *,
+        backend_factory: Callable[[dict[str, str]], OpenStackBackend] = OpenStackBackend,
+        idle_ttl_seconds: float = USER_BACKEND_IDLE_TTL_SECONDS,
+        max_entries: int = MAX_USER_BACKENDS,
+    ) -> None:
+        self._base_credentials = {key: value for key, value in base_credentials.items() if key != "OS_TOKEN"}
+        self._backend_factory = backend_factory
+        self._idle_ttl_seconds = max(60.0, idle_ttl_seconds)
+        self._max_entries = max(1, max_entries)
+        self._entries: dict[str, _UserBackendEntry] = {}
+        self._lock = threading.Lock()
+
+    def get(self, username: str, token: str) -> OpenStackBackend:
+        normalized_username = username.strip()
+        normalized_token = token.strip()
+        if not normalized_username:
+            raise ValueError("Harbor-Benutzer fuer OpenStack fehlt.")
+        if not normalized_token:
+            raise ValueError("OpenStack User-Token fehlt fuer diesen Benutzer.")
+        now = time.monotonic()
+        token_digest = sha256(normalized_token.encode("utf-8")).hexdigest()
+        with self._lock:
+            self._evict_locked(now)
+            existing = self._entries.get(normalized_username)
+            if existing and existing.token_digest == token_digest:
+                existing.last_used = now
+                return existing.backend
+            if existing:
+                existing.backend.close()
+            credentials = {**self._base_credentials, "OS_AUTH_TYPE": "token", "OS_TOKEN": normalized_token}
+            backend = self._backend_factory(credentials)
+            self._entries[normalized_username] = _UserBackendEntry(token_digest, backend, now)
+            self._evict_locked(now)
+            return backend
+
+    def _evict_locked(self, now: float) -> None:
+        expired = [
+            username
+            for username, entry in self._entries.items()
+            if now - entry.last_used > self._idle_ttl_seconds
+        ]
+        for username in expired:
+            self._entries.pop(username).backend.close()
+        while len(self._entries) > self._max_entries:
+            oldest_username = min(self._entries, key=lambda username: self._entries[username].last_used)
+            self._entries.pop(oldest_username).backend.close()
+
+    def close(self) -> None:
+        with self._lock:
+            entries = list(self._entries.values())
+            self._entries.clear()
+        for entry in entries:
+            entry.backend.close()
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {"active_user_backends": len(self._entries), "max_user_backends": self._max_entries}
+
+
 def create_app(credentials: dict[str, str]) -> FastAPI:
-    backend = OpenStackBackend(credentials=credentials)
+    base_credentials = {key: value for key, value in credentials.items() if key != "OS_TOKEN"}
+    registry = OpenStackUserBackendRegistry(base_credentials)
     sessions = SessionRegistry()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        backend.close()
+        registry.close()
 
     app = FastAPI(title="OpenStack MCP Server", lifespan=lifespan)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return backend.health()
+        return {
+            "ok": openstack_sdk_available() and bool(base_credentials.get("OS_AUTH_URL")),
+            "server": SERVER_NAME,
+            "backend": "openstacksdk",
+            "openstack_sdk": openstack_sdk_available(),
+            "auth_configured": bool(base_credentials.get("OS_AUTH_URL")),
+            "timeout_seconds": _timeout_seconds(base_credentials),
+            "scope_mode": "token_project",
+            "credential_mode": "per_user_request_token",
+            "tool_count": len(_tool_schema()),
+            "cache": registry.stats(),
+        }
 
     @app.post("/mcp")
     async def mcp_endpoint(request: Request) -> Response:
@@ -883,8 +971,7 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
             if session_id and not sessions.contains(session_id):
                 return _jsonrpc_error(request_id, -32001, "Unknown MCP session", status_code=400)
             if method == "tools/list":
-                tools = await run_in_threadpool(backend.list_tools)
-                return _jsonrpc_result(request_id, {"tools": tools}, headers=session_headers)
+                return _jsonrpc_result(request_id, {"tools": _tool_schema()}, headers=session_headers)
             if method == "tools/call":
                 tool_name = params.get("name")
                 arguments = params.get("arguments") or {}
@@ -892,6 +979,10 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
                     return _jsonrpc_error(request_id, -32602, "Invalid params", data="Tool name is required.", status_code=400, headers=session_headers)
                 if not isinstance(arguments, dict):
                     return _jsonrpc_error(request_id, -32602, "Invalid params", data="Tool arguments must be an object.", status_code=400, headers=session_headers)
+                backend = registry.get(
+                    request.headers.get(OPENSTACK_USER_HEADER, ""),
+                    request.headers.get(OPENSTACK_TOKEN_HEADER, ""),
+                )
                 result = await run_in_threadpool(backend.call_tool, tool_name, arguments)
                 return _jsonrpc_result(request_id, result, headers=session_headers)
             return _jsonrpc_error(request_id, -32601, "Method not found", headers=session_headers)
@@ -905,4 +996,10 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
     return app
 
 
-__all__ = ["create_app", "create_openstack_connection", "OpenStackBackend", "MCP_PROTOCOL_VERSION"]
+__all__ = [
+    "create_app",
+    "create_openstack_connection",
+    "OpenStackBackend",
+    "OpenStackUserBackendRegistry",
+    "MCP_PROTOCOL_VERSION",
+]

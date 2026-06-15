@@ -45,8 +45,10 @@
   `available` und `percent`; unlimitierte Quoten werden explizit markiert.
 - `get_project_statistics` aggregiert Statusverteilungen und Compute- sowie
   Storage-Quoten fuer das konfigurierte Projekt.
-- Credentials werden projektgebunden verwendet; ungescopte Tokens werden nur
-  bei genau einem erreichbaren Projekt automatisch gescoped.
+- Projektgescopte User-Tokens werden pro Harbor-Benutzer gespeichert und nur
+  fuer dessen Worker-Aufrufe verwendet; Harbor fuehrt kein Rescoping durch.
+- SDK-Verbindungen und Antwort-Caches sind pro Harbor-Benutzer getrennt und
+  werden bei dessen Tokenrotation verworfen.
 - Alle registrierten Tools sind read-only. Mutationen werden nicht dynamisch
   aus SDK-Methoden abgeleitet.
 - Ergebnisse werden begrenzt, optional per `fields` komprimiert und bekannte
@@ -58,8 +60,9 @@
   In-Memory-Suchindizes.
 - Modul-Health: kurzer In-Memory-TTL, damit Dashboard-Polling keine Worker-Flut
   erzeugt.
-- NetBox/OpenStack: thread-sicherer, begrenzter LRU/TTL-Cache; keine
-  unbegrenzten Prozess-Caches.
+- NetBox: thread-sicherer, begrenzter LRU/TTL-Cache.
+- OpenStack: pro Harbor-Benutzer getrennter, begrenzter TTL-Cache und eine
+  begrenzte Zahl inaktiver Benutzer-Backends.
 - Dashboard: zwei Sekunden TTL fuer gebuendelte LLM-, Modul- und Systemdaten.
 - HTTP: GZip fuer geeignete Antworten, revalidierbares Browser-Caching fuer
   statische Assets und `no-store` fuer API-/Metrikdaten.

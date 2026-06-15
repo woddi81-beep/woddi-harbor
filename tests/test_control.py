@@ -9,7 +9,14 @@ from fastapi import HTTPException
 
 from app.auth import current_user, require_metrics_access
 from app.config import HarborSettings, HarborUser, LlmSettings, ModuleConfig
-from app.control import NetBoxConfigureRequest, OpenStackConfigureRequest, _build_messages, _context_for_chat, create_app
+from app.control import (
+    NetBoxConfigureRequest,
+    OpenStackConfigureRequest,
+    OpenStackTokenRequest,
+    _build_messages,
+    _context_for_chat,
+    create_app,
+)
 from app.modules import module_status
 
 
@@ -153,10 +160,17 @@ class ControlChatContextTests(unittest.TestCase):
             remote_protocol="mcp",
         )
 
-        def fake_execute(module_id: str, action: str, payload: dict[str, object]) -> dict[str, object]:
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
             self.assertEqual(module_id, "openstack")
             self.assertEqual(action, "list_servers")
             self.assertEqual(payload["name"], "prod-api-01")
+            self.assertEqual(credentials["openstack_token"], "alice-token")
+            self.assertEqual(credentials["openstack_user"], "alice")
             return {
                 "ok": True,
                 "data": {
@@ -169,7 +183,12 @@ class ControlChatContextTests(unittest.TestCase):
             }
 
         with patch("app.control.load_modules", return_value=[module]), patch("app.control.execute_module", side_effect=fake_execute):
-            snippets, used_modules = _context_for_chat("Zeige mir in OpenStack den Server prod-api-01", None)
+            snippets, used_modules = _context_for_chat(
+                "Zeige mir in OpenStack den Server prod-api-01",
+                None,
+                openstack_token="alice-token",
+                openstack_user="alice",
+            )
 
         self.assertEqual(used_modules, ["openstack"])
         self.assertEqual(snippets[0]["kind"], "openstack")
@@ -185,10 +204,17 @@ class ControlChatContextTests(unittest.TestCase):
             remote_protocol="mcp",
         )
 
-        def fake_execute(module_id: str, action: str, payload: dict[str, object]) -> dict[str, object]:
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
             self.assertEqual(module_id, "openstack")
             self.assertEqual(action, "get_storage_statistics")
             self.assertEqual(payload, {})
+            self.assertEqual(credentials["openstack_token"], "alice-token")
+            self.assertEqual(credentials["openstack_user"], "alice")
             return {
                 "ok": True,
                 "data": {
@@ -202,7 +228,12 @@ class ControlChatContextTests(unittest.TestCase):
             "app.control.execute_module",
             side_effect=fake_execute,
         ):
-            snippets, used_modules = _context_for_chat("Wie voll ist mein OpenStack Storage in Prozent?", None)
+            snippets, used_modules = _context_for_chat(
+                "Wie voll ist mein OpenStack Storage in Prozent?",
+                None,
+                openstack_token="alice-token",
+                openstack_user="alice",
+            )
 
         self.assertEqual(used_modules, ["openstack"])
         self.assertEqual(snippets[0]["tool"], "get_storage_statistics")
@@ -272,11 +303,15 @@ class OpenStackConfigurationTests(unittest.TestCase):
         endpoint = self._endpoint("openstack_configuration")
         with (
             patch("app.control.find_module", return_value=module),
-            patch("app.control.load_module_named_secret", return_value="super-secret-token"),
+            patch("app.control.load_user_named_secret", return_value="super-secret-token") as load_secret,
         ):
             result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
 
+        load_secret.assert_called_once_with("admin", "openstack_token")
         self.assertTrue(result["token_configured"])
+        self.assertEqual(result["token_owner"], "admin")
+        self.assertTrue(result["can_configure"])
+        self.assertEqual(result["credential_mode"], "per_user")
         self.assertEqual(result["scope_mode"], "project_from_token")
         self.assertNotIn("project_id", result)
         self.assertNotIn("project_name", result)
@@ -298,8 +333,8 @@ class OpenStackConfigurationTests(unittest.TestCase):
         )
         with (
             patch("app.control.find_module", return_value=None),
-            patch("app.control.load_module_named_secret", return_value=""),
-            patch("app.control.save_module_named_secret") as save_secret,
+            patch("app.control.load_user_named_secret", return_value=""),
+            patch("app.control.save_user_named_secret") as save_secret,
             patch("app.control.upsert_module", side_effect=fake_upsert),
             patch("app.control.delete_module_named_secret"),
             patch("app.control.module_status", return_value={"id": "openstack"}),
@@ -308,7 +343,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
             result = endpoint(body=body, _user=HarborUser(username="operator", password_hash="unused", role="operator"))
 
         module = captured["module"]
-        save_secret.assert_called_once_with("openstack", "openstack_token", "super-secret-token")
+        save_secret.assert_called_once_with("operator", "openstack_token", "super-secret-token")
         self.assertNotIn("token", module.settings)
         self.assertEqual(module.settings["auth_type"], "token")
         self.assertNotIn("project_id", module.settings)
@@ -330,8 +365,8 @@ class OpenStackConfigurationTests(unittest.TestCase):
         )
         with (
             patch("app.control.find_module", return_value=None),
-            patch("app.control.load_module_named_secret", return_value=""),
-            patch("app.control.save_module_named_secret"),
+            patch("app.control.load_user_named_secret", return_value=""),
+            patch("app.control.save_user_named_secret"),
             patch("app.control.upsert_module", side_effect=fake_upsert),
             patch("app.control.delete_module_named_secret"),
             patch("app.control.module_status", return_value={"id": "openstack"}),
@@ -343,6 +378,41 @@ class OpenStackConfigurationTests(unittest.TestCase):
         self.assertEqual(module.settings["auth_type"], "token")
         self.assertNotIn("project_name", module.settings)
         self.assertNotIn("project_domain_name", module.settings)
+
+    def test_openstack_configuration_isolated_by_user(self) -> None:
+        endpoint = self._endpoint("openstack_configuration")
+        tokens = {"alice": "alice-token", "bob": ""}
+        with (
+            patch("app.control.find_module", return_value=None),
+            patch(
+                "app.control.load_user_named_secret",
+                side_effect=lambda username, _name: tokens[username],
+            ),
+        ):
+            alice = endpoint(_user=HarborUser(username="alice", password_hash="unused", role="viewer"))
+            bob = endpoint(_user=HarborUser(username="bob", password_hash="unused", role="viewer"))
+
+        self.assertTrue(alice["token_configured"])
+        self.assertFalse(bob["token_configured"])
+        self.assertEqual(alice["token_owner"], "alice")
+        self.assertEqual(bob["token_owner"], "bob")
+        self.assertFalse(alice["can_configure"])
+
+    def test_openstack_token_update_stores_only_current_user_token(self) -> None:
+        endpoint = self._endpoint("openstack_token_update")
+        with (
+            patch("app.control.save_user_named_secret") as save_secret,
+            patch("app.control.delete_module_named_secret"),
+            patch("app.control.record_audit"),
+        ):
+            result = endpoint(
+                body=OpenStackTokenRequest(token="alice-token"),
+                _user=HarborUser(username="alice", password_hash="unused", role="viewer"),
+            )
+
+        save_secret.assert_called_once_with("alice", "openstack_token", "alice-token")
+        self.assertEqual(result["token_owner"], "alice")
+        self.assertNotIn("alice-token", str(result))
 
     def test_netbox_configure_removes_legacy_token_and_uses_anonymous_access(self) -> None:
         captured: dict[str, object] = {}

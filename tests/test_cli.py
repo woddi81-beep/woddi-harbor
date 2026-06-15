@@ -33,7 +33,6 @@ class CliModuleTests(unittest.TestCase):
         with (
             patch("app.cli.validate_module_config", return_value=[]),
             patch("app.cli.upsert_module", side_effect=fake_upsert),
-            patch("app.cli.load_module_named_secret", return_value=""),
             patch("app.cli.console.print"),
         ):
             module_add_openstack_mcp(module_id="openstack", base_url="http://127.0.0.1:8080/mcp")

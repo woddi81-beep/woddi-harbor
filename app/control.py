@@ -29,14 +29,15 @@ from .config import (
     ModuleConfig,
     ModuleSource,
     delete_module_named_secret,
+    delete_user_named_secret,
     find_module,
-    load_module_named_secret,
     load_modules,
     load_settings,
+    load_user_named_secret,
     load_users,
     parse_module_type,
     parse_user_role,
-    save_module_named_secret,
+    save_user_named_secret,
     save_users,
     system_prompt,
 )
@@ -168,6 +169,10 @@ class OpenStackConfigureRequest(BaseModel):
     port: int = Field(default=0, ge=0, le=65535)
 
 
+class OpenStackTokenRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=8192)
+
+
 class NetBoxConfigureRequest(BaseModel):
     netbox_url: str = Field(min_length=1, max_length=2048)
     timeout_seconds: float = Field(default=30.0, ge=5.0, le=600.0)
@@ -293,6 +298,8 @@ def _context_for_chat(
     selected_modules: list[str] | None,
     allowed_modules: set[str] | None = None,
     allowed_tools: set[str] | None = None,
+    openstack_token: str = "",
+    openstack_user: str = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
     selected = set(selected_modules or [])
     snippets: list[dict[str, Any]] = []
@@ -310,7 +317,15 @@ def _context_for_chat(
     max_workers = min(8, max(1, len(modules)))
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="harbor-chat-context") as executor:
         future_map = {
-            executor.submit(_context_for_module, module, message, selected, allowed_tools): module
+            executor.submit(
+                _context_for_module,
+                module,
+                message,
+                selected,
+                allowed_tools,
+                openstack_token,
+                openstack_user,
+            ): module
             for module in modules
         }
         for future in as_completed(future_map):
@@ -333,6 +348,8 @@ def _context_for_module(
     message: str,
     selected_modules: set[str],
     allowed_tools: set[str] | None = None,
+    openstack_token: str = "",
+    openstack_user: str = "",
 ) -> dict[str, Any] | None:
     if module.type in {"docs", "maildir"}:
         if allowed_tools is not None and "search" not in allowed_tools:
@@ -348,7 +365,12 @@ def _context_for_module(
     if _is_openstack_module(module) and _should_use_openstack(message, selected_modules, module):
         if allowed_tools is not None and _guess_openstack_tool(message) not in allowed_tools:
             return None
-        openstack_context = _query_openstack_context(module, message)
+        openstack_context = _query_openstack_context(
+            module,
+            message,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
         if not openstack_context:
             return None
         return {"module": module.id, "kind": "openstack", **openstack_context}
@@ -613,7 +635,13 @@ def _guess_openstack_tool(message: str) -> str:
     return "list_servers"
 
 
-def _query_openstack_context(module: ModuleConfig, message: str) -> dict[str, Any] | None:
+def _query_openstack_context(
+    module: ModuleConfig,
+    message: str,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any] | None:
     tool_name = _guess_openstack_tool(message)
     query = _extract_netbox_query(message)
     arguments: dict[str, Any] = (
@@ -625,7 +653,13 @@ def _query_openstack_context(module: ModuleConfig, message: str) -> dict[str, An
         if tool_name in {"list_servers", "list_projects", "list_images", "list_flavors", "list_networks", "list_subnets", "list_routers"}:
             arguments["name"] = query
     try:
-        result = execute_module(module.id, tool_name, arguments)
+        result = execute_module(
+            module.id,
+            tool_name,
+            arguments,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
     except Exception as exc:
         return {"tool": tool_name, "results": [], "note": f"OpenStack-Abfrage fehlgeschlagen: {exc}"}
     data = result.get("data", {})
@@ -650,8 +684,17 @@ def _build_messages(
     history: list[dict[str, str]] | None = None,
     allowed_modules: set[str] | None = None,
     allowed_tools: set[str] | None = None,
+    openstack_token: str = "",
+    openstack_user: str = "",
 ) -> tuple[list[dict[str, str]], list[str]]:
-    context, used_modules = _context_for_chat(message, selected_modules, allowed_modules, allowed_tools)
+    context, used_modules = _context_for_chat(
+        message,
+        selected_modules,
+        allowed_modules,
+        allowed_tools,
+        openstack_token,
+        openstack_user,
+    )
     prompt_parts = [system_prompt(settings)]
     if context:
         prompt_parts.append(
@@ -727,6 +770,12 @@ def create_app() -> FastAPI:
     async def lifespan(_app: FastAPI):
         global _WARMUP_THREAD
         _WARMUP_STOP.clear()
+        for secret_name in (
+            "openstack_token",
+            "openstack_application_credential_secret",
+            "openstack_password",
+        ):
+            delete_module_named_secret("openstack", secret_name)
         try:
             reconciliation = reconcile_desired_instances()
             if not reconciliation["ok"]:
@@ -893,7 +942,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/integrations/openstack")
-    def openstack_configuration(_user=require_role("admin")) -> dict[str, Any]:
+    def openstack_configuration(_user: HarborUser = require_role("viewer")) -> dict[str, Any]:
         module = find_module("openstack")
         settings = module.settings if module and module.type == "openstack_mcp" else {}
         return {
@@ -902,17 +951,18 @@ def create_app() -> FastAPI:
             "region_name": str(settings.get("region_name", "")),
             "timeout_seconds": module.timeout_seconds if module and module.type == "openstack_mcp" else 60.0,
             "port": module.port if module and module.type == "openstack_mcp" else 0,
-            "token_configured": bool(load_module_named_secret("openstack", "openstack_token")),
+            "token_configured": bool(load_user_named_secret(_user.username, "openstack_token")),
+            "token_owner": _user.username,
+            "can_configure": _user.role in {"operator", "admin"},
             "scope_mode": "project_from_token",
+            "credential_mode": "per_user",
         }
 
     @app.put("/api/integrations/openstack")
     def openstack_configure(body: OpenStackConfigureRequest, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         existing = find_module("openstack")
-        old_token = load_module_named_secret("openstack", "openstack_token")
+        old_token = load_user_named_secret(_user.username, "openstack_token")
         new_token = body.token.strip()
-        if not new_token and not old_token:
-            raise HTTPException(status_code=400, detail="OpenStack User-Token fehlt.")
         module = ModuleConfig(
             id="openstack",
             name="OpenStack MCP",
@@ -958,16 +1008,17 @@ def create_app() -> FastAPI:
         )
         try:
             if new_token:
-                save_module_named_secret("openstack", "openstack_token", new_token)
+                save_user_named_secret(_user.username, "openstack_token", new_token)
             upsert_module(module)
+            delete_module_named_secret("openstack", "openstack_token")
             delete_module_named_secret("openstack", "openstack_application_credential_secret")
             delete_module_named_secret("openstack", "openstack_password")
         except Exception as exc:
             if new_token:
                 if old_token:
-                    save_module_named_secret("openstack", "openstack_token", old_token)
+                    save_user_named_secret(_user.username, "openstack_token", old_token)
                 else:
-                    delete_module_named_secret("openstack", "openstack_token")
+                    delete_user_named_secret(_user.username, "openstack_token")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         record_audit(
             "integration.openstack.configure",
@@ -981,8 +1032,50 @@ def create_app() -> FastAPI:
         return {
             "ok": True,
             "message": "OpenStack-Konfiguration gespeichert.",
-            "token_configured": True,
+            "token_configured": bool(new_token or old_token),
+            "token_owner": _user.username,
             "status": module_status(module),
+        }
+
+    @app.put("/api/integrations/openstack/token")
+    def openstack_token_update(
+        body: OpenStackTokenRequest,
+        _user: HarborUser = require_role("viewer"),
+    ) -> dict[str, Any]:
+        try:
+            save_user_named_secret(_user.username, "openstack_token", body.token)
+            delete_module_named_secret("openstack", "openstack_token")
+            delete_module_named_secret("openstack", "openstack_application_credential_secret")
+            delete_module_named_secret("openstack", "openstack_password")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_audit(
+            "integration.openstack.token.update",
+            "openstack",
+            actor=_user.username,
+            detail={"credential_mode": "per_user"},
+        )
+        return {
+            "ok": True,
+            "message": "OpenStack User-Token fuer diesen Harbor-Benutzer gespeichert.",
+            "token_configured": True,
+            "token_owner": _user.username,
+        }
+
+    @app.delete("/api/integrations/openstack/token")
+    def openstack_token_delete(_user: HarborUser = require_role("viewer")) -> dict[str, Any]:
+        delete_user_named_secret(_user.username, "openstack_token")
+        record_audit(
+            "integration.openstack.token.delete",
+            "openstack",
+            actor=_user.username,
+            detail={"credential_mode": "per_user"},
+        )
+        return {
+            "ok": True,
+            "message": "OpenStack User-Token fuer diesen Harbor-Benutzer entfernt.",
+            "token_configured": False,
+            "token_owner": _user.username,
         }
 
     @app.post("/api/modules")
@@ -1052,20 +1145,35 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/modules/{module_id}/execute")
-    def module_execute(module_id: str, body: ExecuteRequest, _user=require_role("operator")) -> dict[str, Any]:
+    def module_execute(
+        module_id: str,
+        body: ExecuteRequest,
+        _user: HarborUser = require_role("operator"),
+    ) -> dict[str, Any]:
         try:
             _assert_tool_allowed(_user, body.action)
-            return execute_module(module_id, body.action, body.payload)
+            return execute_module(
+                module_id,
+                body.action,
+                body.payload,
+                openstack_token=load_user_named_secret(_user.username, "openstack_token"),
+                openstack_user=_user.username,
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/modules/{module_id}/discover")
-    def module_discover(module_id: str, _user=require_role("operator")) -> dict[str, Any]:
+    def module_discover(module_id: str, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         module = find_module(module_id)
         if module is None:
             raise HTTPException(status_code=404, detail="Modul nicht gefunden.")
+        openstack_token = load_user_named_secret(_user.username, "openstack_token")
         try:
-            result = discover_remote_module(module)
+            result = discover_remote_module(
+                module,
+                openstack_token=openstack_token,
+                openstack_user=_user.username,
+            )
             source_tool = (
                 "discover_object_types"
                 if _is_netbox_module(module)
@@ -1076,7 +1184,13 @@ def create_app() -> FastAPI:
             allowed_tools = _allowed_tools(_user)
             if source_tool and (allowed_tools is None or source_tool in allowed_tools):
                 try:
-                    result["source_discovery"] = execute_module(module_id, source_tool, {})
+                    result["source_discovery"] = execute_module(
+                        module_id,
+                        source_tool,
+                        {},
+                        openstack_token=openstack_token,
+                        openstack_user=_user.username,
+                    )
                 except Exception as exc:
                     result["source_discovery_error"] = str(exc)
             return result
@@ -1084,9 +1198,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/modules/{module_id}/test")
-    def module_run_test(module_id: str, _user=require_role("operator")) -> dict[str, Any]:
+    def module_run_test(module_id: str, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         try:
-            return module_test(module_id)
+            return module_test(
+                module_id,
+                openstack_token=load_user_named_secret(_user.username, "openstack_token"),
+                openstack_user=_user.username,
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1279,6 +1397,7 @@ def create_app() -> FastAPI:
         session_id = body.session_id.strip() or create_chat_session(_user.username, body.message[:80])
         history = load_chat_messages(session_id, _user.username)
         selected_modules, allowed_modules = _allowed_modules(_user, body.modules)
+        openstack_token = load_user_named_secret(_user.username, "openstack_token")
         messages, used_modules = _build_messages(
             settings,
             body.message,
@@ -1286,6 +1405,8 @@ def create_app() -> FastAPI:
             history,
             allowed_modules,
             _allowed_tools(_user),
+            openstack_token,
+            _user.username,
         )
         try:
             response = complete_chat(settings, messages)
@@ -1316,6 +1437,7 @@ def create_app() -> FastAPI:
         session_id = body.session_id.strip() or create_chat_session(_user.username, body.message[:80])
         history = load_chat_messages(session_id, _user.username)
         selected_modules, allowed_modules = _allowed_modules(_user, body.modules)
+        openstack_token = load_user_named_secret(_user.username, "openstack_token")
         messages, used_modules = _build_messages(
             settings,
             body.message,
@@ -1323,6 +1445,8 @@ def create_app() -> FastAPI:
             history,
             allowed_modules,
             _allowed_tools(_user),
+            openstack_token,
+            _user.username,
         )
 
         def events():

@@ -26,8 +26,7 @@ def _openstack_credentials() -> dict[str, str]:
     resolved = {key: os.getenv(key, "").strip() for key in fields}
     if not resolved["OS_AUTH_URL"]:
         raise ValueError("OS_AUTH_URL fehlt.")
-    if not resolved["OS_TOKEN"]:
-        raise ValueError("OS_TOKEN fehlt.")
+    resolved["OS_TOKEN"] = ""
     return resolved
 
 
