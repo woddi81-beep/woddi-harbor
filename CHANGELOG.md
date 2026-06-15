@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 - 2026-06-15
+
+### Fixed
+
+- NetBox discovery and module tests now fail when the worker reports an
+  unavailable upstream instead of treating the static tool list as success
+- The production check performs NetBox MCP discovery in addition to local
+  worker liveness
+
 ## 0.6.1 - 2026-06-15
 
 ### Fixed

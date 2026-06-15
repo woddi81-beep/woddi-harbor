@@ -1233,6 +1233,16 @@ def discover_standard_mcp_module(
             for item in tools_payload.get("result", {}).get("tools", []):
                 if isinstance(item, dict) and str(item.get("name", "")).strip():
                     tools.append(str(item["name"]))
+                    discovery = item.get("annotations", {}).get("discovery", {})
+                    if (
+                        module.type == "netbox_mcp"
+                        and isinstance(discovery, dict)
+                        and discovery.get("source") == "unavailable"
+                    ):
+                        raise ValueError(
+                            "NetBox Upstream nicht erreichbar: "
+                            + str(discovery.get("error") or "Discovery nicht verfuegbar")
+                        )
     except Exception as exc:
         attempts.append({"label": "mcp", "ok": False, "error": str(exc)})
         update_module_runtime_state(

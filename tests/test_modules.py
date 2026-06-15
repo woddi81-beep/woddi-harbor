@@ -100,6 +100,32 @@ class FakeMcpClient:
         raise AssertionError(f"Unexpected MCP method: {method}")
 
 
+class FakeUnavailableNetBoxClient(FakeMcpClient):
+    def post(self, url: str, *, headers: dict | None = None, json: dict | None = None) -> FakeResponse:
+        if (json or {}).get("method") != "tools/list":
+            return super().post(url, headers=headers, json=json)
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "get_objects",
+                            "annotations": {
+                                "discovery": {
+                                    "source": "unavailable",
+                                    "error": "Temporary failure in name resolution",
+                                }
+                            },
+                        }
+                    ]
+                },
+            },
+            headers={"mcp-session-id": "session-1"},
+        )
+
+
 class FakeWorkerHealthClient:
     execute_status_code = 200
 
@@ -746,6 +772,25 @@ class ModuleTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["protocol"], "mcp")
         self.assertEqual(payload["tools"], ["get_changelogs", "get_object_by_id", "get_objects"])
+
+    @patch("app.modules.internal_worker_token", return_value="worker-token")
+    @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
+    @patch("app.modules.httpx.Client", FakeUnavailableNetBoxClient)
+    def test_discover_netbox_module_rejects_unavailable_upstream(self, _worker_token) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+            port=41002,
+            settings={"netbox_url": "https://netbox.example"},
+        )
+
+        payload = discover_standard_mcp_module(module)
+
+        self.assertFalse(payload["ok"])
+        self.assertIn("Temporary failure in name resolution", payload["attempts"][-1]["error"])
 
     @patch("app.modules.update_module_runtime_state", lambda *args, **kwargs: {})
     @patch("app.modules.httpx.Client", FakeMcpClient)

@@ -7,7 +7,7 @@ from typing import Any
 from .config import CONFIG_DIR, INTERNAL_TOKEN_PATH, load_modules, load_settings, load_users
 from .llm import llm_health
 from .mcp.openstack import openstack_sdk_available
-from .modules import health_check_module, validation_errors_by_module
+from .modules import discover_remote_module, health_check_module, validation_errors_by_module
 from .sources import source_overview
 from .state import DATABASE_PATH, initialize_database
 
@@ -53,6 +53,12 @@ def production_check() -> dict[str, Any]:
                     or result.get("local")
                     or "nicht erreichbar"
                 )
+            elif module.type == "netbox_mcp":
+                discovery = discover_remote_module(module)
+                if not discovery.get("ok"):
+                    integration_health[module.id] = str(
+                        discovery.get("attempts") or "NetBox Upstream Discovery fehlgeschlagen"
+                    )
         except Exception as exc:
             integration_health[module.id] = str(exc)
     add(
