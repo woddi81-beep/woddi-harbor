@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.middleware.gzip import GZipMiddleware
 
 from app.control import create_app
+from app.version import __version__
 
 
 class WebApiTests(unittest.TestCase):
@@ -18,6 +19,9 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("/static", self.routes)
         self.assertIn("/chat", self.routes)
         self.assertIn("/admin", self.routes)
+
+    def test_api_schema_uses_application_version(self) -> None:
+        self.assertEqual(self.app.version, __version__)
 
     def test_operational_api_routes_exist(self) -> None:
         expected = {

@@ -82,6 +82,7 @@ from .state import (
     load_chat_messages,
     record_audit,
 )
+from .version import __version__
 
 APP_STARTED_AT = time.time()
 RECENT_ACTIVITY: deque[dict[str, Any]] = deque(maxlen=25)
@@ -738,7 +739,7 @@ def create_app() -> FastAPI:
         yield
         _WARMUP_STOP.set()
 
-    app = FastAPI(title="Harbor", version="0.5.0", lifespan=lifespan)
+    app = FastAPI(title="Harbor", version=__version__, lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
@@ -794,6 +795,7 @@ def create_app() -> FastAPI:
         return {
             "ok": True,
             "name": settings.name,
+            "version": __version__,
             "host": settings.host,
             "port": settings.port,
             "modules": len(load_modules()),

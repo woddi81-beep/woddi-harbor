@@ -43,6 +43,7 @@ Harbor blockiert geschuetzte Endpunkte, solange kein initialer Admin existiert:
 Vor einem Rollout:
 
 ```bash
+./harbor.sh cli version
 ./harbor.sh cli production-check
 ./harbor.sh cli backup create --label pre-release
 ```
@@ -62,7 +63,7 @@ Architektur und Betrieb:
 - `docs/HOWTO.md`
 - `docs/UPGRADE.md`
 - `docs/RUNBOOK.md`
-- `docs/RELEASE_NOTES_v0.5.0.md`
+- `docs/RELEASE_NOTES_v0.5.1.md`
 
 ## Struktur
 

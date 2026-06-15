@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 - 2026-06-15
+
+### Added
+
+- `woddi-harbor version`, `woddi-harbor version --short` and
+  `woddi-harbor --version`
+- Runtime version reporting in `/api/health`
+- One shared application version for package metadata, CLI, API and MCP clients
+
 ## 0.5.0 - 2026-06-15
 
 ### Changed

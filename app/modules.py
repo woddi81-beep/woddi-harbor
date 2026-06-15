@@ -36,6 +36,7 @@ from .config import (
     resolve_module_source_path,
 )
 from .search import IndexKind, SearchIndexMeta, ensure_index, load_index_meta, search_index
+from .version import __version__
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 QUERY_CACHE_TTL_SECONDS = 45.0
@@ -968,7 +969,7 @@ def _mcp_session(client: httpx.Client, module: ModuleConfig) -> str | None:
         {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "woddi-harbor", "version": "0.1.0"},
+            "clientInfo": {"name": "woddi-harbor", "version": __version__},
         },
         request_id=1,
     )
@@ -1128,7 +1129,7 @@ def discover_standard_mcp_module(module: ModuleConfig) -> dict[str, Any]:
                 {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "woddi-harbor", "version": "0.1.0"},
+                    "clientInfo": {"name": "woddi-harbor", "version": __version__},
                 },
                 request_id=1,
             )

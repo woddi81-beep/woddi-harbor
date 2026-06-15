@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+build/
 
 config/harbor.local.json
 config/modules.local.json

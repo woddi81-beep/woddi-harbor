@@ -70,6 +70,7 @@ from .preflight import production_check
 from .runtime import restart_all, start_all, stop_all, uninstall_runtime
 from .services import health_check_service, install_and_optionally_enable_service, service_action
 from .sources import configure_document_sources, source_overview, sync_source
+from .version import __version__
 from .worker import run_worker
 
 app = typer.Typer(
@@ -109,9 +110,26 @@ def _open_console(*, simple: bool = False) -> None:
     run_tui()
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"woddi-harbor {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
-def root(ctx: typer.Context) -> None:
+def root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed woddi-harbor version and exit.",
+    ),
+) -> None:
     """Open the interactive console when no command is supplied."""
+    del version
     if ctx.invoked_subcommand is not None:
         return
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -123,6 +141,12 @@ def root(ctx: typer.Context) -> None:
 def _check(name: str, ok: bool, detail: str) -> None:
     status = "[green]pass[/green]" if ok else "[red]fail[/red]"
     console.print(f"{status} {name}: {detail}")
+
+
+@app.command("version")
+def version_command(short: bool = typer.Option(False, "--short", help="Print only the semantic version.")) -> None:
+    """Show the installed woddi-harbor version."""
+    typer.echo(__version__ if short else f"woddi-harbor {__version__}")
 
 
 def _print_modules() -> None:

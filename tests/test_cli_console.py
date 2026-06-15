@@ -2,8 +2,30 @@ from typer.testing import CliRunner
 
 from app.cli import app
 from app.config import HarborSettings
+from app.version import __version__
 
 runner = CliRunner()
+
+
+def test_version_command_reports_installed_version() -> None:
+    result = runner.invoke(app, ["version"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"woddi-harbor {__version__}"
+
+
+def test_version_option_reports_installed_version() -> None:
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"woddi-harbor {__version__}"
+
+
+def test_version_command_supports_machine_readable_output() -> None:
+    result = runner.invoke(app, ["version", "--short"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == __version__
 
 
 def test_help_exposes_single_console_entrypoint() -> None:
