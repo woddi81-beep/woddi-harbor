@@ -7,8 +7,7 @@
 - NetBox worker liveness no longer blocks on DNS, schema discovery or the
   upstream API, so slow or temporarily unavailable NetBox instances do not
   prevent the local worker from starting
-- NetBox reachability remains covered by MCP discovery, module tests and the
-  production check
+- NetBox reachability remains covered by MCP discovery and module tests
 
 ## 0.6.0 - 2026-06-15
 
