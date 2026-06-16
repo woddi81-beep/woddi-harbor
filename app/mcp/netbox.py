@@ -24,7 +24,7 @@ DEFAULT_MAX_PAGES = 10
 MAX_PAGES = 20
 MAX_RESULTS = 1000
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
-DISCOVERY_CACHE_TTL_SECONDS = 300.0
+DISCOVERY_CACHE_TTL_SECONDS = 600.0
 DEFAULT_STAT_OBJECT_TYPES = [
     "dcim.sites",
     "dcim.racks",
@@ -255,7 +255,7 @@ def _format_netbox_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 class NetBoxBackend:
-    def __init__(self, netbox_url: str, *, cache_ttl_seconds: float = 15.0, cache_max_entries: int = 256) -> None:
+    def __init__(self, netbox_url: str, *, cache_ttl_seconds: float = 60.0, cache_max_entries: int = 256) -> None:
         self.base_url = netbox_url.rstrip("/")
         parsed_base = urlparse(self.base_url)
         if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc or parsed_base.username or parsed_base.password:
@@ -267,7 +267,7 @@ class NetBoxBackend:
         )
         self._response_cache = BoundedTTLCache[Any](ttl_seconds=cache_ttl_seconds, max_entries=cache_max_entries)
         self._client = httpx.Client(
-            timeout=httpx.Timeout(30.0, connect=5.0),
+            timeout=httpx.Timeout(60.0, connect=10.0),
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             follow_redirects=False,
         )
@@ -300,7 +300,7 @@ class NetBoxBackend:
                 response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
             except httpx.TimeoutException:
                 raise TimeoutError(
-                    f"Request timed out connecting to NetBox (URL: {url}). "
+                    f"Request timed out connecting to NetBox (URL: {url}, timeout 60s). "
                     f"Server not responding or overloaded."
                 ) from None
             except httpx.ConnectError as e:

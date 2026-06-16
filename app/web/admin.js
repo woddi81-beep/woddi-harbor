@@ -1,5 +1,5 @@
 const views = ["overview", "modules", "sources", "users", "mcp", "jobs", "audit", "backups", "services", "stellen"];
-const labels = { overview: "Übersicht", modules: "Module", sources: "Quellen", users: "Benutzer", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services", stellen: "Stellen" };
+const labels = { overview: "Overview", modules: "Modules", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services", stellen: "Positions" };
 let current = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 const $ = (id) => document.getElementById(id);
 
@@ -45,8 +45,8 @@ async function renderOverview() {
           <div><dt>Health Cache</dt><dd>${Math.round(cache.health_cache_hit_rate * 100)} % Treffer</dd></div>
           <div><dt>Ungültige Module</dt><dd>${data.modules.invalid}</dd></div>
         </dl>`)}
-      ${card("Letzte Aktivität", data.activity.length ? `<div class="activity-list">${data.activity.slice(0, 8).map((item) => `
-        <div><span class="badge">${esc(item.kind)}</span><strong>${esc(item.label)}</strong><time>${esc(item.timestamp)}</time></div>`).join("")}</div>` : empty("Aktivitäten erscheinen nach Betriebsaktionen."))}
+      ${card("Recent Activity", data.activity.length ? `<div class="activity-list">${data.activity.slice(0, 8).map((item) => `
+        <div><span class="badge">${esc(item.kind)}</span><strong>${esc(item.label)}</strong><time>${esc(item.timestamp)}</time></div>`).join("")}</div>` : empty("Activities appear after operations."))}
     </div>`;
 }
 async function renderModules() {
@@ -57,7 +57,7 @@ async function renderModules() {
       <p class="endpoint">${esc(item.base_url || item.path || `${item.host}:${item.port}`)}</p>
       ${item.validation_errors?.length ? `<p class="error-text">${esc(item.validation_errors.join(" · "))}</p>` : ""}
       <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
-      buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["Diagnose", `module:diagnose:${item.id}`], ["Bearbeiten", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
+      buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["Diagnose", `module:diagnose:${item.id}`], ["Edit", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
     )).join("") || empty("Lege ein Modul an oder binde OpenStack ein.")}</div>`;
 }
 async function renderSources() {
@@ -75,7 +75,7 @@ async function renderUsers() {
     <div class="grid">${data.users.map((item) => card(item.username,
       `<div class="card-status">${badge(item.enabled, "aktiv", "deaktiviert")} <span class="badge">${esc(item.role)}</span></div>
       <dl class="facts compact"><div><dt>Module</dt><dd>${esc(item.allowed_modules.join(", ") || "-")}</dd></div><div><dt>Tools</dt><dd>${esc(item.allowed_tools.join(", ") || "-")}</dd></div></dl>`,
-      buttons([["Bearbeiten", `user:edit:${item.username}`]])
+      buttons([["Edit", `user:edit:${item.username}`]])
     )).join("")}</div>`;
 }
 async function renderMcp() {
@@ -114,11 +114,11 @@ async function renderServices() {
 }
 async function renderStellen() {
   const data = await api("/api/stellen");
-  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.stellen.length} Stellen</strong><span class="muted">Offene Positionen und Stellenangebote</span></div><button class="primary" data-action="stellen:new">Stelle anlegen</button></div>
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.stellen.length} Stellen</strong><span class="muted">Open positions and job listings</span></div><button class="primary" data-action="stellen:new">Add Position</button></div>
     <div class="grid">${data.stellen.map((item) => card(item.title,
       `<div class="card-status">${badge(item.status === "offen", "Offen", item.status === "besetzt" ? "Besetzt" : "Geschlossen")} <span class="badge">${esc(item.department || "-")}</span></div>
       <p>${esc(item.description || "")}</p>`,
-      buttons([["Bearbeiten", `stellen:edit:${item.id}`], ["Löschen", `stellen:delete:${item.id}`, true]])
+      buttons([["Edit", `stellen:edit:${item.id}`], ["Löschen", `stellen:delete:${item.id}`, true]])
     )).join("") || empty("Lege eine Stelle an.")}</div>`;
 }
 const renderers = {
@@ -219,7 +219,7 @@ async function action(raw) {
       $("diagnose-health").textContent = JSON.stringify(d.health, null, 2);
       $("diagnose-remote").textContent = d.remote ? JSON.stringify(d.remote, null, 2) : "N/A";
       $("diagnose-hint").textContent = d.hint || "";
-    }).catch((e) => { $("diagnose-status").textContent = "Fehler: " + e.message; });
+    }).catch((e) => { $("diagnose-status").textContent = "Error: " + e.message; });
     $("diagnose-restart").onclick = () => { $("diagnose-dialog").close(); action(`module:restart:${id}`); };
     return;
   }

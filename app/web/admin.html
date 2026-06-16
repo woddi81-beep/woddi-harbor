@@ -35,10 +35,10 @@
       <label>Name<input name="username" required></label>
       <label>Passwort<input name="password" type="password" placeholder="Bei Änderung optional"></label>
       <label>Rolle<select name="role"><option>viewer</option><option>operator</option><option>admin</option></select></label>
-      <label><span>Aktiv</span><input name="enabled" type="checkbox" checked></label>
+      <label><span>Enabled</span><input name="enabled" type="checkbox" checked></label>
       <label>Module, kommasepariert<input name="allowed_modules" value="*"></label>
       <label>Tools, kommasepariert<input name="allowed_tools" value="*"></label>
-      <div class="row"><button class="primary">Speichern</button><button type="button" id="user-cancel">Abbrechen</button></div>
+      <div class="row"><button class="primary">Save</button><button type="button" id="user-cancel">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="module-dialog">
@@ -55,24 +55,24 @@
         <label>Timeout<input name="timeout_seconds" type="number" min="1" value="30"></label>
       </div>
       <label>Notizen<textarea name="notes" rows="2"></textarea></label>
-      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="module-dialog">Abbrechen</button></div>
+      <div class="row"><button class="primary">Save</button><button type="button" data-close="module-dialog">Cancel</button></div>
       </form>
   </dialog>
   <dialog id="netbox-dialog">
     <form id="netbox-form" class="stack">
-      <h3>NetBox einbinden</h3>
+      <h3>Connect NetBox</h3>
       <label>NetBox URL<input name="netbox_url" type="url" required placeholder="https://netbox.example.com"></label>
       <div class="form-grid">
         <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="30"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <p class="muted">Harbor greift anonym auf die öffentliche NetBox-API zu. Der Adapter erlaubt ausschließlich GET-Anfragen und folgt keinen Links auf andere Hosts.</p>
-      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="netbox-dialog">Abbrechen</button></div>
+      <p class="muted">Harbor accesses the public NetBox API anonymously. The adapter allows GET requests only and does not follow links to other hosts.</p>
+      <div class="row"><button class="primary">Save</button><button type="button" data-close="netbox-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
-      <h3>OpenStack einbinden</h3>
+      <h3>Connect OpenStack</h3>
       <p class="muted">Variante A: Username + Password — Harbor holt automatisch ein projekt-gescoptes Token.</p>
       <label>Username<input name="username" autocomplete="username" placeholder="User-Login"></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" placeholder="Passwort"></label>
@@ -93,14 +93,14 @@
         <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="60"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="openstack-dialog">Abbrechen</button></div>
+      <div class="row"><button class="primary">Save</button><button type="button" data-close="openstack-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="mcp-package-dialog">
     <form id="mcp-package-form" class="stack">
       <h3>MCP-Paket installieren</h3>
       <label>Serverseitiger Paketpfad<input name="source" required placeholder="/srv/mcp/mein-paket"></label>
-      <div class="row"><button class="primary">Installieren</button><button type="button" data-close="mcp-package-dialog">Abbrechen</button></div>
+      <div class="row"><button class="primary">Install</button><button type="button" data-close="mcp-package-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="mcp-instance-dialog">
@@ -110,7 +110,7 @@
       <label>Paket<select name="package_id" required></select></label>
       <label>Version<input name="version" required></label>
       <label>Umgebung (KEY=VALUE, eine Zeile je Wert)<textarea name="environment" rows="4" placeholder="MCP_PORT=61000"></textarea></label>
-      <div class="row"><button class="primary">Anlegen</button><button type="button" data-close="mcp-instance-dialog">Abbrechen</button></div>
+      <div class="row"><button class="primary">Create</button><button type="button" data-close="mcp-instance-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="discovery-dialog">
@@ -122,22 +122,22 @@
   </dialog>
   <dialog id="stellen-dialog">
     <form id="stellen-form" class="stack">
-      <h3>Stelle bearbeiten</h3>
+      <h3>Edit Position</h3>
       <label>Titel<input name="title" required></label>
       <label>Abteilung<input name="department"></label>
       <label>Beschreibung<textarea name="description" rows="4"></textarea></label>
-      <label>Status<select name="status"><option value="offen">Offen</option><option value="besetzt">Besetzt</option><option value="geschlossen">Geschlossen</option></select></label>
-      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="stellen-dialog">Abbrechen</button></div>
+      <label>Status<select name="status"><option value="offen">Open</option><option value="besetzt">Filled</option><option value="geschlossen">Closed</option></select></label>
+      <div class="row"><button class="primary">Save</button><button type="button" data-close="stellen-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="diagnose-dialog" style="min-width:640px;max-width:90vw;max-height:80vh;">
     <div id="diagnose-content" style="overflow:auto;">
-      <h3>Modul-Diagnose: <span id="diagnose-module-id"></span></h3>
+      <h3>Module Diagnostics: <span id="diagnose-module-id"></span></h3>
       <div id="diagnose-status" class="muted"></div>
       <details open><summary>Letzte Log-Einträge</summary>
         <pre id="diagnose-log" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:300px;font-size:12px;"></pre>
       </details>
-      <details><summary>Technischer Status</summary>
+      <details><summary>Technical Status</summary>
         <pre id="diagnose-health" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:200px;font-size:12px;"></pre>
       </details>
       <details><summary>Remote Discovery</summary>

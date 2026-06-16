@@ -23,10 +23,10 @@
             <span class="credential-icon" aria-hidden="true">OS</span>
             <div>
               <strong>OpenStack</strong>
-              <span id="openstack-token-status">Tokenstatus wird geladen</span>
+              <span id="openstack-token-status">Loading token status</span>
             </div>
           </div>
-          <button id="openstack-token-open" type="button">Token erneuern</button>
+          <button id="openstack-token-open" type="button">Renew Token</button>
         </section>
         <a class="nav-link" href="/admin">Administration</a>
       </div>
@@ -62,18 +62,18 @@
     <form id="openstack-token-form" class="stack">
       <div>
         <span class="eyebrow">Persönlicher Projektzugriff</span>
-        <h3>OpenStack User-Token</h3>
+        <h3>OpenStack User Token</h3>
       </div>
       <p id="openstack-token-owner" class="muted"></p>
       <label>
-        Projektgescoptes User-Token
+        Project-scoped User Token
         <input name="token" type="password" autocomplete="new-password" maxlength="8192" required placeholder="Neues Token eingeben">
       </label>
-      <p class="muted">Das Token wird nur deinem Harbor-Benutzer zugeordnet. Andere Benutzer erhalten weder Zugriff auf das Token noch auf deinen OpenStack-Cache oder Projektkontext.</p>
+      <p class="muted">This token is scoped to your Harbor user only. Other users will not have access to the token, your OpenStack cache, or project context.</p>
       <div class="row">
-        <button class="primary" type="submit">Token speichern</button>
-        <button id="openstack-token-remove" class="danger hidden" type="button">Token entfernen</button>
-        <button id="openstack-token-cancel" type="button">Abbrechen</button>
+        <button class="primary" type="submit">Save Token</button>
+        <button id="openstack-token-remove" class="danger hidden" type="button">Remove Token</button>
+        <button id="openstack-token-cancel" type="button">Cancel</button>
       </div>
     </form>
   </dialog>

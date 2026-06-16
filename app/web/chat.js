@@ -102,9 +102,9 @@ async function loadOpenStackCredential() {
   $("openstack-token-status").textContent = !ready
     ? "Integration noch nicht eingerichtet"
     : configured
-      ? `Token für ${configuration.token_owner} aktiv`
-      : `Token für ${configuration.token_owner} fehlt`;
-  $("openstack-token-open").textContent = configured ? "Token erneuern" : "Token hinterlegen";
+      ? `Token ffor ${configuration.token_owner} active`
+      : `Token ffor ${configuration.token_owner} missing`;
+  $("openstack-token-open").textContent = configured ? "Renew Token" : "Add Token";
   $("openstack-token-remove").classList.toggle("hidden", !configured);
   $("openstack-token-owner").textContent =
     `Dieses Token gilt ausschließlich für den Harbor-Benutzer ${configuration.token_owner}.`;
@@ -263,18 +263,18 @@ $("openstack-token-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({ token: form.token.value }),
     });
     $("openstack-token-dialog").close();
-    $("notice").textContent = "Dein OpenStack User-Token wurde gespeichert.";
+    $("notice").textContent = "Your OpenStack user token has been saved.";
     await loadOpenStackCredential();
   } catch (error) {
     $("notice").textContent = error.message;
   }
 });
 $("openstack-token-remove").addEventListener("click", async () => {
-  if (!confirm("Dein persönliches OpenStack User-Token wirklich entfernen?")) return;
+  if (!confirm("Remove your personal OpenStack user token?")) return;
   try {
     await api("/api/integrations/openstack/token", { method: "DELETE" });
     $("openstack-token-dialog").close();
-    $("notice").textContent = "Dein OpenStack User-Token wurde entfernt.";
+    $("notice").textContent = "Your OpenStack user token has been removed.";
     await loadOpenStackCredential();
   } catch (error) {
     $("notice").textContent = error.message;
