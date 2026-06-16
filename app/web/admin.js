@@ -40,6 +40,7 @@ async function renderOverview() {
       ${card("Systemzustand", `
         <dl class="facts">
           <div><dt>API</dt><dd>${esc(`${data.app.host}:${data.app.port}`)}</dd></div>
+          <div><dt>Version</dt><dd>${esc(data.app.version || "n/a")} <span class="muted">(${esc(data.app.git_rev || "unknown")})</span></dd></div>
           <div><dt>CPU Load 1m</dt><dd>${esc(data.stats.cpu_load_1m ?? "n/a")}</dd></div>
           <div><dt>Health Cache</dt><dd>${Math.round(cache.health_cache_hit_rate * 100)} % Treffer</dd></div>
           <div><dt>Ungültige Module</dt><dd>${data.modules.invalid}</dd></div>

@@ -10,6 +10,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
+
+def _git_rev() -> str:
+    try:
+        import subprocess
+        root = Path(__file__).resolve().parent.parent
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            cwd=root,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
 from typing import Any
 from urllib.parse import urlparse
 
@@ -254,6 +267,8 @@ def _load_dashboard_payload() -> dict[str, Any]:
     payload = {
         "app": {
             "name": settings.name,
+            "version": __version__,
+            "git_rev": _git_rev(),
             "host": settings.host,
             "port": settings.port,
         },
@@ -852,6 +867,7 @@ def create_app() -> FastAPI:
             "ok": True,
             "name": settings.name,
             "version": __version__,
+            "git_rev": _git_rev(),
             "host": settings.host,
             "port": settings.port,
             "modules": len(load_modules()),
