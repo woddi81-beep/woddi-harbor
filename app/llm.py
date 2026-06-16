@@ -64,6 +64,32 @@ def _backoff(attempt: int) -> None:
     time.sleep(min(2.0, 0.25 * (2**attempt)))
 
 
+def _format_llm_error(exc: Exception, timeout_seconds: float) -> str:
+    """Format LLM errors with actionable detail for the user."""
+    import httpx
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            f"Zeitüberschreitung nach {timeout_seconds}s. "
+            f"Der LLM-Server hat nicht rechtzeitig geantwortet. "
+            f"Erhöhe den Timeout oder prüfe die Server-Last."
+        )
+    if isinstance(exc, httpx.ConnectError):
+        return f"Verbindung fehlgeschlagen. Der LLM-Server ist nicht erreichbar: {exc}"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        try:
+            body = exc.response.json()
+            msg = body.get("error", {}).get("message", "") or body.get("error", "") or body.get("message", "")
+            if msg:
+                return f"HTTP {status}: {msg}"
+        except Exception:
+            pass
+        return f"HTTP {status} {exc.response.reason_phrase}. Server antwortet mit Fehler."
+    if isinstance(exc, ValueError):
+        return f"Konfigurationsfehler: {exc}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def llm_health(settings: HarborSettings) -> dict[str, Any]:
     if not settings.llm.base_url or not settings.llm.model:
         return {"ok": False, "status": "unconfigured", "detail": "LLM ist nicht konfiguriert."}
@@ -94,13 +120,16 @@ def llm_health(settings: HarborSettings) -> dict[str, Any]:
             "detail": "LLM erreichbar." if model_available else "Konfiguriertes Modell ist nicht verfuegbar.",
         }
     except Exception as exc:
+        timeout_val = settings.llm.timeout_seconds
+        detail = _format_llm_error(exc, timeout_val)
         return {
             "ok": False,
             "status": "error",
             "model": settings.llm.model,
             "models": [],
             "latency_ms": round((time.monotonic() - started) * 1000, 2),
-            "detail": str(exc),
+            "detail": detail,
+            "error_type": type(exc).__name__,
         }
 
 
@@ -147,7 +176,7 @@ def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> d
                 if attempt + 1 >= _attempts(settings) or not _retryable(exc):
                     raise
                 _backoff(attempt)
-    raise RuntimeError(f"LLM-Anfrage fehlgeschlagen: {last_error}")
+    raise RuntimeError(_format_llm_error(last_error, _timeout(settings).timeout))
 
 
 def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Iterator[str]:
@@ -200,5 +229,5 @@ def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Ite
                 return
             except Exception as exc:
                 if yielded or attempt + 1 >= _attempts(settings) or not _retryable(exc):
-                    raise
+                    raise RuntimeError(_format_llm_error(exc, _timeout(settings).timeout))
                 _backoff(attempt)

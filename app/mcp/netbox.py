@@ -226,6 +226,34 @@ class DiscoveryCache:
         }
 
 
+
+
+def _format_netbox_error(exc: Exception) -> str:
+    """Format NetBox errors with actionable user-facing messages."""
+    import httpx
+    if isinstance(exc, TimeoutError):
+        return str(exc)
+    if isinstance(exc, ConnectionError):
+        return str(exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 401:
+            return "Authentifizierung fehlgeschlagen (HTTP 401). Prüfe das NetBox-API-Token."
+        if status == 403:
+            return "Zugriff verweigert (HTTP 403). Token hat keine Berechtigung für diese Ressource."
+        if status == 404:
+            return "Ressource nicht gefunden (HTTP 404). Prüfe URL und REST-Pfad."
+        if status == 429:
+            return "Rate-Limit erreicht (HTTP 429). Warte kurz und versuche es erneut."
+        if status >= 500:
+            return f"NetBox-Server-Fehler (HTTP {status}). Server-Probleme — später erneut versuchen."
+        return f"HTTP {status}: {exc}"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"Zeitüberschreitung. NetBox hat nicht rechtzeitig geantwortet."
+    if isinstance(exc, httpx.ConnectError):
+        return f"NetBox nicht erreichbar: {exc}"
+    return f"{type(exc).__name__}: {exc}"
+
 class NetBoxBackend:
     def __init__(self, netbox_url: str, *, cache_ttl_seconds: float = 15.0, cache_max_entries: int = 256) -> None:
         self.base_url = netbox_url.rstrip("/")
@@ -268,8 +296,42 @@ class NetBoxBackend:
         cache_key = json.dumps([normalized_method, url, params or {}], ensure_ascii=True, sort_keys=True, default=str)
 
         def load() -> Any:
-            response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
-            response.raise_for_status()
+            try:
+                response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
+            except httpx.TimeoutException:
+                raise TimeoutError(
+                    f"Zeitüberschreitung bei NetBox (URL: {url}). "
+                    f"Server antwortet nicht oder ist überlastet."
+                ) from None
+            except httpx.ConnectError as e:
+                raise ConnectionError(
+                    f"Verbindung zu NetBox fehlgeschlagen (URL: {url}). "
+                    f"Server nicht erreichbar — prüfe URL und Netzwerk. Fehler: {e}"
+                ) from None
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                reason = e.response.reason_phrase
+                try:
+                    body = e.response.json()
+                    msg = body.get("detail", "") or body.get("error", "") or str(body)
+                    if msg:
+                        raise httpx.HTTPStatusError(
+                            f"NetBox HTTP {status} {reason}: {msg}",
+                            request=e.request,
+                            response=e.response
+                        )
+                except Exception:
+                    pass
+                raise httpx.HTTPStatusError(
+                    f"NetBox HTTP {status} {reason} (URL: {url})",
+                    request=e.request,
+                    response=e.response
+                ) from None
+            except Exception as e:
+                raise RuntimeError(
+                    f"NetBox-Anfrage fehlgeschlagen (URL: {url}): {type(e).__name__}: {e}"
+                ) from None
+
             if len(response.content) > MAX_RESPONSE_BYTES:
                 raise ValueError(f"NetBox response exceeded {MAX_RESPONSE_BYTES} bytes.")
             if response.status_code == 204 or not response.content:
@@ -340,7 +402,7 @@ class NetBoxBackend:
         try:
             api_root_payload = self._request("GET", self.api_base)
         except Exception as exc:
-            return DiscoveryCache(source="unavailable", error=str(exc))
+            return DiscoveryCache(source="unavailable", error=_format_netbox_error(exc))
 
         api_root = self._extract_api_root(api_root_payload if isinstance(api_root_payload, dict) else {})
         endpoint_paths: list[str] = []
@@ -583,7 +645,7 @@ class NetBoxBackend:
                 sample = payload[0] if payload else None
             observed_fields = self._observed_fields(sample, max_fields=max_fields)
         except Exception as exc:
-            sample_error = str(exc)
+            sample_error = _format_netbox_error(exc)
         return {
             "object_type": normalized.replace("/", "."),
             "endpoint": endpoint,

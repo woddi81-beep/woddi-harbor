@@ -255,17 +255,38 @@ class OpenStackBackend:
                 if _is_timeout_error(exc):
                     raise RuntimeError(
                         f"OpenStack Authentifizierung an {self.credentials['OS_AUTH_URL']} "
-                        f"hat nach {timeout_seconds:.0f}s nicht geantwortet."
+                        f"hat nach {timeout_seconds:.0f}s nicht geantwortet. "
+                        "Pruefe Erreichbarkeit und Berechtigungen."
+                    ) from exc
+                auth_url = self.credentials.get("OS_AUTH_URL", "")
+                user = self.credentials.get("OS_USERNAME", "")
+                project = self.credentials.get("OS_PROJECT_NAME", "")
+                if "connection refused" in str(exc).lower():
+                    raise RuntimeError(
+                        f"OpenStack nicht erreichbar (URL: {auth_url}). "
+                        f"Pruefe OS_AUTH_URL und ob der Identity-Service laeuft."
+                    ) from exc
+                if "unscoped" in str(exc).lower():
+                    raise RuntimeError(
+                        f"OpenStack Token ist nicht projekt-gescoped. "
+                        f"Auth URL: {auth_url}, User: {user}, Projekt: {project}. "
+                        f"Verwenden Sie Username+Password oder erstellen Sie ein "
+                        f"project-scoped Token mit 'openstack token issue --project {project}'."
                     ) from exc
                 raise
             project_id = str(getattr(access, "project_id", "") or "").strip()
             project_name = str(getattr(access, "project_name", "") or "").strip()
             project_scoped = bool(getattr(access, "project_scoped", project_id))
             if not project_scoped or not project_id or not access.has_service_catalog():
-                raise RuntimeError(
-                    "OpenStack Authentifizierung fehlgeschlagen. "
-                    "Pruefe OS_AUTH_URL, OS_USERNAME, OS_PASSWORD, OS_PROJECT_NAME und OS_PROJECT_DOMAIN_NAME."
-                )
+                msg = "OpenStack Token ist nicht projekt-gescoped. "
+                if not project_scoped:
+                    msg += (
+                        "Erzeugen Sie den Token direkt im Zielprojekt (OpenStack CLI: "
+                        "'openstack token issue --project <name>') oder verwenden Sie "
+                        "Username+Password anstelle von Token-Auth. "
+                    )
+                msg += "Pruefe OS_AUTH_URL, OS_USERNAME, OS_PASSWORD, OS_PROJECT_NAME."
+                raise RuntimeError(msg)
             self._project_context = {"id": project_id, "name": project_name}
             self._connection = connection
         return self._connection
@@ -279,11 +300,23 @@ class OpenStackBackend:
             except Exception as exc:
                 if _is_timeout_error(exc):
                     raise RuntimeError(
-                        f"OpenStack Operation {operation} hat nach "
+                        f"OpenStack {operation} hat nach "
                         f"{_timeout_seconds(self.credentials):.0f}s nicht geantwortet. "
                         "Pruefe Service-Katalog, Region, Routing und Firewall."
                     ) from exc
-                raise
+                auth_url = self.credentials.get("OS_AUTH_URL", "unbekannt")
+                project = self.credentials.get("OS_PROJECT_NAME", "unbekannt")
+                msg = f"OpenStack {operation} fehlgeschlagen (URL: {auth_url}, Projekt: {project}). "
+                if "connection refused" in str(exc).lower():
+                    msg += (
+                        "Server nicht erreichbar — prüfe OS_AUTH_URL und Netzwerk. "
+                        "Fehler: Connection refused."
+                    )
+                elif "unscoped" in str(exc).lower():
+                    msg += "Token ist unscoped — Username+Password oder Project-Scoped Token erforderlich."
+                else:
+                    msg += f"Fehler: {exc}"
+                raise RuntimeError(msg) from exc
 
         return self._cache.get_or_load(cache_key, load)
 
