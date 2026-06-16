@@ -13,6 +13,7 @@ from .worker_security import install_worker_auth
 
 
 def _openstack_credentials() -> dict[str, str]:
+    from app.state import load_user_named_secret, load_module_named_secret
     fields = {
         "OS_AUTH_URL": "",
         "OS_REGION_NAME": "",
@@ -20,13 +21,29 @@ def _openstack_credentials() -> dict[str, str]:
         "OS_TIMEOUT": "30",
         "OS_AUTH_TYPE": "token",
         "OS_TOKEN": "",
+        "OS_USERNAME": "",
+        "OS_PASSWORD": "",
+        "OS_PROJECT_NAME": "",
+        "OS_USER_DOMAIN_NAME": "Default",
+        "OS_PROJECT_DOMAIN_NAME": "Default",
     }
     import os
 
     resolved = {key: os.getenv(key, "").strip() for key in fields}
     if not resolved["OS_AUTH_URL"]:
         raise ValueError("OS_AUTH_URL fehlt.")
-    resolved["OS_TOKEN"] = ""
+
+    # Load per-user credentials (password auth takes priority over token)
+    try:
+        resolved["OS_USERNAME"] = load_user_named_secret(None, "openstack_username") or resolved.get("OS_USERNAME", "")
+        resolved["OS_PASSWORD"] = load_user_named_secret(None, "openstack_password") or resolved.get("OS_PASSWORD", "")
+        resolved["OS_PROJECT_NAME"] = load_user_named_secret(None, "openstack_project_name") or resolved.get("OS_PROJECT_NAME", "")
+        resolved["OS_USER_DOMAIN_NAME"] = load_user_named_secret(None, "openstack_user_domain") or resolved.get("OS_USER_DOMAIN_NAME", "Default")
+        resolved["OS_PROJECT_DOMAIN_NAME"] = load_user_named_secret(None, "openstack_project_domain") or resolved.get("OS_PROJECT_DOMAIN_NAME", "Default")
+        resolved["OS_TOKEN"] = load_user_named_secret(None, "openstack_token") or resolved.get("OS_TOKEN", "")
+    except Exception:
+        pass
+
     return resolved
 
 

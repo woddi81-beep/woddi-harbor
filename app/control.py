@@ -165,6 +165,11 @@ class BackupCreateRequest(BaseModel):
 
 class OpenStackConfigureRequest(BaseModel):
     token: str = Field(default="", max_length=8192)
+    username: str = Field(default="", max_length=1024)
+    password: str = Field(default="", max_length=1024)
+    project_name: str = Field(default="", max_length=1024)
+    user_domain_name: str = Field(default="Default", max_length=256)
+    project_domain_name: str = Field(default="Default", max_length=256)
     auth_url: str = Field(min_length=1, max_length=2048)
     region_name: str = Field(default="", max_length=255)
     timeout_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
@@ -957,7 +962,7 @@ def create_app() -> FastAPI:
             "token_configured": bool(load_user_named_secret(_user.username, "openstack_token")),
             "token_owner": _user.username,
             "can_configure": _user.role in {"operator", "admin"},
-            "scope_mode": "project_from_token",
+            "scope_mode": "password_project" if use_password else "token_project",
             "credential_mode": "per_user",
         }
 
@@ -966,6 +971,7 @@ def create_app() -> FastAPI:
         existing = find_module("openstack")
         old_token = load_user_named_secret(_user.username, "openstack_token")
         new_token = body.token.strip()
+        use_password = bool(body.username and body.password)
         module = ModuleConfig(
             id="openstack",
             name="OpenStack MCP",
@@ -1002,16 +1008,29 @@ def create_app() -> FastAPI:
             ],
             test_action="discover",
             settings={
-                "auth_type": "token",
+                "auth_type": "password" if use_password else "token",
                 "auth_url": body.auth_url.strip(),
                 "region_name": body.region_name.strip(),
                 "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
             },
-            notes="Harbor nutzt ausschliesslich den Projektkontext des projektgescopten User-Tokens.",
+            notes="Harbor nutzt Username+Password (empfohlen) oder ein projektgescoptes User-Token.",
         )
         try:
             if new_token:
                 save_user_named_secret(_user.username, "openstack_token", new_token)
+            if use_password:
+                save_user_named_secret(_user.username, "openstack_username", body.username)
+                save_user_named_secret(_user.username, "openstack_password", body.password)
+                save_user_named_secret(_user.username, "openstack_project_name", body.project_name)
+                save_user_named_secret(_user.username, "openstack_user_domain", body.user_domain_name)
+                save_user_named_secret(_user.username, "openstack_project_domain", body.project_domain_name)
+                delete_user_named_secret(_user.username, "openstack_token")
+            else:
+                delete_user_named_secret(_user.username, "openstack_username")
+                delete_user_named_secret(_user.username, "openstack_password")
+                delete_user_named_secret(_user.username, "openstack_project_name")
+                delete_user_named_secret(_user.username, "openstack_user_domain")
+                delete_user_named_secret(_user.username, "openstack_project_domain")
             upsert_module(module)
             delete_module_named_secret("openstack", "openstack_token")
             delete_module_named_secret("openstack", "openstack_application_credential_secret")
@@ -1029,7 +1048,7 @@ def create_app() -> FastAPI:
             actor=_user.username,
             detail={
                 "auth_url": body.auth_url.strip(),
-                "scope_mode": "project_from_token",
+                "scope_mode": "password_project" if use_password else "token_project",
             },
         )
         return {

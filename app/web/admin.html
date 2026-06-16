@@ -73,19 +73,26 @@
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
       <h3>OpenStack einbinden</h3>
+      <p class="muted">Variante A: Username + Password — Harbor holt automatisch ein projekt-gescoptes Token.</p>
+      <label>Username<input name="username" autocomplete="username" placeholder="User-Login"></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" placeholder="Passwort"></label>
+      <label>Projekt-Name<input name="project_name" placeholder="plusone-se"></label>
+      <label>User Domain<input name="user_domain_name" placeholder="monsoon3" value="Default"></label>
+      <label>Projekt Domain<input name="project_domain_name" placeholder="Default" value="Default"></label>
+      <hr>
+      <p class="muted">Variante B: Token direkt (bereits projekt-gescopt).</p>
       <label>
         <span>Projektgescoptes User-Token <span class="help" title="Das Zielprojekt wird ausschließlich aus dem Token gelesen." aria-label="Hinweis zum Projektkontext">?</span></span>
         <input name="token" type="password" autocomplete="new-password" placeholder="User-Token eingeben">
       </label>
       <p id="openstack-token-state" class="muted"></p>
-      <p class="muted">Das Token wird ausschließlich deinem aktuell angemeldeten Harbor-Benutzer zugeordnet. Harbor nimmt keine separate Projekt-ID an und führt kein Rescoping durch.</p>
-      <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3"></label>
+      <hr>
+      <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3" value="https://identity.eu-de-1.cloud.sap/v3"></label>
       <div class="form-grid">
-        <label>Region<input name="region_name" placeholder="RegionOne"></label>
+        <label>Region<input name="region_name" placeholder="eu-de-1" value="eu-de-1"></label>
         <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="60"></label>
         <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
-      <p class="muted">Ein ungescoptes Token wird abgewiesen. Erzeuge das User-Token deshalb direkt im gewünschten OpenStack-Projekt.</p>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="openstack-dialog">Abbrechen</button></div>
     </form>
   </dialog>
@@ -122,6 +129,23 @@
       <label>Status<select name="status"><option value="offen">Offen</option><option value="besetzt">Besetzt</option><option value="geschlossen">Geschlossen</option></select></label>
       <div class="row"><button class="primary">Speichern</button><button type="button" data-close="stellen-dialog">Abbrechen</button></div>
     </form>
+  </dialog>
+  <dialog id="diagnose-dialog" style="min-width:640px;max-width:90vw;max-height:80vh;">
+    <div id="diagnose-content" style="overflow:auto;">
+      <h3>Modul-Diagnose: <span id="diagnose-module-id"></span></h3>
+      <div id="diagnose-status" class="muted"></div>
+      <details open><summary>Letzte Log-Einträge</summary>
+        <pre id="diagnose-log" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:300px;font-size:12px;"></pre>
+      </details>
+      <details><summary>Technischer Status</summary>
+        <pre id="diagnose-health" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:200px;font-size:12px;"></pre>
+      </details>
+      <details><summary>Remote Discovery</summary>
+        <pre id="diagnose-remote" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:200px;font-size:12px;"></pre>
+      </details>
+      <p id="diagnose-hint" class="muted" style="margin-top:8px;"></p>
+      <div class="row"><button data-close="diagnose-dialog">Schliessen</button><button id="diagnose-restart" class="danger">Worker neustarten</button></div>
+    </div>
   </dialog>
   <script src="/static/admin.js" defer></script>
 </body>

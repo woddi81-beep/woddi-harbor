@@ -56,7 +56,7 @@ async function renderModules() {
       <p class="endpoint">${esc(item.base_url || item.path || `${item.host}:${item.port}`)}</p>
       ${item.validation_errors?.length ? `<p class="error-text">${esc(item.validation_errors.join(" · "))}</p>` : ""}
       <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
-      buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["Bearbeiten", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
+      buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["Diagnose", `module:diagnose:${item.id}`], ["Bearbeiten", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
     )).join("") || empty("Lege ein Modul an oder binde OpenStack ein.")}</div>`;
 }
 async function renderSources() {
@@ -203,6 +203,25 @@ async function action(raw) {
   if (kind === "service") path = `/api/services/${encodeURIComponent(id)}/${verb}`;
   if (kind === "backup") { path = "/api/backups"; body = JSON.stringify({ label: "web" }); }
   if (kind === "user") return openUser(verb === "edit" ? id : "");
+  if (kind === "module" && verb === "diagnose") {
+    $("diagnose-module-id").textContent = id;
+    $("diagnose-status").textContent = "Lade...";
+    $("diagnose-log").textContent = "";
+    $("diagnose-health").textContent = "";
+    $("diagnose-remote").textContent = "";
+    $("diagnose-hint").textContent = "";
+    $("diagnose-dialog").showModal();
+    api(`/api/modules/${encodeURIComponent(id)}/diagnose`).then((d) => {
+      $("diagnose-status").textContent = d.ok ? "OK — keine Probleme erkannt" : "FEHLER — Probleme erkannt";
+      $("diagnose-status").style.color = d.ok ? "green" : "red";
+      $("diagnose-log").textContent = d.log_tail?.join ? d.log_tail.join("\n") : JSON.stringify(d.log_tail, null, 2);
+      $("diagnose-health").textContent = JSON.stringify(d.health, null, 2);
+      $("diagnose-remote").textContent = d.remote ? JSON.stringify(d.remote, null, 2) : "N/A";
+      $("diagnose-hint").textContent = d.hint || "";
+    }).catch((e) => { $("diagnose-status").textContent = "Fehler: " + e.message; });
+    $("diagnose-restart").onclick = () => { $("diagnose-dialog").close(); action(`module:restart:${id}`); };
+    return;
+  }
   if (kind === "stellen" && verb === "new") { openStellen(); return; }
   if (kind === "stellen" && verb === "edit") { openStellen((await api(`/api/stellen/${encodeURIComponent(id)}`))); return; }
   if (kind === "stellen" && verb === "delete") {
@@ -266,6 +285,11 @@ $("openstack-form").addEventListener("submit", async (event) => {
   const form = event.currentTarget;
   const payload = {
     token: form.token.value,
+    username: form.username.value,
+    password: form.password.value,
+    project_name: form.project_name.value,
+    user_domain_name: form.user_domain_name.value,
+    project_domain_name: form.project_domain_name.value,
     auth_url: form.auth_url.value.trim(), region_name: form.region_name.value.trim(),
     timeout_seconds: Number(form.timeout_seconds.value || 60), port: Number(form.port.value || 0),
   };
