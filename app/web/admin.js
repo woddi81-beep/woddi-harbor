@@ -1,5 +1,5 @@
-const views = ["overview", "modules", "sources", "users", "mcp", "jobs", "audit", "backups", "services"];
-const labels = { overview: "Übersicht", modules: "Module", sources: "Quellen", users: "Benutzer", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services" };
+const views = ["overview", "modules", "sources", "users", "mcp", "jobs", "audit", "backups", "services", "stellen"];
+const labels = { overview: "Übersicht", modules: "Module", sources: "Quellen", users: "Benutzer", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services", stellen: "Stellen" };
 let current = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 const $ = (id) => document.getElementById(id);
 
@@ -111,6 +111,15 @@ async function renderServices() {
     buttons([["Prüfen", `service:check:${item.id}`], ["Start", `service:start:${item.id}`], ["Stop", `service:stop:${item.id}`, true], ["Restart", `service:restart:${item.id}`]])
   )).join("")}</div>`;
 }
+async function renderStellen() {
+  const data = await api("/api/stellen");
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.stellen.length} Stellen</strong><span class="muted">Offene Positionen und Stellenangebote</span></div><button class="primary" data-action="stellen:new">Stelle anlegen</button></div>
+    <div class="grid">${data.stellen.map((item) => card(item.title,
+      `<div class="card-status">${badge(item.status === "offen", "Offen", item.status === "besetzt" ? "Besetzt" : "Geschlossen")} <span class="badge">${esc(item.department || "-")}</span></div>
+      <p>${esc(item.description || "")}</p>`,
+      buttons([["Bearbeiten", `stellen:edit:${item.id}`], ["Löschen", `stellen:delete:${item.id}`, true]])
+    )).join("") || empty("Lege eine Stelle an.")}</div>`;
+}
 const renderers = {
   overview: renderOverview, modules: renderModules, sources: renderSources, users: renderUsers, mcp: renderMcp,
   jobs: () => renderTable("/api/jobs", "jobs"), audit: () => renderTable("/api/audit", "events"),
@@ -194,6 +203,12 @@ async function action(raw) {
   if (kind === "service") path = `/api/services/${encodeURIComponent(id)}/${verb}`;
   if (kind === "backup") { path = "/api/backups"; body = JSON.stringify({ label: "web" }); }
   if (kind === "user") return openUser(verb === "edit" ? id : "");
+  if (kind === "stellen" && verb === "new") { openStellen(); return; }
+  if (kind === "stellen" && verb === "edit") { openStellen((await api(`/api/stellen/${encodeURIComponent(id)}`))); return; }
+  if (kind === "stellen" && verb === "delete") {
+    if (!confirm(`Stelle ${id} wirklich loeschen?`)) return;
+    return requestAndRender(`/api/stellen/${encodeURIComponent(id)}`, "DELETE");
+  }
   await requestAndRender(path, "POST", body);
 }
 async function requestAndRender(path, method, body) {
@@ -293,6 +308,29 @@ $("user-form").addEventListener("submit", async (event) => {
   if (await requestAndRender(edit ? `/api/users/${encodeURIComponent(edit)}` : "/api/users", edit ? "PUT" : "POST", JSON.stringify(payload))) $("user-dialog").close();
 });
 $("user-cancel").onclick = () => $("user-dialog").close();
+function openStellen(item = null) {
+  const form = $("stellen-form");
+  form.reset();
+  form.title.value = item?.title || "";
+  form.department.value = item?.department || "";
+  form.description.value = item?.description || "";
+  form.status.value = item?.status || "offen";
+  form.dataset.edit = item?.id || "";
+  $("stellen-dialog").showModal();
+}
+$("stellen-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    title: form.title.value.trim(),
+    department: form.department.value.trim(),
+    description: form.description.value.trim(),
+    status: form.status.value,
+  };
+  const edit = form.dataset.edit;
+  if (await requestAndRender(edit ? `/api/stellen/${encodeURIComponent(edit)}` : "/api/stellen", edit ? "PUT" : "POST", JSON.stringify(payload))) $("stellen-dialog").close();
+});
+
 $("mcp-instance-form").package_id.addEventListener("change", (event) => { $("mcp-instance-form").version.value = event.target.value.split("|")[1] || ""; });
 document.querySelectorAll("[data-close]").forEach((button) => { button.onclick = () => $(button.dataset.close).close(); });
 $("content").addEventListener("click", (event) => { const button = event.target.closest("[data-action]"); if (button) action(button.dataset.action); });

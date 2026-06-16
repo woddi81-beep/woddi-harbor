@@ -113,6 +113,16 @@
     </div>
     <pre id="discovery-result" class="discovery-result"></pre>
   </dialog>
+  <dialog id="stellen-dialog">
+    <form id="stellen-form" class="stack">
+      <h3>Stelle bearbeiten</h3>
+      <label>Titel<input name="title" required></label>
+      <label>Abteilung<input name="department"></label>
+      <label>Beschreibung<textarea name="description" rows="4"></textarea></label>
+      <label>Status<select name="status"><option value="offen">Offen</option><option value="besetzt">Besetzt</option><option value="geschlossen">Geschlossen</option></select></label>
+      <div class="row"><button class="primary">Speichern</button><button type="button" data-close="stellen-dialog">Abbrechen</button></div>
+    </form>
+  </dialog>
   <script src="/static/admin.js" defer></script>
 </body>
 </html>

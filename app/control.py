@@ -73,6 +73,8 @@ from .observability import prometheus_metrics, request_finished, request_started
 from .services import health_check_service, list_service_profiles, service_action
 from .sources import source_overview
 from .state import (
+    list_stellen,
+    seed_stellen,
     append_chat_message,
     create_chat_session,
     delete_chat_session,
@@ -854,6 +856,7 @@ def create_app() -> FastAPI:
     def readiness() -> JSONResponse:
         settings = load_settings()
         database = initialize_database()
+        seed_stellen()
         llm = _llm_health(settings)
         users_configured = bool(load_users())
         payload = {
@@ -1471,5 +1474,41 @@ def create_app() -> FastAPI:
         if module is None:
             raise HTTPException(status_code=404, detail="Modul nicht gefunden.")
         return module_status(module)
+
+
+    @app.get("/api/stellen")
+    def stellen_list(_user=require_role("viewer")) -> dict[str, Any]:
+        return {"stellen": list_stellen()}
+
+    @app.post("/api/stellen")
+    async def stellen_create(request: Request, _user=require_role("operator")) -> dict[str, Any]:
+        data = await request.json()
+        if not data.get("title"):
+            raise HTTPException(status_code=400, detail="Titel erforderlich.")
+        id = create_stellen(data)
+        record_audit(_user["username"], "stellen.create", id, "success", {})
+        return {"id": id, "message": "Stelle angelegt."}
+
+    @app.get("/api/stellen/{stellen_id}")
+    def stellen_get(stellen_id: str, _user=require_role("viewer")) -> dict[str, Any]:
+        item = get_stellen(stellen_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Stelle nicht gefunden.")
+        return item
+
+    @app.put("/api/stellen/{stellen_id}")
+    async def stellen_update(stellen_id: str, request: Request, _user=require_role("operator")) -> dict[str, Any]:
+        data = await request.json()
+        if not update_stellen(stellen_id, data):
+            raise HTTPException(status_code=404, detail="Stelle nicht gefunden.")
+        record_audit(_user["username"], "stellen.update", stellen_id, "success", {})
+        return {"message": "Stelle aktualisiert."}
+
+    @app.delete("/api/stellen/{stellen_id}")
+    def stellen_delete(stellen_id: str, _user=require_role("operator")) -> dict[str, Any]:
+        if not delete_stellen(stellen_id):
+            raise HTTPException(status_code=404, detail="Stelle nicht gefunden.")
+        record_audit(_user["username"], "stellen.delete", stellen_id, "success", {})
+        return {"message": "Stelle geloescht."}
 
     return app

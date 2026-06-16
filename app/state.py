@@ -59,7 +59,17 @@ def initialize_database() -> Path:
         try:
             connection.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS schema_meta (
+                                CREATE TABLE IF NOT EXISTS stellen (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    department TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'offen',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_stellen_status ON stellen(status);
+CREATE TABLE IF NOT EXISTS schema_meta (
                     version INTEGER NOT NULL,
                     applied_at REAL NOT NULL
                 );
@@ -552,3 +562,86 @@ def list_jobs(limit: int = 100) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+def list_stellen() -> list[dict[str, Any]]:
+    initialize_database()
+    with read_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM stellen ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_stellen(id: str) -> dict[str, Any] | None:
+    initialize_database()
+    with read_connection() as connection:
+        row = connection.execute("SELECT * FROM stellen WHERE id=?", (id,)).fetchone()
+    return dict(row) if row else None
+
+
+def create_stellen(data: dict[str, Any]) -> str:
+    initialize_database()
+    import uuid
+    now = time.time()
+    id = data.get("id") or str(uuid.uuid4())[:8]
+    connection = _connect()
+    try:
+        connection.execute(
+            "INSERT INTO stellen (id, title, department, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, data["title"], data.get("department", ""), data.get("description", ""), data.get("status", "offen"), now, now)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return id
+
+
+def update_stellen(id: str, data: dict[str, Any]) -> bool:
+    initialize_database()
+    now = time.time()
+    connection = _connect()
+    try:
+        connection.execute(
+            "UPDATE stellen SET title=?, department=?, description=?, status=?, updated_at=? WHERE id=?",
+            (data["title"], data.get("department", ""), data.get("description", ""), data.get("status", "offen"), now, id)
+        )
+        connection.commit()
+        return connection.total_changes > 0
+    finally:
+        connection.close()
+
+
+def delete_stellen(id: str) -> bool:
+    initialize_database()
+    connection = _connect()
+    try:
+        connection.execute("DELETE FROM stellen WHERE id=?", (id,))
+        connection.commit()
+        return connection.total_changes > 0
+    finally:
+        connection.close()
+
+
+def seed_stellen() -> None:
+    initialize_database()
+    with read_connection() as connection:
+        existing = connection.execute("SELECT COUNT(*) FROM stellen").fetchone()
+    if existing and existing[0] > 0:
+        return
+    now = time.time()
+    items = [
+        {"id": "stellen-1", "title": "System Engineer (m/w/d) – Linux & Infrastructure", "department": "IT-Infrastruktur", "description": "Betreuung und Weiterentwicklung unserer Linux-basierten Infrastruktur. Erfahrung mit Docker, Kubernetes und CI/CD wuenschenswert.", "status": "offen"},
+        {"id": "stellen-2", "title": "Python Backend Developer (m/w/d)", "department": "Softwareentwicklung", "description": "Entwicklung von Microservices und APIs mit Python/FastAPI. Kenntnisse in PostgreSQL und asynchroner Programmierung von Vorteil.", "status": "offen"},
+        {"id": "stellen-3", "title": "Technical Writer / Dokumentationsengineer (m/w/d)", "department": "Dokumentation", "description": "Erstellung und Pflege technischer Dokumentation fuer Infrastruktur und Betrieb. Erfahrung mit Markdown und Docs-as-Code von Vorteil.", "status": "besetzt"},
+    ]
+    connection = _connect()
+    try:
+        for item in items:
+            connection.execute(
+                "INSERT INTO stellen (id, title, department, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (item["id"], item["title"], item["department"], item["description"], item["status"], now, now)
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
