@@ -238,20 +238,20 @@ def _format_netbox_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status == 401:
-            return "Authentifizierung fehlgeschlagen (HTTP 401). Prüfe das NetBox-API-Token."
+            return "Authentication failed (HTTP 401). Check the NetBox API token."
         if status == 403:
-            return "Zugriff verweigert (HTTP 403). Token hat keine Berechtigung für diese Ressource."
+            return "Access denied (HTTP 403). Token lacks permission for this resource."
         if status == 404:
-            return "Ressource nicht gefunden (HTTP 404). Prüfe URL und REST-Pfad."
+            return "Resource not found (HTTP 404). Check URL and REST path."
         if status == 429:
-            return "Rate-Limit erreicht (HTTP 429). Warte kurz und versuche es erneut."
+            return "Rate limit reached (HTTP 429). Wait a moment and try again."
         if status >= 500:
-            return f"NetBox-Server-Fehler (HTTP {status}). Server-Probleme — später erneut versuchen."
+            return f"NetBox server error (HTTP {status}). Server-side issue — try again later."
         return f"HTTP {status}: {exc}"
     if isinstance(exc, httpx.TimeoutException):
-        return f"Zeitüberschreitung. NetBox hat nicht rechtzeitig geantwortet."
+        return f"Request timed out. NetBox did not respond in time."
     if isinstance(exc, httpx.ConnectError):
-        return f"NetBox nicht erreichbar: {exc}"
+        return f"NetBox is unreachable: {exc}"
     return f"{type(exc).__name__}: {exc}"
 
 class NetBoxBackend:
@@ -300,13 +300,13 @@ class NetBoxBackend:
                 response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
             except httpx.TimeoutException:
                 raise TimeoutError(
-                    f"Zeitüberschreitung bei NetBox (URL: {url}). "
-                    f"Server antwortet nicht oder ist überlastet."
+                    f"Request timed out connecting to NetBox (URL: {url}). "
+                    f"Server not responding or overloaded."
                 ) from None
             except httpx.ConnectError as e:
                 raise ConnectionError(
-                    f"Verbindung zu NetBox fehlgeschlagen (URL: {url}). "
-                    f"Server nicht erreichbar — prüfe URL und Netzwerk. Fehler: {e}"
+                    f"Connection to NetBox failed (URL: {url}). "
+                    f"Server unreachable — check URL and network. Error: {e}"
                 ) from None
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
@@ -329,7 +329,7 @@ class NetBoxBackend:
                 ) from None
             except Exception as e:
                 raise RuntimeError(
-                    f"NetBox-Anfrage fehlgeschlagen (URL: {url}): {type(e).__name__}: {e}"
+                    f"NetBox request failed (URL: {url}): {type(e).__name__}: {e}"
                 ) from None
 
             if len(response.content) > MAX_RESPONSE_BYTES:

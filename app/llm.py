@@ -69,12 +69,12 @@ def _format_llm_error(exc: Exception, timeout_seconds: float) -> str:
     import httpx
     if isinstance(exc, httpx.TimeoutException):
         return (
-            f"Zeitüberschreitung nach {timeout_seconds}s. "
-            f"Der LLM-Server hat nicht rechtzeitig geantwortet. "
-            f"Erhöhe den Timeout oder prüfe die Server-Last."
+            f"Request timed out after {timeout_seconds}s. "
+            f"The LLM server did not respond in time. "
+            f"Increase the timeout or check server load."
         )
     if isinstance(exc, httpx.ConnectError):
-        return f"Verbindung fehlgeschlagen. Der LLM-Server ist nicht erreichbar: {exc}"
+        return f"Connection failed. LLM server is unreachable: {exc}"
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         try:
@@ -84,9 +84,9 @@ def _format_llm_error(exc: Exception, timeout_seconds: float) -> str:
                 return f"HTTP {status}: {msg}"
         except Exception:
             pass
-        return f"HTTP {status} {exc.response.reason_phrase}. Server antwortet mit Fehler."
+        return f"HTTP {status} {exc.response.reason_phrase}. Server returned an error."
     if isinstance(exc, ValueError):
-        return f"Konfigurationsfehler: {exc}"
+        return f"Configuration error: {exc}"
     return f"{type(exc).__name__}: {exc}"
 
 
