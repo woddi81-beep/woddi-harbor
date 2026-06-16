@@ -176,7 +176,7 @@ def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> d
                 if attempt + 1 >= _attempts(settings) or not _retryable(exc):
                     raise
                 _backoff(attempt)
-    raise RuntimeError(_format_llm_error(last_error, _timeout(settings).timeout))
+    raise RuntimeError(_format_llm_error(last_error, _timeout(settings).read))
 
 
 def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Iterator[str]:
@@ -229,5 +229,5 @@ def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Ite
                 return
             except Exception as exc:
                 if yielded or attempt + 1 >= _attempts(settings) or not _retryable(exc):
-                    raise RuntimeError(_format_llm_error(exc, _timeout(settings).timeout))
+                    raise RuntimeError(_format_llm_error(exc, _timeout(settings).read))
                 _backoff(attempt)
