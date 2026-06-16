@@ -89,15 +89,36 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         "timeout": _timeout_seconds(credentials),
         "connect_retries": 1,
     }
+
+    password = credentials.get("OS_PASSWORD", "").strip()
+    username = credentials.get("OS_USERNAME", "").strip()
     token = credentials.get("OS_TOKEN", "").strip()
-    if not token:
-        raise ValueError("OS_TOKEN fehlt. Harbor unterstuetzt fuer OpenStack ausschliesslich User-Tokens.")
-    options.update(
-        {
+
+    if password and username:
+        # Password-based auth with project scope (recommended)
+        options.update({
+            "auth_type": "password",
+            "auth_method": "v3password",
+            "username": username,
+            "password": password,
+            "user_domain_name": credentials.get("OS_USER_DOMAIN_NAME") or credentials.get("OS_DOMAIN_NAME") or "Default",
+            "project_name": credentials.get("OS_PROJECT_NAME") or credentials.get("OS_PROJECT_ID") or "",
+            "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default",
+        })
+    elif token:
+        # Token-based auth (legacy)
+        options.update({
             "auth_type": "token",
             "token": token,
-        }
-    )
+            "project_name": credentials.get("OS_PROJECT_NAME") or None,
+            "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or None,
+        })
+    else:
+        raise ValueError(
+            "OpenStack: Entweder OS_TOKEN oder OS_PASSWORD+OS_USERNAME angeben. "
+            "Password+Project ist empfohlen fuer projekt-gescoped Tokens."
+        )
+
     return Connection(**{key: value for key, value in options.items() if value is not None})
 
 
@@ -242,8 +263,8 @@ class OpenStackBackend:
             project_scoped = bool(getattr(access, "project_scoped", project_id))
             if not project_scoped or not project_id or not access.has_service_catalog():
                 raise RuntimeError(
-                    "OpenStack User-Token ist nicht projektgescoped. "
-                    "Erzeuge den Token im Zielprojekt; Harbor nimmt kein separates Projekt und fuehrt kein Rescoping durch."
+                    "OpenStack Authentifizierung fehlgeschlagen. "
+                    "Pruefe OS_AUTH_URL, OS_USERNAME, OS_PASSWORD, OS_PROJECT_NAME und OS_PROJECT_DOMAIN_NAME."
                 )
             self._project_context = {"id": project_id, "name": project_name}
             self._connection = connection
@@ -368,9 +389,9 @@ class OpenStackBackend:
             "server": SERVER_NAME,
             "backend": "openstacksdk",
             "openstack_sdk": openstack_sdk_available(),
-            "auth_configured": bool(self.credentials.get("OS_AUTH_URL") and self.credentials.get("OS_TOKEN")),
+            "auth_configured": bool(self.credentials.get("OS_AUTH_URL") and (self.credentials.get("OS_TOKEN") or (self.credentials.get("OS_USERNAME") and self.credentials.get("OS_PASSWORD")))),
             "timeout_seconds": _timeout_seconds(self.credentials),
-            "scope_mode": "token_project",
+            "scope_mode": "password_project" if self.credentials.get("OS_PASSWORD") else "token_project",
             "credential_mode": "user_token",
             "project": self._project_context or None,
             "error": error or None,
@@ -936,7 +957,7 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
             "openstack_sdk": openstack_sdk_available(),
             "auth_configured": bool(base_credentials.get("OS_AUTH_URL")),
             "timeout_seconds": _timeout_seconds(base_credentials),
-            "scope_mode": "token_project",
+            "scope_mode": "password_project" if self.credentials.get("OS_PASSWORD") else "token_project",
             "credential_mode": "per_user_request_token",
             "tool_count": len(_tool_schema()),
             "cache": registry.stats(),
