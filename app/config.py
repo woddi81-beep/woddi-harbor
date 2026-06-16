@@ -57,7 +57,7 @@ class LlmSettings:
     model: str = ""
     api_key: str = ""
     api_key_env: str = ""
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 120.0
     connect_timeout_seconds: float = 5.0
     retry_attempts: int = 3
     max_tokens: int = 1200
@@ -284,7 +284,7 @@ def load_settings() -> HarborSettings:
         model=str(llm_payload.get("model", "")),
         api_key=str(llm_payload.get("api_key", "")),
         api_key_env=str(llm_payload.get("api_key_env", "")),
-        timeout_seconds=float(llm_payload.get("timeout_seconds", 60.0)),
+        timeout_seconds=float(llm_payload.get("timeout_seconds", 120.0)),
         connect_timeout_seconds=float(llm_payload.get("connect_timeout_seconds", 5.0)),
         retry_attempts=max(1, min(5, int(llm_payload.get("retry_attempts", 3)))),
         max_tokens=int(llm_payload.get("max_tokens", 1200)),
