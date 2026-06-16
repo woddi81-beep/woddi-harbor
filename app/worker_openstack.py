@@ -12,14 +12,21 @@ from .mcp.openstack import create_app
 from .worker_security import install_worker_auth
 
 
-def _openstack_credentials() -> dict[str, str]:
-    from app.state import load_user_named_secret, load_module_named_secret
+def _openstack_credentials(module_id: str) -> dict[str, str]:
+    """Read OpenStack credentials from module.settings (set by admin UI)."""
+    from app.config import find_module
+    import os
+
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Modul nicht gefunden: {module_id}")
+
+    settings = module.settings or {}
     fields = {
         "OS_AUTH_URL": "",
         "OS_REGION_NAME": "",
         "OS_INTERFACE": "",
         "OS_TIMEOUT": "30",
-        "OS_AUTH_TYPE": "token",
         "OS_TOKEN": "",
         "OS_USERNAME": "",
         "OS_PASSWORD": "",
@@ -27,22 +34,22 @@ def _openstack_credentials() -> dict[str, str]:
         "OS_USER_DOMAIN_NAME": "Default",
         "OS_PROJECT_DOMAIN_NAME": "Default",
     }
-    import os
 
+    # Env vars as fallback
     resolved = {key: os.getenv(key, "").strip() for key in fields}
-    if not resolved["OS_AUTH_URL"]:
-        raise ValueError("OS_AUTH_URL fehlt.")
 
-    # Load per-user credentials (password auth takes priority over token)
-    try:
-        resolved["OS_USERNAME"] = load_user_named_secret(None, "openstack_username") or resolved.get("OS_USERNAME", "")
-        resolved["OS_PASSWORD"] = load_user_named_secret(None, "openstack_password") or resolved.get("OS_PASSWORD", "")
-        resolved["OS_PROJECT_NAME"] = load_user_named_secret(None, "openstack_project_name") or resolved.get("OS_PROJECT_NAME", "")
-        resolved["OS_USER_DOMAIN_NAME"] = load_user_named_secret(None, "openstack_user_domain") or resolved.get("OS_USER_DOMAIN_NAME", "Default")
-        resolved["OS_PROJECT_DOMAIN_NAME"] = load_user_named_secret(None, "openstack_project_domain") or resolved.get("OS_PROJECT_DOMAIN_NAME", "Default")
-        resolved["OS_TOKEN"] = load_user_named_secret(None, "openstack_token") or resolved.get("OS_TOKEN", "")
-    except Exception:
-        pass
+    # Module settings override env vars
+    resolved["OS_AUTH_URL"] = settings.get("auth_url") or os.getenv("OS_AUTH_URL", "").strip()
+    resolved["OS_REGION_NAME"] = settings.get("region_name") or os.getenv("OS_REGION_NAME", "").strip()
+    resolved["OS_TOKEN"] = settings.get("token") or os.getenv("OS_TOKEN", "").strip()
+    resolved["OS_USERNAME"] = settings.get("username") or os.getenv("OS_USERNAME", "").strip()
+    resolved["OS_PASSWORD"] = settings.get("password") or os.getenv("OS_PASSWORD", "").strip()
+    resolved["OS_PROJECT_NAME"] = settings.get("project_name") or os.getenv("OS_PROJECT_NAME", "").strip()
+    resolved["OS_USER_DOMAIN_NAME"] = settings.get("user_domain_name") or os.getenv("OS_USER_DOMAIN_NAME", "Default").strip()
+    resolved["OS_PROJECT_DOMAIN_NAME"] = settings.get("project_domain_name") or os.getenv("OS_PROJECT_DOMAIN_NAME", "Default").strip()
+
+    if not resolved["OS_AUTH_URL"]:
+        raise ValueError("OS_AUTH_URL fehlt. Bitte im Admin-UI konfigurieren.")
 
     return resolved
 
@@ -51,7 +58,7 @@ def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
-    return install_worker_auth(create_app(_openstack_credentials()))
+    return install_worker_auth(create_app(_openstack_credentials(module_id)))
 
 
 def _install_signal_handlers(server: uvicorn.Server) -> dict[int, Any]:
