@@ -962,7 +962,6 @@ def create_app() -> FastAPI:
             "token_configured": bool(load_user_named_secret(_user.username, "openstack_token")),
             "token_owner": _user.username,
             "can_configure": _user.role in {"operator", "admin"},
-            "scope_mode": "password_project" if use_password else "token_project",
             "credential_mode": "per_user",
         }
 
@@ -1048,7 +1047,7 @@ def create_app() -> FastAPI:
             actor=_user.username,
             detail={
                 "auth_url": body.auth_url.strip(),
-                "scope_mode": "password_project" if use_password else "token_project",
+                
             },
         )
         return {
