@@ -172,7 +172,8 @@ def _print_update_result(result: dict[str, object]) -> None:
     elif result.get("ok"):
         console.print("[harbor] Git-Update: bereits aktuell")
     else:
-        console.print(f"[harbor] Git-Update fehlgeschlagen: {result.get('reason') or result.get('stderr')}")
+        detail = result.get("stderr") or result.get("reason") or "unknown"
+        console.print(f"[harbor] Git-Update fehlgeschlagen: {detail}")
 
 
 def _exec_serve(host: Optional[str], port: Optional[int]) -> None:

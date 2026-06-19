@@ -17,7 +17,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=__HARBOR_WORKDIR__/config __HARBOR_WORKDIR__/data
+ReadWritePaths=__HARBOR_WORKDIR__
 
 [Install]
 WantedBy=default.target

@@ -32,3 +32,4 @@ def test_harbor_systemd_unit_uses_autostart_update_entrypoint() -> None:
     content = template.read_text(encoding="utf-8")
 
     assert "woddi-harbor autostart" in content
+    assert "ReadWritePaths=__HARBOR_WORKDIR__" in content
