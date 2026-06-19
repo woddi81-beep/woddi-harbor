@@ -174,6 +174,33 @@ class UnscopedConnection(Connection):
         )()
 
 
+class ProjectScopedNoCatalogConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session = type(
+            "Session",
+            (),
+            {
+                "auth": type(
+                    "Auth",
+                    (),
+                    {
+                        "get_access": lambda _self, _session: type(
+                            "Access",
+                            (),
+                            {
+                                "project_id": "project-1",
+                                "project_name": "production",
+                                "project_scoped": True,
+                                "has_service_catalog": lambda _self: False,
+                            },
+                        )()
+                    },
+                )()
+            },
+        )()
+
+
 class McpBackendTests(unittest.TestCase):
     def test_netbox_health_does_not_block_on_upstream_discovery(self) -> None:
         with patch.object(
@@ -419,6 +446,20 @@ class McpBackendTests(unittest.TestCase):
         self.assertFalse(diagnostics["token_scope"]["project_scoped"])
         self.assertFalse(diagnostics["token_scope"]["has_service_catalog"])
         self.assertTrue(diagnostics["credentials"]["token_present"])
+
+    def test_openstack_project_token_without_catalog_is_allowed(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: ProjectScopedNoCatalogConnection(),
+        )
+
+        result = backend.call_tool("list_servers", {"status": "ACTIVE"})
+        health = backend.health()
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
+        self.assertFalse(health["project"]["has_service_catalog"])
+        self.assertIn("no Keystone service catalog", health["warnings"][0])
+        self.assertIn("warnings", result["structuredContent"])
 
     def test_openstack_exposes_bounded_volume_listing(self) -> None:
         connection = Connection()

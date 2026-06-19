@@ -224,36 +224,79 @@ class FakeOpenStackNetwork:
 
 
 class FakeOpenStackAccess:
-    def __init__(self, has_catalog: bool = True, *, project_id: str = "project-1", project_name: str = "production") -> None:
+    def __init__(
+        self,
+        has_catalog: bool = True,
+        *,
+        project_id: str = "project-1",
+        project_name: str = "production",
+        project_scoped: bool | None = None,
+    ) -> None:
         self._has_catalog = has_catalog
-        self.project_id = project_id if has_catalog else ""
-        self.project_name = project_name if has_catalog else ""
-        self.project_scoped = bool(self.project_id)
+        self.project_id = project_id
+        self.project_name = project_name
+        self.project_scoped = bool(project_id) if project_scoped is None else project_scoped
 
     def has_service_catalog(self) -> bool:
         return self._has_catalog
 
 
 class FakeOpenStackAuth:
-    def __init__(self, has_catalog: bool = True) -> None:
-        self.access = FakeOpenStackAccess(has_catalog)
+    def __init__(
+        self,
+        has_catalog: bool = True,
+        *,
+        project_id: str = "project-1",
+        project_name: str = "production",
+        project_scoped: bool | None = None,
+    ) -> None:
+        self.access = FakeOpenStackAccess(
+            has_catalog,
+            project_id=project_id,
+            project_name=project_name,
+            project_scoped=project_scoped,
+        )
 
     def get_access(self, _session: object) -> FakeOpenStackAccess:
         return self.access
 
 
 class FakeOpenStackSession:
-    def __init__(self, has_catalog: bool = True) -> None:
-        self.auth = FakeOpenStackAuth(has_catalog)
+    def __init__(
+        self,
+        has_catalog: bool = True,
+        *,
+        project_id: str = "project-1",
+        project_name: str = "production",
+        project_scoped: bool | None = None,
+    ) -> None:
+        self.auth = FakeOpenStackAuth(
+            has_catalog,
+            project_id=project_id,
+            project_name=project_name,
+            project_scoped=project_scoped,
+        )
 
 
 class FakeOpenStackConnection:
-    def __init__(self, *, has_catalog: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        has_catalog: bool = True,
+        project_id: str = "project-1",
+        project_name: str = "production",
+        project_scoped: bool | None = None,
+    ) -> None:
         self.compute = FakeOpenStackCompute()
         self.identity = FakeOpenStackIdentity()
         self.image = FakeOpenStackImage()
         self.network = FakeOpenStackNetwork()
-        self.session = FakeOpenStackSession(has_catalog)
+        self.session = FakeOpenStackSession(
+            has_catalog,
+            project_id=project_id,
+            project_name=project_name,
+            project_scoped=project_scoped,
+        )
 
     def authorize(self) -> str:
         return "token"
@@ -565,10 +608,29 @@ class ModuleTests(unittest.TestCase):
         rows = result["structuredContent"]["data"]
         self.assertEqual(rows, [{"id": "network-1", "name": "private"}])
 
+    def test_openstack_backend_allows_project_token_without_catalog(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "project-token"},
+            connection_factory=lambda _credentials: FakeOpenStackConnection(has_catalog=False),
+        )
+
+        result = backend.call_tool("list_servers", {"status": "ACTIVE"})
+        health = backend.health()
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod-api-01")
+        self.assertFalse(health["project"]["has_service_catalog"])
+        self.assertIn("no Keystone service catalog", health["warnings"][0])
+        self.assertIn("warnings", result["structuredContent"])
+
     def test_openstack_backend_rejects_unscoped_token(self) -> None:
         backend = OpenStackBackend(
             credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "unscoped-token"},
-            connection_factory=lambda _credentials: FakeOpenStackConnection(has_catalog=False),
+            connection_factory=lambda _credentials: FakeOpenStackConnection(
+                has_catalog=False,
+                project_id="",
+                project_name="",
+                project_scoped=False,
+            ),
         )
 
         with self.assertRaisesRegex(RuntimeError, "nicht projektgescoped"):

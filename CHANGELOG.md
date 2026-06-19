@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.5 - 2026-06-19
+
+### Fixed
+
+- OpenStack project-scoped tokens without a Keystone service catalog are now
+  accepted instead of being rejected during MCP auth validation.
+- OpenStack health and MCP tool responses now expose a catalog warning when the
+  token has project context but no service catalog, so endpoint-discovery
+  failures can be diagnosed without hiding the valid token scope.
+- Tests now cover project-scoped/no-catalog tokens separately from truly
+  unscoped tokens.
+
 ## 0.6.4 - 2026-06-19
 
 ### Added

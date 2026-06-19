@@ -27,6 +27,11 @@ OPENSTACK_TOKEN_HEADER = "X-Harbor-OpenStack-Token"
 OPENSTACK_USER_HEADER = "X-Harbor-User"
 USER_BACKEND_IDLE_TTL_SECONDS = 4 * 60 * 60
 MAX_USER_BACKENDS = 128
+CATALOGLESS_TOKEN_WARNING = (
+    "OpenStack token is project-scoped but has no Keystone service catalog; "
+    "Harbor accepts the project context, but individual service calls may fail "
+    "if the SDK cannot discover service endpoints."
+)
 RESOURCE_CATALOG: dict[str, dict[str, str]] = {
     "server": {"service": "compute", "tool": "list_servers"},
     "project": {"service": "identity", "tool": "list_projects"},
@@ -107,12 +112,18 @@ def _diagnostic_payload(
         hints.append("Identity/Auth URL, DNS, Routing und Firewall pruefen.")
     if "timeout" in lower_message or "timed out" in lower_message:
         hints.append("Keystone oder ein OpenStack-Service hat nicht innerhalb des konfigurierten Timeouts geantwortet.")
-    if "unscoped" in lower_message or "project-scoped" in lower_message or "service catalog" in lower_message:
+    if "unscoped" in lower_message or "project-scoped" in lower_message:
         hints.append(
-            "Der Token muss projektgescopt sein und einen Service-Katalog enthalten; "
+            "Der Token muss projektgescopt sein; "
             "bei token-only kann Harbor den Projektkontext nicht nachtraeglich setzen."
         )
         hints.append("Wenn nur Token erlaubt sind: Token direkt im Zielprojekt erzeugen/ausstellen lassen.")
+    if "service catalog" in lower_message:
+        hints.append(
+            "Ein projektgescopter Token ohne Service-Katalog wird als Auth-Kontext akzeptiert; "
+            "einzelne OpenStack-Serviceaufrufe koennen aber bei Endpoint-Discovery scheitern."
+        )
+        hints.append("OS_AUTH_URL, OS_REGION_NAME, OS_INTERFACE und die Provider-Endpoint-Policy pruefen.")
     if not hints:
         hints.append("OpenStack-Fehler im SDK/Service-Katalog pruefen; Detail steht in message und error_type.")
     payload: dict[str, Any] = {
@@ -291,7 +302,7 @@ class OpenStackBackend:
     connection_factory: Callable[[dict[str, str]], Any] = create_openstack_connection
     _cache: BoundedTTLCache[Any] = field(init=False, repr=False)
     _connection: Any = field(default=None, init=False, repr=False)
-    _project_context: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _project_context: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _connection_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -381,24 +392,22 @@ class OpenStackBackend:
                 ) from exc
             project_id = str(getattr(access, "project_id", "") or "").strip()
             project_name = str(getattr(access, "project_name", "") or "").strip()
-            project_scoped = bool(getattr(access, "project_scoped", project_id))
-            has_service_catalog = bool(access.has_service_catalog())
+            project_scoped = bool(getattr(access, "project_scoped", False) or project_id)
+            catalog_probe = getattr(access, "has_service_catalog", None)
+            has_service_catalog = bool(catalog_probe()) if callable(catalog_probe) else False
             token_scope = {
                 "project_scoped": project_scoped,
                 "project_id": project_id or None,
                 "project_name": project_name or None,
                 "has_service_catalog": has_service_catalog,
             }
-            if not project_scoped or not project_id or not has_service_catalog:
+            if not project_scoped:
                 msg = "OpenStack token ist nicht projektgescoped / not project-scoped. "
-                if not project_scoped:
-                    msg += (
-                        "Create the token directly in the target project (OpenStack CLI: "
-                        "'openstack token issue --project <name>') or use "
-                        "Username+Password instead of token auth. "
-                    )
-                if not has_service_catalog:
-                    msg += "The Keystone token response has no usable service catalog. "
+                msg += (
+                    "Create the token directly in the target project (OpenStack CLI: "
+                    "'openstack token issue --project <name>') or use "
+                    "Username+Password instead of token auth. "
+                )
                 msg += "Check OS_AUTH_URL and the token issuer/scope."
                 raise OpenStackDiagnosticError(
                     msg,
@@ -410,9 +419,30 @@ class OpenStackBackend:
                         access=token_scope,
                     ),
                 )
-            self._project_context = {"id": project_id, "name": project_name}
+            self._project_context = {
+                "id": project_id or None,
+                "name": project_name or None,
+                "project_scoped": project_scoped,
+                "has_service_catalog": has_service_catalog,
+            }
             self._connection = connection
         return self._connection
+
+    def _warnings(self) -> list[str]:
+        warnings: list[str] = []
+        if self._project_context.get("has_service_catalog") is False:
+            warnings.append(CATALOGLESS_TOKEN_WARNING)
+        if self._project_context and not self._project_context.get("id"):
+            warnings.append("OpenStack token is scoped, but Keystone did not return a project id.")
+        return warnings
+
+    def _token_scope_diagnostics(self) -> dict[str, Any]:
+        return {
+            "project_id": self._project_context.get("id") or None,
+            "project_name": self._project_context.get("name") or None,
+            "project_scoped": self._project_context.get("project_scoped"),
+            "has_service_catalog": self._project_context.get("has_service_catalog"),
+        }
 
     def _cached(self, operation: str, arguments: dict[str, Any], loader: Callable[[], Any]) -> Any:
         cache_key = json.dumps([operation, arguments], ensure_ascii=False, sort_keys=True, default=str)
@@ -437,10 +467,7 @@ class OpenStackBackend:
                             phase="sdk_operation",
                             message=message,
                             exc=exc,
-                            access={
-                                "project_id": self._project_context.get("id") or None,
-                                "project_name": self._project_context.get("name") or None,
-                            },
+                            access=self._token_scope_diagnostics(),
                         ),
                     ) from exc
                 auth_url = self.credentials.get("OS_AUTH_URL", "unbekannt")
@@ -463,10 +490,7 @@ class OpenStackBackend:
                         phase="sdk_operation",
                         message=msg,
                         exc=exc,
-                        access={
-                            "project_id": self._project_context.get("id") or None,
-                            "project_name": self._project_context.get("name") or None,
-                        },
+                        access=self._token_scope_diagnostics(),
                     ),
                 ) from exc
 
@@ -583,6 +607,7 @@ class OpenStackBackend:
             "scope_mode": "password_project" if self.credentials.get("OS_PASSWORD") else "token_project",
             "credential_mode": "user_token",
             "project": self._project_context or None,
+            "warnings": self._warnings(),
             "error": error or None,
             "error_detail": error_detail,
             "cache": self._cache.stats(),
@@ -1053,6 +1078,9 @@ class OpenStackBackend:
 
     def _tool_result(self, tool_name: str, arguments: dict[str, Any], payload: Any) -> dict[str, Any]:
         summary = {"tool": tool_name, "arguments": arguments, "data": payload}
+        warnings = self._warnings()
+        if warnings:
+            summary["warnings"] = warnings
         return {"content": [{"type": "text", "text": f"{tool_name} completed successfully."}], "structuredContent": summary}
 
 
