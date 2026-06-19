@@ -5,8 +5,10 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -52,12 +54,14 @@ from .modules import (
     execute_module,
     health_check_module,
     module_diagnostics,
+    module_field_catalog,
     module_log_path,
     module_status,
     module_test,
     parse_json_payload,
     remove_module,
     reserve_port,
+    refresh_module_field_catalog,
     restart_module,
     start_module,
     stop_module,
@@ -97,6 +101,87 @@ app.add_typer(source_app, name="source")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(server_app, name="server")
 console = Console()
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _run_capture(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
+
+
+def auto_update_checkout() -> dict[str, object]:
+    """Best-effort source update used by systemd/manual startup."""
+    root = Path(__file__).resolve().parent.parent
+    if not _bool_env("HARBOR_AUTO_UPDATE", True):
+        return {"ok": True, "skipped": True, "reason": "disabled"}
+    if not (root / ".git").exists():
+        return {"ok": True, "skipped": True, "reason": "not-a-git-checkout"}
+    if shutil.which("git") is None:
+        return {"ok": True, "skipped": True, "reason": "git-not-found"}
+
+    upstream = _run_capture(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=root)
+    if upstream.returncode != 0:
+        return {"ok": True, "skipped": True, "reason": "no-upstream"}
+
+    status = _run_capture(["git", "status", "--porcelain"], cwd=root)
+    if status.returncode != 0:
+        return {"ok": False, "skipped": True, "reason": "status-failed", "stderr": status.stderr.strip()}
+    if status.stdout.strip():
+        return {"ok": True, "skipped": True, "reason": "dirty-working-tree"}
+
+    before = _run_capture(["git", "rev-parse", "HEAD"], cwd=root)
+    pull = _run_capture(["git", "pull", "--ff-only"], cwd=root)
+    if pull.returncode != 0:
+        return {"ok": False, "changed": False, "reason": "pull-failed", "stderr": pull.stderr.strip()}
+
+    after = _run_capture(["git", "rev-parse", "HEAD"], cwd=root)
+    changed = before.stdout.strip() != after.stdout.strip()
+    install: dict[str, object] = {"ok": True, "skipped": not changed}
+    if changed:
+        completed = _run_capture([sys.executable, "-m", "pip", "install", "-e", str(root)], cwd=root)
+        install = {
+            "ok": completed.returncode == 0,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-1200:].strip(),
+            "stderr": completed.stderr[-1200:].strip(),
+        }
+    return {
+        "ok": bool(install.get("ok", True)),
+        "skipped": False,
+        "changed": changed,
+        "before": before.stdout.strip(),
+        "after": after.stdout.strip(),
+        "pull": pull.stdout.strip() or pull.stderr.strip(),
+        "install": install,
+    }
+
+
+def _print_update_result(result: dict[str, object]) -> None:
+    if result.get("skipped"):
+        reason = str(result.get("reason", "unknown"))
+        if reason != "disabled":
+            console.print(f"[harbor] Git-Update uebersprungen: {reason}")
+        return
+    if result.get("ok") and result.get("changed"):
+        console.print(f"[harbor] Git-Update angewendet: {result.get('before')} -> {result.get('after')}")
+    elif result.get("ok"):
+        console.print("[harbor] Git-Update: bereits aktuell")
+    else:
+        console.print(f"[harbor] Git-Update fehlgeschlagen: {result.get('reason') or result.get('stderr')}")
+
+
+def _exec_serve(host: Optional[str], port: Optional[int]) -> None:
+    args = [sys.executable, "-m", "app.cli", "serve"]
+    if host:
+        args.extend(["--host", host])
+    if port:
+        args.extend(["--port", str(port)])
+    os.execv(sys.executable, args)
 
 
 def _open_console(*, simple: bool = False) -> None:
@@ -478,6 +563,18 @@ def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
                 pid_path.unlink()
         except OSError:
             pass
+
+
+@app.command("autostart", hidden=True)
+def autostart(host: Optional[str] = None, port: Optional[int] = None) -> None:
+    """Update the checkout if possible, then run the Harbor control API."""
+    result = auto_update_checkout()
+    _print_update_result(result)
+    if not result.get("ok") and _bool_env("HARBOR_AUTO_UPDATE_STRICT", False):
+        raise typer.Exit(code=3)
+    if result.get("changed"):
+        _exec_serve(host, port)
+    serve(host=host, port=port)
 
 
 @server_app.command("set")
@@ -1010,6 +1107,24 @@ def module_diagnose(module_id: str, lines: int = 40) -> None:
     except Exception as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Diagnose"))
+
+
+@module_app.command("fields")
+def module_fields(
+    module_id: str,
+    refresh: bool = typer.Option(False, "--refresh", help="Refresh field cache from the upstream service"),
+    limit: int = typer.Option(25, "--limit", min=1, max=500, help="NetBox object types to describe during refresh"),
+) -> None:
+    """Show the cached NetBox/OpenStack field catalog for a module."""
+    try:
+        result = (
+            refresh_module_field_catalog(module_id, limit=limit)
+            if refresh
+            else module_field_catalog(module_id)
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Fields"))
 
 
 @module_app.command("test")

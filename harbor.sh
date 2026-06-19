@@ -145,6 +145,51 @@ install_project() {
   "$VENV_DIR/bin/python" "$ROOT_DIR/tools/verify_installation.py"
 }
 
+auto_update_checkout() {
+  local setting="${HARBOR_AUTO_UPDATE:-1}"
+  case "${setting,,}" in
+    0|false|no|off)
+      return 0
+      ;;
+  esac
+  if [[ ! -d "$ROOT_DIR/.git" ]]; then
+    log "Git-Update uebersprungen: kein Git-Checkout"
+    return 0
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    log "Git-Update uebersprungen: git nicht gefunden"
+    return 0
+  fi
+  if ! git -C "$ROOT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    log "Git-Update uebersprungen: kein Upstream konfiguriert"
+    return 0
+  fi
+  local status
+  status="$(git -C "$ROOT_DIR" status --porcelain)" || {
+    log "Git-Update uebersprungen: Status konnte nicht gelesen werden"
+    return 0
+  }
+  if [[ -n "$status" ]]; then
+    log "Git-Update uebersprungen: Working Tree ist nicht sauber"
+    return 0
+  fi
+  local before after
+  before="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  if ! git -C "$ROOT_DIR" pull --ff-only; then
+    log "Git-Update fehlgeschlagen; starte vorhandene Version"
+    if [[ "${HARBOR_AUTO_UPDATE_STRICT:-0}" =~ ^(1|true|yes|on)$ ]]; then
+      fail "Git-Update fehlgeschlagen."
+    fi
+    return 0
+  fi
+  after="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  if [[ "$before" != "$after" ]]; then
+    log "Git-Update angewendet: ${before:0:7} -> ${after:0:7}"
+  else
+    log "Git-Update: bereits aktuell"
+  fi
+}
+
 run_cli() {
   ensure_venv
   if [[ ! -x "$VENV_DIR/bin/woddi-harbor" ]]; then
@@ -158,6 +203,7 @@ run_cli() {
 }
 
 start_harbor() {
+  auto_update_checkout
   install_project
   "$VENV_DIR/bin/woddi-harbor" init >/dev/null
   local host="${HARBOR_HOST:-0.0.0.0}"

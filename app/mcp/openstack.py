@@ -64,6 +64,70 @@ def _is_timeout_error(exc: Exception) -> bool:
     return "timeout" in name or "timed out" in message
 
 
+class OpenStackDiagnosticError(RuntimeError):
+    def __init__(self, message: str, diagnostics: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
+
+
+def _credential_diagnostics(credentials: dict[str, str]) -> dict[str, Any]:
+    password_mode = bool(credentials.get("OS_USERNAME") and credentials.get("OS_PASSWORD"))
+    token_mode = bool(credentials.get("OS_TOKEN"))
+    return {
+        "auth_url": credentials.get("OS_AUTH_URL") or None,
+        "region_name": credentials.get("OS_REGION_NAME") or None,
+        "interface": credentials.get("OS_INTERFACE") or None,
+        "auth_type": "password" if password_mode else "token" if token_mode else credentials.get("OS_AUTH_TYPE") or "unknown",
+        "token_present": token_mode,
+        "username_present": bool(credentials.get("OS_USERNAME")),
+        "password_present": bool(credentials.get("OS_PASSWORD")),
+        "project_name_configured": bool(credentials.get("OS_PROJECT_NAME")),
+        "project_id_configured": bool(credentials.get("OS_PROJECT_ID")),
+        "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or None,
+        "timeout_seconds": _timeout_seconds(credentials),
+    }
+
+
+def _diagnostic_payload(
+    credentials: dict[str, str],
+    *,
+    operation: str,
+    phase: str,
+    message: str,
+    exc: Exception | None = None,
+    access: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    lower_message = message.lower()
+    hints: list[str] = []
+    if not credentials.get("OS_AUTH_URL"):
+        hints.append("OS_AUTH_URL fehlt.")
+    if not credentials.get("OS_TOKEN") and not (credentials.get("OS_USERNAME") and credentials.get("OS_PASSWORD")):
+        hints.append("Es ist weder ein User-Token noch Username+Password konfiguriert.")
+    if "connection refused" in lower_message or "unreachable" in lower_message:
+        hints.append("Identity/Auth URL, DNS, Routing und Firewall pruefen.")
+    if "timeout" in lower_message or "timed out" in lower_message:
+        hints.append("Keystone oder ein OpenStack-Service hat nicht innerhalb des konfigurierten Timeouts geantwortet.")
+    if "unscoped" in lower_message or "project-scoped" in lower_message or "service catalog" in lower_message:
+        hints.append(
+            "Der Token muss projektgescopt sein und einen Service-Katalog enthalten; "
+            "bei token-only kann Harbor den Projektkontext nicht nachtraeglich setzen."
+        )
+        hints.append("Wenn nur Token erlaubt sind: Token direkt im Zielprojekt erzeugen/ausstellen lassen.")
+    if not hints:
+        hints.append("OpenStack-Fehler im SDK/Service-Katalog pruefen; Detail steht in message und error_type.")
+    payload: dict[str, Any] = {
+        "operation": operation,
+        "phase": phase,
+        "message": message,
+        "error_type": type(exc).__name__ if exc is not None else "OpenStackDiagnosticError",
+        "credentials": _credential_diagnostics(credentials),
+        "hints": hints,
+    }
+    if access is not None:
+        payload["token_scope"] = access
+    return payload
+
+
 def openstack_sdk_available() -> bool:
     try:
         import openstack  # noqa: F401
@@ -106,12 +170,11 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
             "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default",
         })
     elif token:
-        # Token-based auth (legacy)
+        # The project context must come from the token itself. Harbor does not
+        # rescope per-user tokens because users may only be allowed to provide a token.
         options.update({
             "auth_type": "token",
             "token": token,
-            "project_name": credentials.get("OS_PROJECT_NAME") or None,
-            "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or None,
         })
     else:
         raise ValueError(
@@ -246,47 +309,107 @@ class OpenStackBackend:
         with self._connection_lock:
             if self._connection is not None:
                 return self._connection
-            connection = self.connection_factory(self.credentials)
             timeout_seconds = _timeout_seconds(self.credentials)
             try:
+                connection = self.connection_factory(self.credentials)
                 connection.authorize()
                 access = connection.session.auth.get_access(connection.session)
             except Exception as exc:
+                if isinstance(exc, OpenStackDiagnosticError):
+                    raise
                 if _is_timeout_error(exc):
-                    raise RuntimeError(
-                        f"OpenStack Authentifizierung an {self.credentials['OS_AUTH_URL']} "
+                    message = (
+                        f"OpenStack Authentifizierung an {self.credentials.get('OS_AUTH_URL', 'unbekannt')} "
                         f"timed out after {timeout_seconds:.0f}s. "
                         "Check reachability and permissions."
+                    )
+                    raise OpenStackDiagnosticError(
+                        message,
+                        _diagnostic_payload(
+                            self.credentials,
+                            operation="authorize",
+                            phase="authentication",
+                            message=message,
+                            exc=exc,
+                        ),
                     ) from exc
                 auth_url = self.credentials.get("OS_AUTH_URL", "")
                 user = self.credentials.get("OS_USERNAME", "")
                 project = self.credentials.get("OS_PROJECT_NAME", "")
                 if "connection refused" in str(exc).lower():
-                    raise RuntimeError(
+                    message = (
                         f"OpenStack is unreachable (URL: {auth_url}). "
                         f"Check OS_AUTH_URL and whether the Identity service is running."
+                    )
+                    raise OpenStackDiagnosticError(
+                        message,
+                        _diagnostic_payload(
+                            self.credentials,
+                            operation="authorize",
+                            phase="authentication",
+                            message=message,
+                            exc=exc,
+                        ),
                     ) from exc
                 if "unscoped" in str(exc).lower():
-                    raise RuntimeError(
+                    message = (
                         f"OpenStack token is not project-scoped. "
                         f"Auth URL: {auth_url}, User: {user}, Project: {project}. "
                         f"Use Username+Password or create a "
                         f"project-scoped token with 'openstack token issue --project {project}'."
+                    )
+                    raise OpenStackDiagnosticError(
+                        message,
+                        _diagnostic_payload(
+                            self.credentials,
+                            operation="authorize",
+                            phase="authentication",
+                            message=message,
+                            exc=exc,
+                        ),
                     ) from exc
-                raise
+                message = f"OpenStack authentication failed: {exc}"
+                raise OpenStackDiagnosticError(
+                    message,
+                    _diagnostic_payload(
+                        self.credentials,
+                        operation="authorize",
+                        phase="authentication",
+                        message=message,
+                        exc=exc,
+                    ),
+                ) from exc
             project_id = str(getattr(access, "project_id", "") or "").strip()
             project_name = str(getattr(access, "project_name", "") or "").strip()
             project_scoped = bool(getattr(access, "project_scoped", project_id))
-            if not project_scoped or not project_id or not access.has_service_catalog():
-                msg = "OpenStack token is not project-scoped. "
+            has_service_catalog = bool(access.has_service_catalog())
+            token_scope = {
+                "project_scoped": project_scoped,
+                "project_id": project_id or None,
+                "project_name": project_name or None,
+                "has_service_catalog": has_service_catalog,
+            }
+            if not project_scoped or not project_id or not has_service_catalog:
+                msg = "OpenStack token ist nicht projektgescoped / not project-scoped. "
                 if not project_scoped:
                     msg += (
                         "Create the token directly in the target project (OpenStack CLI: "
                         "'openstack token issue --project <name>') or use "
                         "Username+Password instead of token auth. "
                     )
-                msg += "Check OS_AUTH_URL, OS_USERNAME, OS_PASSWORD, OS_PROJECT_NAME."
-                raise RuntimeError(msg)
+                if not has_service_catalog:
+                    msg += "The Keystone token response has no usable service catalog. "
+                msg += "Check OS_AUTH_URL and the token issuer/scope."
+                raise OpenStackDiagnosticError(
+                    msg,
+                    _diagnostic_payload(
+                        self.credentials,
+                        operation="authorize",
+                        phase="scope_validation",
+                        message=msg,
+                        access=token_scope,
+                    ),
+                )
             self._project_context = {"id": project_id, "name": project_name}
             self._connection = connection
         return self._connection
@@ -298,11 +421,27 @@ class OpenStackBackend:
             try:
                 return loader()
             except Exception as exc:
+                if isinstance(exc, OpenStackDiagnosticError):
+                    raise
                 if _is_timeout_error(exc):
-                    raise RuntimeError(
+                    message = (
                         f"OpenStack {operation} timed out after "
                         f"{_timeout_seconds(self.credentials):.0f}s nicht geantwortet. "
                         "Pruefe Service-Katalog, Region, Routing und Firewall."
+                    )
+                    raise OpenStackDiagnosticError(
+                        message,
+                        _diagnostic_payload(
+                            self.credentials,
+                            operation=operation,
+                            phase="sdk_operation",
+                            message=message,
+                            exc=exc,
+                            access={
+                                "project_id": self._project_context.get("id") or None,
+                                "project_name": self._project_context.get("name") or None,
+                            },
+                        ),
                     ) from exc
                 auth_url = self.credentials.get("OS_AUTH_URL", "unbekannt")
                 project = self.credentials.get("OS_PROJECT_NAME", "unbekannt")
@@ -316,7 +455,20 @@ class OpenStackBackend:
                     msg += "Token is unscoped — Username+Password or project-scoped token required."
                 else:
                     msg += f"Error: {exc}"
-                raise RuntimeError(msg) from exc
+                raise OpenStackDiagnosticError(
+                    msg,
+                    _diagnostic_payload(
+                        self.credentials,
+                        operation=operation,
+                        phase="sdk_operation",
+                        message=msg,
+                        exc=exc,
+                        access={
+                            "project_id": self._project_context.get("id") or None,
+                            "project_name": self._project_context.get("name") or None,
+                        },
+                    ),
+                ) from exc
 
         return self._cache.get_or_load(cache_key, load)
 
@@ -413,8 +565,12 @@ class OpenStackBackend:
 
     def health(self) -> dict[str, Any]:
         error = ""
+        error_detail: dict[str, Any] | None = None
         try:
             self._get_connection()
+        except OpenStackDiagnosticError as exc:
+            error = str(exc)
+            error_detail = exc.diagnostics
         except Exception as exc:
             error = str(exc)
         return {
@@ -428,6 +584,7 @@ class OpenStackBackend:
             "credential_mode": "user_token",
             "project": self._project_context or None,
             "error": error or None,
+            "error_detail": error_detail,
             "cache": self._cache.stats(),
             "tool_count": len(_tool_schema()),
         }
@@ -990,8 +1147,9 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
             "openstack_sdk": openstack_sdk_available(),
             "auth_configured": bool(base_credentials.get("OS_AUTH_URL")),
             "timeout_seconds": _timeout_seconds(base_credentials),
-            "scope_mode": "password_project" if self.credentials.get("OS_PASSWORD") else "token_project",
+            "scope_mode": "password_project" if base_credentials.get("OS_PASSWORD") else "token_project",
             "credential_mode": "per_user_request_token",
+            "credentials": _credential_diagnostics(base_credentials),
             "tool_count": len(_tool_schema()),
             "cache": registry.stats(),
         }
@@ -1044,8 +1202,22 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
             return _jsonrpc_error(request_id, -32602, "Invalid params", data=f"Missing required argument: {exc.args[0]}", status_code=400, headers=session_headers)
         except ValueError as exc:
             return _jsonrpc_error(request_id, -32602, "Invalid params", data=str(exc), status_code=400, headers=session_headers)
+        except OpenStackDiagnosticError as exc:
+            return _jsonrpc_error(
+                request_id,
+                -32003,
+                str(exc),
+                data=exc.diagnostics,
+                headers=session_headers,
+            )
         except Exception as exc:
-            return _jsonrpc_error(request_id, -32000, "Server error", data=str(exc), headers=session_headers)
+            return _jsonrpc_error(
+                request_id,
+                -32000,
+                "Server error",
+                data={"error_type": type(exc).__name__, "message": str(exc)},
+                headers=session_headers,
+            )
 
     return app
 
@@ -1054,6 +1226,7 @@ __all__ = [
     "create_app",
     "create_openstack_connection",
     "OpenStackBackend",
+    "OpenStackDiagnosticError",
     "OpenStackUserBackendRegistry",
     "MCP_PROTOCOL_VERSION",
 ]

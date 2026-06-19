@@ -25,3 +25,10 @@ def test_operational_scripts_use_harbor_wrapper() -> None:
     for path in scripts:
         content = path.read_text(encoding="utf-8")
         assert ".venv/bin/woddi-harbor" not in content, path
+
+
+def test_harbor_systemd_unit_uses_autostart_update_entrypoint() -> None:
+    template = ROOT / "systemd" / "woddi-harbor.service.tpl"
+    content = template.read_text(encoding="utf-8")
+
+    assert "woddi-harbor autostart" in content

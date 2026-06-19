@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__HARBOR_WORKDIR__
 EnvironmentFile=-__HARBOR_WORKDIR__/data/secrets/metrics.env
-ExecStart=__HARBOR_WORKDIR__/.venv/bin/woddi-harbor serve --host __HARBOR_HOST__ --port __HARBOR_PORT__
+ExecStart=__HARBOR_WORKDIR__/.venv/bin/woddi-harbor autostart --host __HARBOR_HOST__ --port __HARBOR_PORT__
 Restart=on-failure
 RestartSec=2
 Environment=MALLOC_ARENA_MAX=8

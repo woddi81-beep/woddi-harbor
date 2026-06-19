@@ -1,22 +1,35 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import httpx
+
+from app.field_cache import load_field_catalog, update_catalog_from_tool_result
 from app.mcp.netbox import NetBoxBackend
 from app.mcp.netbox import create_app as create_netbox_app
-from app.mcp.openstack import OpenStackBackend, OpenStackUserBackendRegistry
+from app.mcp.openstack import OpenStackBackend, OpenStackDiagnosticError, OpenStackUserBackendRegistry
+from app.mcp.openstack import create_app as create_openstack_app
 
 
 class FakeHTTPResponse:
-    def __init__(self, payload: object) -> None:
+    def __init__(self, payload: object, *, status_code: int = 200, reason_phrase: str = "OK") -> None:
         self.payload = payload
-        self.status_code = 200
-        self.content = b"{}"
-        self.text = "{}"
+        self.status_code = status_code
+        self.reason_phrase = reason_phrase
+        self.text = "{}" if isinstance(payload, dict) else str(payload)
+        self.content = self.text.encode("utf-8")
+        self.request = httpx.Request("GET", "https://netbox.example/api/fake/")
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code} {self.reason_phrase}",
+                request=self.request,
+                response=self,
+            )
 
     def json(self) -> object:
         return self.payload
@@ -29,7 +42,10 @@ class FakeHTTPClient:
 
     def request(self, method: str, url: str, **kwargs: object) -> FakeHTTPResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
-        return FakeHTTPResponse(self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)])
+        payload = self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)]
+        if isinstance(payload, FakeHTTPResponse):
+            return payload
+        return FakeHTTPResponse(payload)
 
     def close(self) -> None:
         return None
@@ -131,6 +147,33 @@ class Connection:
         return "token"
 
 
+class UnscopedConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session = type(
+            "Session",
+            (),
+            {
+                "auth": type(
+                    "Auth",
+                    (),
+                    {
+                        "get_access": lambda _self, _session: type(
+                            "Access",
+                            (),
+                            {
+                                "project_id": "",
+                                "project_name": "",
+                                "project_scoped": False,
+                                "has_service_catalog": lambda _self: False,
+                            },
+                        )()
+                    },
+                )()
+            },
+        )()
+
+
 class McpBackendTests(unittest.TestCase):
     def test_netbox_health_does_not_block_on_upstream_discovery(self) -> None:
         with patch.object(
@@ -144,6 +187,15 @@ class McpBackendTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["upstream_check"], "mcp_discovery")
+
+    def test_openstack_worker_health_does_not_reference_missing_self(self) -> None:
+        app = create_openstack_app({"OS_AUTH_URL": "https://identity.example/v3"})
+        health = next(route.endpoint for route in app.routes if route.path == "/health")
+        result = health()
+
+        self.assertEqual(result["scope_mode"], "token_project")
+        self.assertEqual(result["credential_mode"], "per_user_request_token")
+        self.assertIn("credentials", result)
 
     def test_openstack_registry_separates_users_and_rotates_tokens(self) -> None:
         created: list[OpenStackBackend] = []
@@ -194,6 +246,16 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(client.calls[0]["params"]["fields"], "id,name")  # type: ignore[index]
         self.assertEqual(backend._response_cache.stats()["hits"], 1)
+
+    def test_netbox_http_status_errors_are_raised_with_context(self) -> None:
+        backend = NetBoxBackend("https://netbox.example")
+        backend._client.close()
+        backend._client = FakeHTTPClient(  # type: ignore[assignment]
+            [FakeHTTPResponse({"detail": "anonymous access denied"}, status_code=403, reason_phrase="Forbidden")]
+        )
+
+        with self.assertRaisesRegex(httpx.HTTPStatusError, "NetBox HTTP 403 Forbidden"):
+            backend.call_tool("get_objects", {"object_type": "dcim.devices"})
 
     def test_netbox_rejects_cross_origin_and_write_calls(self) -> None:
         backend = NetBoxBackend("https://netbox.example")
@@ -285,6 +347,30 @@ class McpBackendTests(unittest.TestCase):
         self.assertIn("custom_fields.owner", {field["path"] for field in described["observed_fields"]})
         self.assertEqual(described["filter_parameters"][0]["name"], "status")
 
+    def test_field_catalog_caches_netbox_descriptions(self) -> None:
+        result = {
+            "structuredContent": {
+                "data": {
+                    "object_type": "dcim.devices",
+                    "endpoint": "/api/dcim/devices/",
+                    "schema_fields": [{"path": "name", "type": "string"}],
+                    "observed_fields": [{"path": "custom_fields.owner", "type": "string"}],
+                    "filter_parameters": [{"name": "status", "type": "string"}],
+                    "observed_field_count": 1,
+                }
+            }
+        }
+        with TemporaryDirectory() as tmp:
+            with patch("app.field_cache.FIELD_CACHE_DIR", Path(tmp)):
+                catalog = update_catalog_from_tool_result("netbox", "netbox", "describe_object_type", result)
+                loaded = load_field_catalog("netbox")
+
+        self.assertIsNotNone(catalog)
+        self.assertEqual(loaded["resource_count"], 1)
+        fields = {field["path"] for field in loaded["resources"]["dcim.devices"]["fields"]}
+        self.assertIn("name", fields)
+        self.assertIn("custom_fields.owner", fields)
+
     def test_netbox_inventory_statistics_use_collection_counts(self) -> None:
         backend = NetBoxBackend("https://netbox.example")
         backend._client.close()
@@ -318,6 +404,21 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual(connection.compute.server_calls, 1)
         self.assertEqual(active_full["structuredContent"]["data"][0]["token"], "[redacted]")
         self.assertEqual(active_full["structuredContent"]["data"][0]["admin_pass"], "[redacted]")
+
+    def test_openstack_unscoped_token_reports_structured_diagnostics(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: UnscopedConnection(),
+        )
+
+        with self.assertRaises(OpenStackDiagnosticError) as context:
+            backend.call_tool("list_servers", {})
+
+        diagnostics = context.exception.diagnostics
+        self.assertEqual(diagnostics["phase"], "scope_validation")
+        self.assertFalse(diagnostics["token_scope"]["project_scoped"])
+        self.assertFalse(diagnostics["token_scope"]["has_service_catalog"])
+        self.assertTrue(diagnostics["credentials"]["token_present"])
 
     def test_openstack_exposes_bounded_volume_listing(self) -> None:
         connection = Connection()
@@ -357,6 +458,23 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual([item["resource"] for item in resources], ["server", "volume"])
         self.assertIn("status", resources[0]["observed_fields"])
         self.assertTrue(all(item["available"] for item in resources))
+
+    def test_field_catalog_caches_openstack_resource_discovery(self) -> None:
+        connection = Connection()
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token", "OS_PROJECT_ID": "project-1"},
+            connection_factory=lambda _credentials: connection,
+        )
+
+        result = backend.call_tool("discover_resources", {"resources": ["server"]})
+        with TemporaryDirectory() as tmp:
+            with patch("app.field_cache.FIELD_CACHE_DIR", Path(tmp)):
+                catalog = update_catalog_from_tool_result("openstack", "openstack", "discover_resources", result)
+                loaded = load_field_catalog("openstack")
+
+        self.assertIsNotNone(catalog)
+        self.assertEqual(loaded["resource_count"], 1)
+        self.assertIn("status", {field["path"] for field in loaded["resources"]["server"]["fields"]})
 
 
 if __name__ == "__main__":

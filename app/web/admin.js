@@ -52,13 +52,19 @@ async function renderOverview() {
 async function renderModules() {
   const data = await api("/api/modules/overview");
   $("content").innerHTML = `<div class="page-actions"><div><strong>${data.modules.length} Module</strong><span class="muted">Lokale Worker und externe MCP-Dienste</span></div><div class="row"><button class="primary" data-action="module:new">Modul anlegen</button><button data-action="module:netbox">NetBox einbinden</button><button data-action="module:openstack">OpenStack einbinden</button></div></div>
-    <div class="grid">${data.modules.map((item) => card(item.name || item.id,
-      `<div class="card-status">${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.type)}</span></div>
+    <div class="grid">${data.modules.map((item) => {
+      const fieldCatalog = item.status?.field_catalog;
+      const actions = [["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`]];
+      if (["netbox_mcp", "openstack_mcp"].includes(item.type)) actions.push(["Felder", `module:fields:${item.id}`]);
+      actions.push(["Reindex", `module:reindex:${item.id}`], ["Diagnose", `module:diagnose:${item.id}`], ["Edit", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]);
+      return card(item.name || item.id,
+      `<div class="card-status">${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.type)}</span>${fieldCatalog ? ` <span class="badge ${fieldCatalog.ok ? "ok" : "bad"}">Felder: ${esc(fieldCatalog.resource_count || 0)}</span>` : ""}</div>
       <p class="endpoint">${esc(item.base_url || item.path || `${item.host}:${item.port}`)}</p>
+      ${fieldCatalog ? `<dl class="facts compact"><div><dt>Feldkatalog</dt><dd>${esc(fieldCatalog.updated_at || "noch nicht aktualisiert")}</dd></div></dl>` : ""}
       ${item.validation_errors?.length ? `<p class="error-text">${esc(item.validation_errors.join(" · "))}</p>` : ""}
       <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
-      buttons([["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`], ["Reindex", `module:reindex:${item.id}`], ["Diagnose", `module:diagnose:${item.id}`], ["Edit", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]])
-    )).join("") || empty("Lege ein Modul an oder binde OpenStack ein.")}</div>`;
+      buttons(actions)
+    );}).join("") || empty("Lege ein Modul an oder binde OpenStack ein.")}</div>`;
 }
 async function renderSources() {
   const data = await api("/api/sources");
@@ -96,6 +102,55 @@ function dataTable(rows) {
   const columns = [...preferred.filter((key) => available.includes(key)), ...available.filter((key) => !preferred.includes(key))].slice(0, 7);
   return `<div class="table-wrap"><table><thead><tr>${columns.map((key) => `<th>${esc(key.replaceAll("_", " "))}</th>`).join("")}</tr></thead>
     <tbody>${rows.map((row) => `<tr>${columns.map((key) => `<td>${typeof row[key] === "object" ? `<code>${esc(JSON.stringify(row[key]))}</code>` : esc(row[key] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function renderFieldCatalog(catalog) {
+  const resources = Object.values(catalog.resources || {});
+  $("fields-status").textContent = catalog.ok ? "OK" : "Fehler im Cache oder Refresh";
+  $("fields-status").style.color = catalog.ok ? "var(--accent)" : "var(--danger)";
+  $("fields-summary").innerHTML = `<dl class="facts compact">
+    <div><dt>Service</dt><dd>${esc(catalog.service || "-")}</dd></div>
+    <div><dt>Aktualisiert</dt><dd>${esc(catalog.updated_at || "-")}</dd></div>
+    <div><dt>Ressourcen</dt><dd>${esc(catalog.resource_count || 0)}</dd></div>
+    <div><dt>Cache</dt><dd>${esc(catalog.cache_path || "-")}</dd></div>
+  </dl>${catalog.errors?.length ? `<p class="error-text">${esc(catalog.errors.join(" · "))}</p>` : ""}`;
+  $("fields-list").innerHTML = resources.length ? resources.map((resource) => {
+    const fields = Array.isArray(resource.fields) ? resource.fields : [];
+    const filters = Array.isArray(resource.filters) ? resource.filters : [];
+    return `<article class="field-resource">
+      <div class="field-resource-head">
+        <div><h4>${esc(resource.name)}</h4><span>${esc(resource.endpoint || resource.tool || "-")}</span></div>
+        <div class="row">${badge(resource.available !== false, "verfügbar", "nicht verfügbar")}<span class="badge">${esc(resource.field_count || fields.length)} Felder</span></div>
+      </div>
+      ${resource.error ? `<p class="error-text">${esc(resource.error)}</p>` : ""}
+      <div class="field-chip-list">${fields.slice(0, 120).map((field) => `<span title="${esc(field.description || "")}">${esc(field.path)}${field.type ? `<small>${esc(field.type)}</small>` : ""}</span>`).join("") || `<span>Keine Felder beobachtet</span>`}</div>
+      ${fields.length > 120 ? `<p class="muted">${fields.length - 120} weitere Felder im Raw-JSON.</p>` : ""}
+      ${filters.length ? `<details><summary>Filter</summary><pre>${esc(JSON.stringify(filters, null, 2))}</pre></details>` : ""}
+    </article>`;
+  }).join("") : empty("Noch kein Feldkatalog vorhanden. Klicke auf Aktualisieren.");
+  $("fields-raw").textContent = JSON.stringify(catalog, null, 2);
+}
+async function openFieldCatalog(moduleId, refresh = false) {
+  $("fields-module-id").textContent = moduleId;
+  $("fields-status").textContent = refresh ? "Aktualisiere..." : "Lade...";
+  $("fields-summary").textContent = "";
+  $("fields-list").innerHTML = '<div class="loading compact"><span></span><span></span><span></span></div>';
+  $("fields-raw").textContent = "";
+  $("fields-refresh").onclick = () => openFieldCatalog(moduleId, true);
+  $("fields-refresh").disabled = true;
+  if (!$("fields-dialog").open) $("fields-dialog").showModal();
+  try {
+    const path = refresh
+      ? `/api/modules/${encodeURIComponent(moduleId)}/fields/refresh?limit=25`
+      : `/api/modules/${encodeURIComponent(moduleId)}/fields`;
+    const catalog = await api(path, refresh ? { method: "POST" } : {});
+    renderFieldCatalog(catalog);
+  } catch (error) {
+    $("fields-status").textContent = "Error: " + error.message;
+    $("fields-status").style.color = "var(--danger)";
+    $("fields-list").innerHTML = "";
+  } finally {
+    $("fields-refresh").disabled = false;
+  }
 }
 async function renderTable(endpoint, key) {
   const data = await api(endpoint);
@@ -184,6 +239,10 @@ async function action(raw) {
       $("discovery-result").textContent = JSON.stringify(result, null, 2);
       $("discovery-dialog").showModal();
     } catch (error) { $("notice").textContent = error.message; }
+    return;
+  }
+  if (kind === "module" && verb === "fields") {
+    await openFieldCatalog(id, false);
     return;
   }
   if (kind === "mcp" && verb === "install") {

@@ -72,9 +72,11 @@ from .modules import (
     execute_module,
     list_module_overview,
     module_diagnostics,
+    module_field_catalog,
     module_log_path,
     module_status,
     module_test,
+    refresh_module_field_catalog,
     remove_module,
     restart_module,
     start_module,
@@ -979,6 +981,7 @@ def create_app() -> FastAPI:
             "token_owner": _user.username,
             "can_configure": _user.role in {"operator", "admin"},
             "credential_mode": "per_user",
+            "scope_mode": "project_from_token",
         }
 
     @app.put("/api/integrations/openstack")
@@ -1026,12 +1029,6 @@ def create_app() -> FastAPI:
                 "auth_type": "password" if use_password else "token",
                 "auth_url": body.auth_url.strip(),
                 "region_name": body.region_name.strip(),
-                "token": new_token or "",
-                "username": body.username if use_password else "",
-                "password": body.password if use_password else "",
-                "project_name": body.project_name if use_password else "",
-                "user_domain_name": body.user_domain_name if use_password else "Default",
-                "project_domain_name": body.project_domain_name if use_password else "Default",
                 "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
             },
             notes="Harbor nutzt Username+Password (empfohlen) oder ein projektgescoptes User-Token.",
@@ -1252,9 +1249,43 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/modules/{module_id}/diagnose")
-    def module_diagnose(module_id: str, _user=require_role("admin")) -> dict[str, Any]:
+    def module_diagnose(module_id: str, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
         try:
-            return module_diagnostics(module_id)
+            return module_diagnostics(
+                module_id,
+                openstack_token=load_user_named_secret(_user.username, "openstack_token"),
+                openstack_user=_user.username,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/modules/{module_id}/fields")
+    def module_fields(module_id: str, _user: HarborUser = require_role("viewer")) -> dict[str, Any]:
+        try:
+            return module_field_catalog(module_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/modules/{module_id}/fields/refresh")
+    def module_fields_refresh(
+        module_id: str,
+        limit: int = 25,
+        _user: HarborUser = require_role("operator"),
+    ) -> dict[str, Any]:
+        try:
+            result = refresh_module_field_catalog(
+                module_id,
+                openstack_token=load_user_named_secret(_user.username, "openstack_token"),
+                openstack_user=_user.username,
+                limit=limit,
+            )
+            record_audit(
+                "module.fields.refresh",
+                module_id,
+                actor=_user.username,
+                detail={"resource_count": result.get("resource_count", 0)},
+            )
+            return result
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

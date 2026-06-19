@@ -238,9 +238,9 @@ def _format_netbox_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status == 401:
-            return "Authentication failed (HTTP 401). Check the NetBox API token."
+            return "NetBox requires authentication (HTTP 401). Harbor is configured for anonymous read-only API access."
         if status == 403:
-            return "Access denied (HTTP 403). Token lacks permission for this resource."
+            return "Access denied (HTTP 403). The anonymous NetBox API user lacks permission for this resource."
         if status == 404:
             return "Resource not found (HTTP 404). Check URL and REST path."
         if status == 429:
@@ -298,6 +298,7 @@ class NetBoxBackend:
         def load() -> Any:
             try:
                 response = self._client.request(normalized_method, url, headers=self._headers(), params=params, json=json_body)
+                response.raise_for_status()
             except httpx.TimeoutException:
                 raise TimeoutError(
                     f"Request timed out connecting to NetBox (URL: {url}, timeout 60s). "
@@ -311,17 +312,21 @@ class NetBoxBackend:
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 reason = e.response.reason_phrase
+                msg = ""
                 try:
                     body = e.response.json()
-                    msg = body.get("detail", "") or body.get("error", "") or str(body)
-                    if msg:
-                        raise httpx.HTTPStatusError(
-                            f"NetBox HTTP {status} {reason}: {msg}",
-                            request=e.request,
-                            response=e.response
-                        )
+                    if isinstance(body, dict):
+                        msg = str(body.get("detail", "") or body.get("error", "") or body)
+                    else:
+                        msg = str(body)
                 except Exception:
-                    pass
+                    msg = e.response.text[:500]
+                if msg:
+                    raise httpx.HTTPStatusError(
+                        f"NetBox HTTP {status} {reason}: {msg}",
+                        request=e.request,
+                        response=e.response,
+                    ) from None
                 raise httpx.HTTPStatusError(
                     f"NetBox HTTP {status} {reason} (URL: {url})",
                     request=e.request,
@@ -1007,6 +1012,7 @@ def create_app(netbox_url: str) -> FastAPI:
             return _jsonrpc_error(request_id, -32601, "Method not found", headers=session_headers)
         except httpx.HTTPStatusError as exc:
             detail = {
+                "message": _format_netbox_error(exc),
                 "status_code": exc.response.status_code,
                 "response": exc.response.text[:1000],
                 "url": str(exc.request.url),
@@ -1017,7 +1023,17 @@ def create_app(netbox_url: str) -> FastAPI:
         except ValueError as exc:
             return _jsonrpc_error(request_id, -32602, "Invalid params", data=str(exc), status_code=400, headers=session_headers)
         except Exception as exc:
-            return _jsonrpc_error(request_id, -32000, "Server error", data=str(exc), headers=session_headers)
+            return _jsonrpc_error(
+                request_id,
+                -32000,
+                "Server error",
+                data={
+                    "message": _format_netbox_error(exc),
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc),
+                },
+                headers=session_headers,
+            )
 
     return app
 

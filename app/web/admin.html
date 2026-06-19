@@ -120,6 +120,16 @@
     </div>
     <pre id="discovery-result" class="discovery-result"></pre>
   </dialog>
+  <dialog id="fields-dialog" class="wide-dialog">
+    <div class="dialog-head">
+      <div><span class="eyebrow">Feldkatalog</span><h2>Felder: <span id="fields-module-id"></span></h2></div>
+      <div class="row"><button type="button" id="fields-refresh">Aktualisieren</button><button type="button" class="icon-button" data-close="fields-dialog" aria-label="Schließen">×</button></div>
+    </div>
+    <div id="fields-status" class="muted"></div>
+    <div id="fields-summary"></div>
+    <div id="fields-list" class="field-catalog-list"></div>
+    <details><summary>Raw JSON</summary><pre id="fields-raw" class="discovery-result"></pre></details>
+  </dialog>
   <dialog id="stellen-dialog">
     <form id="stellen-form" class="stack">
       <h3>Edit Position</h3>
@@ -130,20 +140,20 @@
       <div class="row"><button class="primary">Save</button><button type="button" data-close="stellen-dialog">Cancel</button></div>
     </form>
   </dialog>
-  <dialog id="diagnose-dialog" style="min-width:640px;max-width:90vw;max-height:80vh;">
-    <div id="diagnose-content" style="overflow:auto;">
+  <dialog id="diagnose-dialog" class="wide-dialog">
+    <div id="diagnose-content" class="diagnose-content">
       <h3>Module Diagnostics: <span id="diagnose-module-id"></span></h3>
       <div id="diagnose-status" class="muted"></div>
       <details open><summary>Letzte Log-Einträge</summary>
-        <pre id="diagnose-log" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:300px;font-size:12px;"></pre>
+        <pre id="diagnose-log" class="diagnose-pre diagnose-log-pre"></pre>
       </details>
       <details><summary>Technical Status</summary>
-        <pre id="diagnose-health" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:200px;font-size:12px;"></pre>
+        <pre id="diagnose-health" class="diagnose-pre"></pre>
       </details>
       <details><summary>Remote Discovery</summary>
-        <pre id="diagnose-remote" style="background:#f5f5f5;padding:8px;overflow:auto;max-height:200px;font-size:12px;"></pre>
+        <pre id="diagnose-remote" class="diagnose-pre"></pre>
       </details>
-      <p id="diagnose-hint" class="muted" style="margin-top:8px;"></p>
+      <p id="diagnose-hint" class="muted diagnose-hint"></p>
       <div class="row"><button data-close="diagnose-dialog">Schliessen</button><button id="diagnose-restart" class="danger">Worker neustarten</button></div>
     </div>
   </dialog>

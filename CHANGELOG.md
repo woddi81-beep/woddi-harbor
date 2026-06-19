@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.4 - 2026-06-19
+
+### Added
+
+- Persistent NetBox and OpenStack field catalogs under `data/runtime/field_cache`
+- Admin UI field catalog dialog with refresh support for NetBox/OpenStack modules
+- `GET /api/modules/{module_id}/fields` and
+  `POST /api/modules/{module_id}/fields/refresh`
+- `harbor.sh module fields MODULE_ID [--refresh]` for CLI inspection
+- Structured OpenStack diagnostics with token scope, service catalog and
+  credential-mode details
+- Best-effort Git auto-update during `harbor.sh start` and systemd autostart
+  (`HARBOR_AUTO_UPDATE=0` disables it)
+
+### Fixed
+
+- OpenStack worker health no longer references a missing `self`
+- NetBox HTTP 401/403/404 responses are raised and reported as actionable
+  upstream diagnostics
+- OpenStack workers no longer inherit shared tokens or project settings from
+  environment variables
+- Token auth no longer passes separate project fields to the SDK; the project
+  must come from the token itself
+
 ## 0.6.2 - 2026-06-15
 
 ### Fixed

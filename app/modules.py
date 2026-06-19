@@ -34,6 +34,7 @@ from .config import (
     module_sources,
     resolve_module_source_path,
 )
+from .field_cache import load_field_catalog, save_field_catalog, update_catalog_from_tool_result
 from .search import IndexKind, SearchIndexMeta, ensure_index, load_index_meta, search_index
 from .version import __version__
 
@@ -98,6 +99,14 @@ def _sap_docs_url(module: ModuleConfig) -> str:
 
 def _is_local_mcp_module(module: ModuleConfig) -> bool:
     return module.type in {"netbox_mcp", "openstack_mcp", "sap_docs_mcp"}
+
+
+def _field_catalog_service(module: ModuleConfig) -> str:
+    if module.type == "netbox_mcp":
+        return "netbox"
+    if module.type == "openstack_mcp":
+        return "openstack"
+    return ""
 
 
 def _local_mcp_server_name(module: ModuleConfig) -> str:
@@ -215,6 +224,10 @@ def _runtime_defaults(module_id: str) -> dict[str, Any]:
         "last_discovery_error": "",
         "last_discovered_tools": [],
         "last_execute_error": "",
+        "last_field_cache_at": "",
+        "last_field_cache_ok": False,
+        "last_field_cache_error": "",
+        "last_field_cache_resource_count": 0,
         "last_index_started_at": "",
         "last_index_completed_at": "",
         "last_index_duration_seconds": 0.0,
@@ -649,6 +662,7 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
     runtime_state = load_module_runtime_state(module.id)
     index = _index_meta_payload(module.id) if module.type in {"docs", "maildir"} else None
     validation_errors = all_errors.get(module.id, [])
+    field_catalog = load_field_catalog(module.id) if _field_catalog_service(module) else None
     return {
         "id": module.id,
         "name": module.display_name(),
@@ -696,6 +710,16 @@ def module_status(module: ModuleConfig) -> dict[str, Any]:
         "cache": {
             "query_entries": _module_query_cache_count(module.id) if module.type in {"docs", "maildir"} else 0,
         },
+        "field_catalog": {
+            "ok": bool(field_catalog.get("ok")) if field_catalog else False,
+            "updated_at": field_catalog.get("updated_at", "") if field_catalog else "",
+            "service": field_catalog.get("service", "") if field_catalog else "",
+            "resource_count": int(field_catalog.get("resource_count", 0) or 0) if field_catalog else 0,
+            "cache_path": field_catalog.get("cache_path", "") if field_catalog else "",
+            "errors": field_catalog.get("errors", []) if field_catalog else [],
+        }
+        if field_catalog
+        else None,
         "runtime_state": runtime_state,
         "validation_errors": validation_errors,
     }
@@ -743,7 +767,12 @@ def list_module_overview() -> list[dict[str, Any]]:
     return [module_overview(module) for module in load_modules()]
 
 
-def health_check_module(module_id: str) -> dict[str, Any]:
+def health_check_module(
+    module_id: str,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
@@ -767,14 +796,27 @@ def health_check_module(module_id: str) -> dict[str, Any]:
         payload["remote"] = discovery
         payload["ok"] = payload["ok"] and bool(discovery.get("ok"))
     if module.type in {"netbox_mcp", "openstack_mcp", "sap_docs_mcp"} and not errors:
+        effective_openstack_token = openstack_token.strip()
+        if module.type == "openstack_mcp" and not effective_openstack_token:
+            effective_openstack_token = os.getenv("OS_TOKEN", "").strip()
         payload["local"] = status.get("health")
-        discovery = discover_standard_mcp_module(module)
+        discovery = discover_standard_mcp_module(
+            module,
+            openstack_token=effective_openstack_token,
+            openstack_user=openstack_user,
+        )
         payload["remote"] = discovery
         payload["ok"] = payload["ok"] and bool(status.get("running")) and bool(discovery.get("ok"))
     return payload
 
 
-def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]:
+def module_diagnostics(
+    module_id: str,
+    *,
+    log_lines: int = 40,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Unbekanntes Modul: {module_id}")
@@ -792,7 +834,11 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
         payload["status"] = {"running": False, "error": str(exc)}
         payload["errors"].append(f"Status: {exc}")
     try:
-        payload["health"] = health_check_module(module_id)
+        payload["health"] = health_check_module(
+            module_id,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
         payload["ok"] = payload["ok"] and bool(payload["health"].get("ok"))
     except Exception as exc:
         payload["ok"] = False
@@ -800,16 +846,160 @@ def module_diagnostics(module_id: str, *, log_lines: int = 40) -> dict[str, Any]
         payload["errors"].append(f"Health: {exc}")
     if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
         try:
-            remote = discover_remote_module(module)
+            remote = discover_remote_module(
+                module,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
             payload["remote"] = remote
             payload["ok"] = payload["ok"] and bool(remote.get("ok"))
         except Exception as exc:
             payload["ok"] = False
             payload["remote"] = {"ok": False, "error": str(exc)}
             payload["errors"].append(f"Discovery: {exc}")
+    service = _field_catalog_service(module)
+    if service:
+        payload["field_catalog"] = load_field_catalog(module.id)
+        source_tool = "discover_object_types" if service == "netbox" else "discover_resources"
+        source_payload = {"limit": 25} if service == "netbox" else {"include_sample": False}
+        effective_openstack_token = openstack_token.strip()
+        if module.type == "openstack_mcp" and not effective_openstack_token:
+            effective_openstack_token = os.getenv("OS_TOKEN", "").strip()
+        try:
+            payload["source_diagnostics"] = execute_module(
+                module_id,
+                source_tool,
+                source_payload,
+                openstack_token=effective_openstack_token,
+                openstack_user=openstack_user,
+            )
+            payload["field_catalog"] = load_field_catalog(module.id)
+        except Exception as exc:
+            payload["ok"] = False
+            payload["source_diagnostics"] = {"ok": False, "tool": source_tool, "error": str(exc)}
+            payload["errors"].append(f"Source discovery: {exc}")
     if not payload["ok"] and module.transport == "local":
         payload["hint"] = f"Lokalen Worker pruefen oder starten: ./harbor.sh module start {module.id}"
     return payload
+
+
+def module_field_catalog(module_id: str) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+    if not _field_catalog_service(module):
+        raise ValueError(f"Feldkatalog ist fuer Modultyp {module.type} nicht verfuegbar.")
+    return load_field_catalog(module.id)
+
+
+def _update_field_catalog_from_result(
+    module: ModuleConfig,
+    tool_name: str,
+    result: dict[str, Any],
+) -> dict[str, Any] | None:
+    service = _field_catalog_service(module)
+    if not service:
+        return None
+    catalog = update_catalog_from_tool_result(module.id, service, tool_name, result)
+    if catalog is None:
+        return None
+    update_module_runtime_state(
+        module.id,
+        last_field_cache_at=_timestamp(),
+        last_field_cache_ok=bool(catalog.get("ok")),
+        last_field_cache_error="; ".join(str(item) for item in catalog.get("errors", []) if item),
+        last_field_cache_resource_count=int(catalog.get("resource_count", 0) or 0),
+    )
+    return catalog
+
+
+def refresh_module_field_catalog(
+    module_id: str,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+    limit: int = 25,
+) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+    service = _field_catalog_service(module)
+    if not service:
+        raise ValueError(f"Feldkatalog ist fuer Modultyp {module.type} nicht verfuegbar.")
+    limit = max(1, min(500, int(limit or 25)))
+    errors: list[str] = []
+    try:
+        if service == "openstack":
+            effective_openstack_token = openstack_token.strip() or os.getenv("OS_TOKEN", "").strip()
+            if not effective_openstack_token:
+                raise ValueError(
+                    "OpenStack User-Token fehlt fuer diesen Benutzer. "
+                    "Token in der Harbor-Weboberflaeche erneuern."
+                )
+            execute_module(
+                module.id,
+                "discover_resources",
+                {"include_sample": False},
+                openstack_token=effective_openstack_token,
+                openstack_user=openstack_user,
+            )
+        else:
+            discovery_result = execute_module(
+                module.id,
+                "discover_object_types",
+                {"limit": limit},
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
+            discovery_data = (
+                discovery_result.get("data", {})
+                .get("structuredContent", {})
+                .get("data", {})
+            )
+            object_types = [
+                str(item.get("object_type", "")).strip()
+                for item in discovery_data.get("object_types", [])
+                if isinstance(item, dict) and str(item.get("object_type", "")).strip()
+            ]
+            for object_type in object_types[:limit]:
+                try:
+                    execute_module(
+                        module.id,
+                        "describe_object_type",
+                        {
+                            "object_type": object_type,
+                            "max_fields": 500,
+                            "include_sample": False,
+                        },
+                        openstack_token=openstack_token,
+                        openstack_user=openstack_user,
+                    )
+                except Exception as exc:
+                    errors.append(f"{object_type}: {exc}")
+        catalog = load_field_catalog(module.id)
+        if errors:
+            catalog = save_field_catalog(
+                module.id,
+                service,
+                catalog.get("resources", {}) if isinstance(catalog.get("resources"), dict) else {},
+                errors=errors,
+            )
+        update_module_runtime_state(
+            module.id,
+            last_field_cache_at=_timestamp(),
+            last_field_cache_ok=not errors and bool(catalog.get("ok")),
+            last_field_cache_error="; ".join(errors),
+            last_field_cache_resource_count=int(catalog.get("resource_count", 0) or 0),
+        )
+        return catalog
+    except Exception as exc:
+        update_module_runtime_state(
+            module.id,
+            last_field_cache_at=_timestamp(),
+            last_field_cache_ok=False,
+            last_field_cache_error=str(exc),
+        )
+        raise
 
 
 def _default_test_config(module: ModuleConfig) -> tuple[str, dict[str, Any], list[str]]:
@@ -982,8 +1172,11 @@ def _mcp_request(
         return {"ok": True}, next_session_id
     payload = response.json()
     if "error" in payload:
-        detail = payload["error"]
-        raise ValueError(f"MCP-Fehler {method}: {detail}")
+        detail = _redact_mapping(payload["error"])
+        raise ValueError(
+            f"MCP-Fehler {method}: "
+            f"{json.dumps(detail, ensure_ascii=False, sort_keys=True, default=str)}"
+        )
     return payload, next_session_id
 
 
@@ -1392,7 +1585,14 @@ def execute_module(
         try:
             if _is_local_mcp_module(module) or module.remote_protocol == "mcp" or module.base_url.rstrip("/").endswith("/mcp"):
                 if action == "health":
-                    return {"ok": True, "data": health_check_module(module_id)}
+                    return {
+                        "ok": True,
+                        "data": health_check_module(
+                            module_id,
+                            openstack_token=openstack_token,
+                            openstack_user=openstack_user,
+                        ),
+                    }
                 if action in {"discover", "capabilities", "tools/list", "list_tools"}:
                     return {
                         "ok": True,
@@ -1421,6 +1621,7 @@ def execute_module(
                     openstack_token=effective_openstack_token,
                     openstack_user=openstack_user,
                 )
+                _update_field_catalog_from_result(module, tool_name, result)
                 update_module_runtime_state(module.id, last_execute_error="", last_error="")
                 return {"ok": True, "data": result, "tool": tool_name}
             headers = _auth_headers(module)

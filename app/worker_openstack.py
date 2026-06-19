@@ -13,8 +13,7 @@ from .worker_security import install_worker_auth
 
 
 def _openstack_credentials(module_id: str) -> dict[str, str]:
-    """Read OpenStack credentials from module.settings (set by admin UI)."""
-    from app.config import find_module
+    """Read shared OpenStack connection settings without shared cloud credentials."""
     import os
 
     module = find_module(module_id)
@@ -22,31 +21,14 @@ def _openstack_credentials(module_id: str) -> dict[str, str]:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
 
     settings = module.settings or {}
-    fields = {
-        "OS_AUTH_URL": "",
-        "OS_REGION_NAME": "",
-        "OS_INTERFACE": "",
-        "OS_TIMEOUT": "30",
+    resolved = {
+        "OS_AUTH_URL": str(settings.get("auth_url") or os.getenv("OS_AUTH_URL", "")).strip(),
+        "OS_REGION_NAME": str(settings.get("region_name") or os.getenv("OS_REGION_NAME", "")).strip(),
+        "OS_INTERFACE": str(settings.get("interface") or os.getenv("OS_INTERFACE", "")).strip(),
+        "OS_TIMEOUT": str(settings.get("timeout") or os.getenv("OS_TIMEOUT", "30")).strip() or "30",
+        "OS_AUTH_TYPE": "token",
         "OS_TOKEN": "",
-        "OS_USERNAME": "",
-        "OS_PASSWORD": "",
-        "OS_PROJECT_NAME": "",
-        "OS_USER_DOMAIN_NAME": "Default",
-        "OS_PROJECT_DOMAIN_NAME": "Default",
     }
-
-    # Env vars as fallback
-    resolved = {key: os.getenv(key, "").strip() for key in fields}
-
-    # Module settings override env vars
-    resolved["OS_AUTH_URL"] = settings.get("auth_url") or os.getenv("OS_AUTH_URL", "").strip()
-    resolved["OS_REGION_NAME"] = settings.get("region_name") or os.getenv("OS_REGION_NAME", "").strip()
-    resolved["OS_TOKEN"] = settings.get("token") or os.getenv("OS_TOKEN", "").strip()
-    resolved["OS_USERNAME"] = settings.get("username") or os.getenv("OS_USERNAME", "").strip()
-    resolved["OS_PASSWORD"] = settings.get("password") or os.getenv("OS_PASSWORD", "").strip()
-    resolved["OS_PROJECT_NAME"] = settings.get("project_name") or os.getenv("OS_PROJECT_NAME", "").strip()
-    resolved["OS_USER_DOMAIN_NAME"] = settings.get("user_domain_name") or os.getenv("OS_USER_DOMAIN_NAME", "Default").strip()
-    resolved["OS_PROJECT_DOMAIN_NAME"] = settings.get("project_domain_name") or os.getenv("OS_PROJECT_DOMAIN_NAME", "Default").strip()
 
     if not resolved["OS_AUTH_URL"]:
         raise ValueError("OS_AUTH_URL fehlt. Bitte im Admin-UI konfigurieren.")

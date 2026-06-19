@@ -1,6 +1,6 @@
 from typer.testing import CliRunner
 
-from app.cli import app
+from app.cli import app, auto_update_checkout
 from app.config import HarborSettings
 from app.version import __version__
 
@@ -70,3 +70,13 @@ def test_server_set_persists_external_bind(monkeypatch) -> None:
     assert settings.port == 9680
     assert settings.listen_configured is True
     assert '"external": true' in result.stdout
+
+
+def test_startup_git_update_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("HARBOR_AUTO_UPDATE", "0")
+
+    result = auto_update_checkout()
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "disabled"
