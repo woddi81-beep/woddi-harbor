@@ -885,7 +885,7 @@ def module_diagnostics(
             payload["source_diagnostics"] = {"ok": False, "tool": source_tool, "error": str(exc)}
             payload["errors"].append(f"Source discovery: {exc}")
     if not payload["ok"] and module.transport == "local":
-        payload["hint"] = f"Lokalen Worker pruefen oder starten: ./harbor.sh module start {module.id}"
+        payload["hint"] = _module_diagnostics_hint(module, payload)
     return payload
 
 
@@ -919,7 +919,7 @@ def _join_error_fragments(value: Any) -> str:
                 fragments.append(item.strip())
             return
         if isinstance(item, dict):
-            for key in ("error", "detail", "message", "hint"):
+            for key in ("error", "detail", "message", "hint", "errors"):
                 collect(item.get(key))
             attempts = item.get("attempts")
             if isinstance(attempts, list):
@@ -946,6 +946,31 @@ def _join_error_fragments(value: Any) -> str:
             deduped.append(fragment)
             seen.add(normalized)
     return " | ".join(deduped)
+
+
+def _module_diagnostics_hint(module: ModuleConfig, payload: dict[str, Any]) -> str:
+    error_text = _join_error_fragments(payload)
+    lower = error_text.lower()
+    if module.type == "openstack_mcp" and any(
+        marker in lower
+        for marker in (
+            "credentials fehlen",
+            "token erneuern",
+            "username+password",
+            "projektgescoped",
+            "project-scoped",
+            "project scoped",
+            "scope_validation",
+            "unauthorized",
+            "401",
+        )
+    ):
+        return (
+            "OpenStack-Zugang fuer diesen Harbor-Benutzer erneuern: "
+            "im Chat einen projektgescopten User-Token speichern oder im "
+            "Admin-Dialog Username+Password konfigurieren."
+        )
+    return f"Lokalen Worker pruefen oder starten: ./harbor.sh module start {module.id}"
 
 
 def _connect_endpoint(module: ModuleConfig) -> str:

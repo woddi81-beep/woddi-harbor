@@ -784,6 +784,42 @@ class ModuleTests(unittest.TestCase):
         self.assertIn("Connection refused", result["health"]["error"])
         self.assertIn("module start netbox", result["hint"])
 
+    def test_module_diagnostics_reports_openstack_credentials_hint(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            transport="local",
+            port=41003,
+            settings={"auth_url": "https://identity.example/v3"},
+        )
+        status = {
+            "running": True,
+            "pid": 123,
+            "health": {"ok": True},
+            "index": None,
+            "field_catalog": None,
+            "runtime_state": {},
+            "validation_errors": [],
+        }
+        credential_error = ValueError(
+            "OpenStack Credentials fehlen fuer diesen Benutzer. "
+            "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
+        )
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.module_status", return_value=status),
+            patch("app.modules.health_check_module", return_value={"ok": True}),
+            patch("app.modules.discover_remote_module", return_value={"ok": True, "tools": []}),
+            patch("app.modules.load_field_catalog", return_value={}),
+            patch("app.modules.execute_module", side_effect=credential_error),
+            patch("app.modules._read_module_log_tail", return_value=""),
+        ):
+            result = module_diagnostics("openstack")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("OpenStack-Zugang", result["hint"])
+        self.assertNotIn("module start openstack", result["hint"])
+
     def test_module_connect_diagnostics_explains_refused_worker(self) -> None:
         module = ModuleConfig(
             id="netbox",

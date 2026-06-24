@@ -17,6 +17,9 @@
 - The repository now passes a complete `ruff check .` run.
 - OpenStack token scope validation now accepts Keystone token payloads that
   expose `project_id` and `user_id` as top-level token metadata.
+- OpenStack module diagnostics now point to per-user credential renewal instead
+  of a generic worker restart when discovery fails because of token/password
+  problems.
 
 ## 0.6.6 - 2026-06-19
 
