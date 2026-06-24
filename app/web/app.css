@@ -115,6 +115,7 @@ kbd { padding: .08rem .28rem; border: 1px solid var(--line); border-bottom-width
 .badge { display: inline-flex; align-items: center; gap: .34rem; padding: .22rem .52rem; border-radius: 999px; background: rgba(91, 128, 146, .15); color: var(--muted); font-size: .75rem; }
 .badge-dot { width: .38rem; height: .38rem; border-radius: 50%; background: currentColor; }
 .badge.ok { color: var(--accent); background: var(--accent-soft); }
+.badge.warn { color: var(--warn); background: rgba(239, 191, 105, .12); }
 .badge.bad { color: var(--danger); background: var(--danger-soft); }
 .card { min-width: 0; border: 1px solid var(--line-soft); border-radius: 12px; padding: 1rem; background: linear-gradient(150deg, rgba(24, 44, 58, .96), rgba(15, 29, 41, .96)); }
 .card h3 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
@@ -129,6 +130,44 @@ kbd { padding: .08rem .28rem; border: 1px solid var(--line); border-bottom-width
 .metric strong { overflow: hidden; color: var(--text); font-size: 1.42rem; letter-spacing: -.03em; text-overflow: ellipsis; white-space: nowrap; }
 .metric.good strong { color: var(--accent-strong); }
 .metric.bad strong { color: var(--danger); }
+.connect-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .85rem; }
+.connect-grid { display: grid; gap: .85rem; }
+.connect-module {
+  display: grid;
+  gap: .85rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line-soft);
+  border-left-width: 4px;
+  border-radius: 12px;
+  background: rgba(15, 29, 41, .92);
+}
+.connect-module.ok { border-left-color: var(--accent); }
+.connect-module.warning { border-left-color: var(--warn); }
+.connect-module.error { border-left-color: var(--danger); }
+.connect-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.connect-head h3 { margin: 0 0 .18rem; font-size: 1rem; overflow-wrap: anywhere; }
+.connect-head .endpoint { margin: 0; font-size: .82rem; }
+.connect-summary-text { margin: 0; color: #d8ece8; line-height: 1.45; }
+.connect-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .55rem; }
+.connect-check {
+  display: grid;
+  gap: .22rem;
+  min-width: 0;
+  padding: .62rem .68rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: rgba(9, 20, 30, .66);
+}
+.connect-check strong { font-size: .78rem; }
+.connect-check span { color: var(--muted); font-size: .78rem; line-height: 1.38; overflow-wrap: anywhere; }
+.connect-check.ok { border-color: rgba(82, 213, 173, .22); }
+.connect-check.warning { border-color: rgba(239, 191, 105, .3); }
+.connect-check.error { border-color: rgba(255, 140, 134, .3); }
+.connect-steps { display: grid; gap: .35rem; }
+.connect-steps strong { font-size: .8rem; color: var(--muted); }
+.connect-steps ol { margin: 0; padding-left: 1.25rem; color: #d8ece8; font-size: .82rem; line-height: 1.45; }
+.connect-steps li + li { margin-top: .25rem; }
 .dashboard-grid { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(360px, 1.2fr); gap: .9rem; }
 .facts { display: grid; gap: 0; margin: .5rem 0 0; }
 .facts div { display: grid; grid-template-columns: minmax(100px, .65fr) minmax(0, 1.35fr); gap: .8rem; padding: .58rem 0; border-bottom: 1px solid var(--line-soft); }
@@ -207,7 +246,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #cce8e1; }
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 @media (max-width: 1050px) {
-  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-grid, .connect-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 820px) {
@@ -221,9 +260,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #cce8e1; }
   .composer, .form-grid { grid-template-columns: 1fr; }
   .send-button { min-height: auto; }
   .page-actions { align-items: flex-start; flex-direction: column; }
+  .connect-head { flex-direction: column; }
 }
 @media (max-width: 560px) {
-  .metric-grid { grid-template-columns: 1fr; }
+  .metric-grid, .connect-summary { grid-template-columns: 1fr; }
   .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .message { max-width: 94%; }
   .topbar { align-items: flex-start; }

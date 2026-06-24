@@ -249,7 +249,7 @@ def _format_netbox_error(exc: Exception) -> str:
             return f"NetBox server error (HTTP {status}). Server-side issue — try again later."
         return f"HTTP {status}: {exc}"
     if isinstance(exc, httpx.TimeoutException):
-        return f"Request timed out. NetBox did not respond in time."
+        return "Request timed out. NetBox did not respond in time."
     if isinstance(exc, httpx.ConnectError):
         return f"NetBox is unreachable: {exc}"
     return f"{type(exc).__name__}: {exc}"

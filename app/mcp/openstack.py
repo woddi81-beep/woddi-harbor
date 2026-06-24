@@ -196,6 +196,75 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
     return Connection(**{key: value for key, value in options.items() if value is not None})
 
 
+def _safe_getattr(value: Any, name: str, default: Any = None) -> Any:
+    try:
+        return getattr(value, name)
+    except Exception:
+        return default
+
+
+def _safe_string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _access_token_payload(access: Any) -> dict[str, Any]:
+    if isinstance(access, dict):
+        token = access.get("token")
+        return token if isinstance(token, dict) else access
+
+    for name in ("_token", "_data", "data", "body"):
+        value = _safe_getattr(access, name)
+        if not isinstance(value, dict):
+            continue
+        token = value.get("token")
+        return token if isinstance(token, dict) else value
+
+    to_dict = _safe_getattr(access, "to_dict")
+    if callable(to_dict):
+        try:
+            value = to_dict()
+        except Exception:
+            value = {}
+        if isinstance(value, dict):
+            token = value.get("token")
+            return token if isinstance(token, dict) else value
+
+    return {}
+
+
+def _access_project_payload(access: Any) -> dict[str, Any]:
+    project = _safe_getattr(access, "_project")
+    if isinstance(project, dict):
+        return project
+    token = _access_token_payload(access)
+    project = token.get("project")
+    return project if isinstance(project, dict) else {}
+
+
+def _access_has_service_catalog(access: Any) -> bool:
+    catalog_probe = _safe_getattr(access, "has_service_catalog")
+    if callable(catalog_probe):
+        try:
+            return bool(catalog_probe())
+        except Exception:
+            pass
+    token = _access_token_payload(access)
+    return "catalog" in token
+
+
+def _access_scope(access: Any) -> dict[str, Any]:
+    project = _access_project_payload(access)
+    project_id = _safe_string(_safe_getattr(access, "project_id")) or _safe_string(project.get("id"))
+    project_name = _safe_string(_safe_getattr(access, "project_name")) or _safe_string(project.get("name"))
+    project_scoped = bool(_safe_getattr(access, "project_scoped", False) or project_id or project)
+    return {
+        "project_scoped": project_scoped,
+        "project_id": project_id or None,
+        "project_name": project_name or None,
+        "has_service_catalog": _access_has_service_catalog(access),
+    }
+
+
 def _jsonrpc_result(request_id: Any, result: dict[str, Any], *, headers: dict[str, str] | None = None) -> JSONResponse:
     return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result}, headers=headers)
 
@@ -390,17 +459,11 @@ class OpenStackBackend:
                         exc=exc,
                     ),
                 ) from exc
-            project_id = str(getattr(access, "project_id", "") or "").strip()
-            project_name = str(getattr(access, "project_name", "") or "").strip()
-            project_scoped = bool(getattr(access, "project_scoped", False) or project_id)
-            catalog_probe = getattr(access, "has_service_catalog", None)
-            has_service_catalog = bool(catalog_probe()) if callable(catalog_probe) else False
-            token_scope = {
-                "project_scoped": project_scoped,
-                "project_id": project_id or None,
-                "project_name": project_name or None,
-                "has_service_catalog": has_service_catalog,
-            }
+            token_scope = _access_scope(access)
+            project_id = str(token_scope.get("project_id") or "")
+            project_name = str(token_scope.get("project_name") or "")
+            project_scoped = bool(token_scope.get("project_scoped"))
+            has_service_catalog = bool(token_scope.get("has_service_catalog"))
             if not project_scoped:
                 msg = "OpenStack token ist nicht projektgescoped / not project-scoped. "
                 msg += (
@@ -1086,7 +1149,7 @@ class OpenStackBackend:
 
 @dataclass
 class _UserBackendEntry:
-    token_digest: str
+    credential_digest: str
     backend: OpenStackBackend
     last_used: float
 
@@ -1096,37 +1159,62 @@ class OpenStackUserBackendRegistry:
         self,
         base_credentials: dict[str, str],
         *,
+        credential_provider: Callable[[str], dict[str, str]] | None = None,
         backend_factory: Callable[[dict[str, str]], OpenStackBackend] = OpenStackBackend,
         idle_ttl_seconds: float = USER_BACKEND_IDLE_TTL_SECONDS,
         max_entries: int = MAX_USER_BACKENDS,
     ) -> None:
-        self._base_credentials = {key: value for key, value in base_credentials.items() if key != "OS_TOKEN"}
+        self._base_credentials = {
+            key: value
+            for key, value in base_credentials.items()
+            if key not in {"OS_TOKEN", "OS_USERNAME", "OS_PASSWORD"}
+        }
+        self._credential_provider = credential_provider
         self._backend_factory = backend_factory
         self._idle_ttl_seconds = max(60.0, idle_ttl_seconds)
         self._max_entries = max(1, max_entries)
         self._entries: dict[str, _UserBackendEntry] = {}
         self._lock = threading.Lock()
 
-    def get(self, username: str, token: str) -> OpenStackBackend:
+    def _credentials_for_user(self, username: str, token: str) -> dict[str, str]:
+        if token:
+            return {**self._base_credentials, "OS_AUTH_TYPE": "token", "OS_TOKEN": token}
+        if self._credential_provider is not None:
+            provided = {
+                key: str(value).strip()
+                for key, value in self._credential_provider(username).items()
+                if str(value).strip()
+            }
+            credentials = {**self._base_credentials, **provided}
+            if credentials.get("OS_TOKEN"):
+                credentials["OS_AUTH_TYPE"] = "token"
+                return credentials
+            if credentials.get("OS_USERNAME") and credentials.get("OS_PASSWORD"):
+                credentials["OS_AUTH_TYPE"] = "password"
+                return credentials
+        raise ValueError(
+            "OpenStack Credentials fehlen fuer diesen Benutzer. "
+            "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
+        )
+
+    def get(self, username: str, token: str = "") -> OpenStackBackend:
         normalized_username = username.strip()
         normalized_token = token.strip()
         if not normalized_username:
             raise ValueError("Harbor-Benutzer fuer OpenStack fehlt.")
-        if not normalized_token:
-            raise ValueError("OpenStack User-Token fehlt fuer diesen Benutzer.")
+        credentials = self._credentials_for_user(normalized_username, normalized_token)
         now = time.monotonic()
-        token_digest = sha256(normalized_token.encode("utf-8")).hexdigest()
+        credential_digest = sha256(json.dumps(credentials, sort_keys=True).encode("utf-8")).hexdigest()
         with self._lock:
             self._evict_locked(now)
             existing = self._entries.get(normalized_username)
-            if existing and existing.token_digest == token_digest:
+            if existing and existing.credential_digest == credential_digest:
                 existing.last_used = now
                 return existing.backend
             if existing:
                 existing.backend.close()
-            credentials = {**self._base_credentials, "OS_AUTH_TYPE": "token", "OS_TOKEN": normalized_token}
             backend = self._backend_factory(credentials)
-            self._entries[normalized_username] = _UserBackendEntry(token_digest, backend, now)
+            self._entries[normalized_username] = _UserBackendEntry(credential_digest, backend, now)
             self._evict_locked(now)
             return backend
 
@@ -1154,9 +1242,9 @@ class OpenStackUserBackendRegistry:
             return {"active_user_backends": len(self._entries), "max_user_backends": self._max_entries}
 
 
-def create_app(credentials: dict[str, str]) -> FastAPI:
+def create_app(credentials: dict[str, str], *, credential_provider: Callable[[str], dict[str, str]] | None = None) -> FastAPI:
     base_credentials = {key: value for key, value in credentials.items() if key != "OS_TOKEN"}
-    registry = OpenStackUserBackendRegistry(base_credentials)
+    registry = OpenStackUserBackendRegistry(base_credentials, credential_provider=credential_provider)
     sessions = SessionRegistry()
 
     @asynccontextmanager
@@ -1176,7 +1264,7 @@ def create_app(credentials: dict[str, str]) -> FastAPI:
             "auth_configured": bool(base_credentials.get("OS_AUTH_URL")),
             "timeout_seconds": _timeout_seconds(base_credentials),
             "scope_mode": "password_project" if base_credentials.get("OS_PASSWORD") else "token_project",
-            "credential_mode": "per_user_request_token",
+            "credential_mode": "per_user_secret_or_request_token" if credential_provider else "per_user_request_token",
             "credentials": _credential_diagnostics(base_credentials),
             "tool_count": len(_tool_schema()),
             "cache": registry.stats(),

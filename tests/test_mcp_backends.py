@@ -201,6 +201,35 @@ class ProjectScopedNoCatalogConnection(Connection):
         )()
 
 
+class ProjectPayloadNoCatalogConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session = type(
+            "Session",
+            (),
+            {
+                "auth": type(
+                    "Auth",
+                    (),
+                    {
+                        "get_access": lambda _self, _session: type(
+                            "Access",
+                            (),
+                            {
+                                "_data": {
+                                    "token": {
+                                        "project": {"id": "project-1", "name": "production"},
+                                    }
+                                },
+                                "has_service_catalog": lambda _self: False,
+                            },
+                        )()
+                    },
+                )()
+            },
+        )()
+
+
 class McpBackendTests(unittest.TestCase):
     def test_netbox_health_does_not_block_on_upstream_discovery(self) -> None:
         with patch.object(
@@ -253,6 +282,31 @@ class McpBackendTests(unittest.TestCase):
         self.assertTrue(alice_first.closed)  # type: ignore[attr-defined]
         self.assertFalse(bob.closed)  # type: ignore[attr-defined]
         self.assertNotIn("token-a", str(registry.stats()))
+
+    def test_openstack_registry_uses_password_credentials_provider(self) -> None:
+        created: list[OpenStackBackend] = []
+
+        class Backend(OpenStackBackend):
+            def __init__(self, credentials: dict[str, str]) -> None:
+                super().__init__(credentials, connection_factory=lambda _credentials: Connection())
+                created.append(self)
+
+        registry = OpenStackUserBackendRegistry(
+            {"OS_AUTH_URL": "https://identity.example/v3"},
+            credential_provider=lambda _username: {
+                "OS_USERNAME": "alice",
+                "OS_PASSWORD": "secret",
+                "OS_PROJECT_NAME": "production",
+            },
+            backend_factory=Backend,
+        )
+        self.addCleanup(registry.close)
+
+        backend = registry.get("alice")
+
+        self.assertIs(backend, created[0])
+        self.assertEqual(backend.credentials["OS_AUTH_TYPE"], "password")
+        self.assertEqual(backend.credentials["OS_PROJECT_NAME"], "production")
 
     def test_netbox_fields_use_native_filter_and_response_cache(self) -> None:
         backend = NetBoxBackend("https://netbox.example")
@@ -460,6 +514,19 @@ class McpBackendTests(unittest.TestCase):
         self.assertFalse(health["project"]["has_service_catalog"])
         self.assertIn("no Keystone service catalog", health["warnings"][0])
         self.assertIn("warnings", result["structuredContent"])
+
+    def test_openstack_project_payload_without_catalog_is_allowed(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: ProjectPayloadNoCatalogConnection(),
+        )
+
+        result = backend.call_tool("list_servers", {"status": "ACTIVE"})
+        health = backend.health()
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
+        self.assertEqual(health["project"]["id"], "project-1")
+        self.assertFalse(health["project"]["has_service_catalog"])
 
     def test_openstack_exposes_bounded_volume_listing(self) -> None:
         connection = Connection()

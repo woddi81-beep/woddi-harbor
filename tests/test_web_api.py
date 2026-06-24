@@ -35,6 +35,8 @@ class WebApiTests(unittest.TestCase):
             "/api/chat/stream",
             "/api/chat/sessions",
             "/api/dashboard",
+            "/api/connect-diagnostics/modules",
+            "/api/connect-diagnostics/modules/{module_id}",
             "/api/integrations/netbox",
             "/api/integrations/openstack",
         }

@@ -10,19 +10,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-
-def _git_rev() -> str:
-    try:
-        import subprocess
-        root = Path(__file__).resolve().parent.parent
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL,
-            cwd=root,
-        ).decode().strip()
-    except Exception:
-        return "unknown"
-
 from typing import Any
 from urllib.parse import urlparse
 
@@ -71,6 +58,7 @@ from .modules import (
     discover_remote_module,
     execute_module,
     list_module_overview,
+    module_connect_diagnostics,
     module_diagnostics,
     module_field_catalog,
     module_log_path,
@@ -88,19 +76,38 @@ from .observability import prometheus_metrics, request_finished, request_started
 from .services import health_check_service, list_service_profiles, service_action
 from .sources import source_overview
 from .state import (
-    list_stellen,
-    seed_stellen,
     append_chat_message,
     create_chat_session,
+    create_stellen,
     delete_chat_session,
+    delete_stellen,
+    get_stellen,
     initialize_database,
     list_audit_events,
     list_chat_sessions,
     list_jobs,
+    list_stellen,
     load_chat_messages,
     record_audit,
+    seed_stellen,
+    update_stellen,
 )
 from .version import __version__
+
+
+def _git_rev() -> str:
+    try:
+        import subprocess
+
+        root = Path(__file__).resolve().parent.parent
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            cwd=root,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
 
 APP_STARTED_AT = time.time()
 RECENT_ACTIVITY: deque[dict[str, Any]] = deque(maxlen=25)
@@ -906,6 +913,35 @@ def create_app() -> FastAPI:
     def modules_overview(_user=require_role("admin")) -> dict[str, Any]:
         return {"modules": list_module_overview()}
 
+    @app.get("/api/connect-diagnostics/modules")
+    def connect_diagnostics_modules(_user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        openstack_token = load_user_named_secret(_user.username, "openstack_token")
+        return {
+            "modules": [
+                module_connect_diagnostics(
+                    module.id,
+                    openstack_token=openstack_token,
+                    openstack_user=_user.username,
+                    run_checks=False,
+                )
+                for module in load_modules()
+            ]
+        }
+
+    @app.post("/api/connect-diagnostics/modules/{module_id}")
+    def connect_diagnostics_run(module_id: str, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        try:
+            result = module_connect_diagnostics(
+                module_id,
+                openstack_token=load_user_named_secret(_user.username, "openstack_token"),
+                openstack_user=_user.username,
+                run_checks=True,
+            )
+            record_audit("module.connect_diagnostics", module_id, actor=_user.username)
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/integrations/netbox")
     def netbox_configuration(_user=require_role("admin")) -> dict[str, Any]:
         module = find_module("netbox")
@@ -1552,13 +1588,13 @@ def create_app() -> FastAPI:
         return {"stellen": list_stellen()}
 
     @app.post("/api/stellen")
-    async def stellen_create(request: Request, _user=require_role("operator")) -> dict[str, Any]:
+    async def stellen_create(request: Request, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         data = await request.json()
         if not data.get("title"):
             raise HTTPException(status_code=400, detail="Titel erforderlich.")
-        id = create_stellen(data)
-        record_audit(_user["username"], "stellen.create", id, "success", {})
-        return {"id": id, "message": "Stelle angelegt."}
+        created_id = create_stellen(data)
+        record_audit("stellen.create", created_id, actor=_user.username)
+        return {"id": created_id, "message": "Stelle angelegt."}
 
     @app.get("/api/stellen/{stellen_id}")
     def stellen_get(stellen_id: str, _user=require_role("viewer")) -> dict[str, Any]:
@@ -1568,18 +1604,18 @@ def create_app() -> FastAPI:
         return item
 
     @app.put("/api/stellen/{stellen_id}")
-    async def stellen_update(stellen_id: str, request: Request, _user=require_role("operator")) -> dict[str, Any]:
+    async def stellen_update(stellen_id: str, request: Request, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         data = await request.json()
         if not update_stellen(stellen_id, data):
             raise HTTPException(status_code=404, detail="Stelle nicht gefunden.")
-        record_audit(_user["username"], "stellen.update", stellen_id, "success", {})
+        record_audit("stellen.update", stellen_id, actor=_user.username)
         return {"message": "Stelle aktualisiert."}
 
     @app.delete("/api/stellen/{stellen_id}")
-    def stellen_delete(stellen_id: str, _user=require_role("operator")) -> dict[str, Any]:
+    def stellen_delete(stellen_id: str, _user: HarborUser = require_role("operator")) -> dict[str, Any]:
         if not delete_stellen(stellen_id):
             raise HTTPException(status_code=404, detail="Stelle nicht gefunden.")
-        record_audit(_user["username"], "stellen.delete", stellen_id, "success", {})
+        record_audit("stellen.delete", stellen_id, actor=_user.username)
         return {"message": "Stelle geloescht."}
 
     return app

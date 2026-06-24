@@ -354,10 +354,12 @@ Port sind optional. Jeder Harbor-Benutzer hinterlegt danach sein eigenes
 projektgescoptes OpenStack User-Token direkt im Chat. Das Token wird nicht in
 `config/modules.local.json` gespeichert und nie an den Browser zurückgegeben.
 
-Projekt-ID und Projektname werden ausschließlich aus dem Token gelesen. Harbor
-nimmt keine separaten Projektfelder an und führt kein Rescoping durch. Ein
-ungescoptes Token oder ein Token ohne Service-Katalog wird klar abgewiesen.
-SDK-Verbindungen und OpenStack-Caches sind pro Harbor-Benutzer getrennt.
+Projekt-ID und Projektname werden im Token-Modus ausschließlich aus dem Token
+gelesen. Harbor nimmt keine separaten Projektfelder an und führt kein Rescoping
+durch. Ein ungescoptes Token wird klar abgewiesen. Ein projektgescoptes Token
+ohne Service-Katalog wird als Auth-Kontext akzeptiert; Harbor zeigt dann eine
+Warnung, weil einzelne Serviceaufrufe bei der Endpoint-Discovery scheitern
+können. SDK-Verbindungen und OpenStack-Caches sind pro Harbor-Benutzer getrennt.
 
 Der OpenStack-Dialog enthält einen Timeout für Keystone- und Service-Aufrufe.
 Für langsam erreichbare private Clouds sind `60` bis `120` Sekunden sinnvoll.

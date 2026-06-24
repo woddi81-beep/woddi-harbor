@@ -1,5 +1,5 @@
-const views = ["overview", "modules", "sources", "users", "mcp", "jobs", "audit", "backups", "services", "stellen"];
-const labels = { overview: "Overview", modules: "Modules", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services", stellen: "Positions" };
+const views = ["overview", "modules", "connect", "sources", "users", "mcp", "jobs", "audit", "backups", "services", "stellen"];
+const labels = { overview: "Overview", modules: "Modules", connect: "Connect", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services", stellen: "Positions" };
 let current = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 const $ = (id) => document.getElementById(id);
 
@@ -13,6 +13,12 @@ async function api(path, options = {}) {
 }
 function esc(value) { const node = document.createElement("span"); node.textContent = String(value ?? ""); return node.innerHTML; }
 function badge(ok, yes = "OK", no = "Fehler") { return `<span class="badge ${ok ? "ok" : "bad"}"><span class="badge-dot"></span>${ok ? yes : no}</span>`; }
+function severityBadge(severity) {
+  const labels = { ok: "OK", warning: "Warnung", error: "Fehler" };
+  const classes = { ok: "ok", warning: "warn", error: "bad" };
+  const key = ["ok", "warning", "error"].includes(severity) ? severity : "warning";
+  return `<span class="badge ${classes[key]}"><span class="badge-dot"></span>${labels[key]}</span>`;
+}
 function card(title, body, actions = "", className = "") { return `<article class="card ${className}"><div class="row between"><h3>${esc(title)}</h3>${actions}</div>${body}</article>`; }
 function buttons(items) { return `<div class="toolbar">${items.map(([label, action, danger]) => `<button ${danger ? 'class="danger"' : ""} data-action="${esc(action)}">${esc(label)}</button>`).join("")}</div>`; }
 function empty(text) { return `<div class="empty-state"><strong>Noch keine Einträge</strong><span>${esc(text)}</span></div>`; }
@@ -65,6 +71,98 @@ async function renderModules() {
       <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
       buttons(actions)
     );}).join("") || empty("Lege ein Modul an oder binde OpenStack ein.")}</div>`;
+}
+function connectCounts(modules) {
+  return {
+    ok: modules.filter((item) => item.severity === "ok").length,
+    warning: modules.filter((item) => item.severity === "warning").length,
+    error: modules.filter((item) => item.severity === "error").length,
+    pending: modules.filter((item) => !item.ran_checks).length,
+  };
+}
+function renderConnectCard(item) {
+  const severity = ["ok", "warning", "error"].includes(item.severity) ? item.severity : "warning";
+  const checks = Array.isArray(item.checks) ? item.checks : [];
+  const steps = Array.isArray(item.next_steps) ? item.next_steps : [];
+  const raw = {
+    browse: item.browse || null,
+    diagnostics: item.diagnostics || null,
+    test: item.test || null,
+    status: item.status || null,
+  };
+  const actionItems = [
+    [item.ran_checks ? "Erneut testen" : "Connect testen", `connect:run:${item.module_id}`],
+    ["Browse JSON", `module:discover:${item.module_id}`],
+    ["Diagnose", `module:diagnose:${item.module_id}`],
+  ];
+  return `<article class="connect-module ${severity}">
+    <div class="connect-head">
+      <div>
+        <h3>${esc(item.name || item.module_id)}</h3>
+        <p class="endpoint">${esc(item.endpoint || "-")}</p>
+      </div>
+      <div class="row">${severityBadge(severity)}<span class="badge">${esc(item.type)}</span><span class="badge">${esc(item.transport)}</span></div>
+    </div>
+    <p class="connect-summary-text">${esc(item.summary || "Noch keine Diagnose ausgefuehrt.")}</p>
+    <div class="connect-checks">${checks.map((check) => {
+      const checkSeverity = check.ok ? "ok" : check.severity === "warning" ? "warning" : "error";
+      return `<div class="connect-check ${checkSeverity}">
+        <strong>${esc(check.label || check.key)}</strong>
+        <span>${esc(check.message || "")}</span>
+      </div>`;
+    }).join("") || `<div class="connect-check warning"><strong>Status</strong><span>Noch keine Checks vorhanden.</span></div>`}</div>
+    <div class="connect-steps">
+      <strong>Nächste Schritte</strong>
+      <ol>${steps.map((step) => `<li>${esc(step)}</li>`).join("") || "<li>Connect-Test starten.</li>"}</ol>
+    </div>
+    <details><summary>Raw JSON</summary><pre>${esc(JSON.stringify(raw, null, 2))}</pre></details>
+    ${buttons(actionItems)}
+  </article>`;
+}
+function renderConnectPage(data) {
+  const modules = data.modules || [];
+  const counts = connectCounts(modules);
+  window.harborConnectDiagnostics = data;
+  $("content").innerHTML = `<div class="page-actions">
+    <div><strong>${modules.length} Modul-Connects</strong><span class="muted">Admin-only Diagnose fuer Browse, Worker, Test und Logs</span></div>
+    <div class="row"><button class="primary" data-action="connect:run-all">Alle testen</button><button data-action="connect:refresh">Basisstatus laden</button></div>
+  </div>
+  <div class="connect-summary">
+    ${metric("OK", counts.ok, "ohne blockierende Fehler", "good")}
+    ${metric("Warnungen", counts.warning, "erreichbar, aber unvollstaendig")}
+    ${metric("Fehler", counts.error, "blockierende Connect-Probleme", counts.error ? "bad" : "")}
+    ${metric("Nicht getestet", counts.pending, "nur Basisstatus geladen")}
+  </div>
+  <div class="connect-grid">${modules.map(renderConnectCard).join("") || empty("Es sind keine Module konfiguriert.")}</div>`;
+}
+async function renderConnect() {
+  const data = await api("/api/connect-diagnostics/modules");
+  renderConnectPage(data);
+}
+async function runConnectDiagnostic(moduleId, silent = false) {
+  if (!silent) $("notice").textContent = `Teste ${moduleId}...`;
+  const result = await api(`/api/connect-diagnostics/modules/${encodeURIComponent(moduleId)}`, { method: "POST" });
+  const currentData = window.harborConnectDiagnostics || { modules: [] };
+  const modules = currentData.modules || [];
+  const existing = modules.findIndex((item) => item.module_id === moduleId);
+  if (existing >= 0) modules[existing] = result;
+  else modules.push(result);
+  renderConnectPage({ modules });
+  if (!silent) $("notice").textContent = result.summary || "Connect-Test abgeschlossen.";
+  return result;
+}
+async function runAllConnectDiagnostics() {
+  const modules = (window.harborConnectDiagnostics?.modules || []).slice();
+  if (!modules.length) return renderConnect();
+  for (const item of modules) {
+    $("notice").textContent = `Teste ${item.module_id}...`;
+    try {
+      await runConnectDiagnostic(item.module_id, true);
+    } catch (error) {
+      $("notice").textContent = `${item.module_id}: ${error.message}`;
+    }
+  }
+  $("notice").textContent = "Connect-Tests abgeschlossen.";
 }
 async function renderSources() {
   const data = await api("/api/sources");
@@ -177,9 +275,9 @@ async function renderStellen() {
     )).join("") || empty("Lege eine Stelle an.")}</div>`;
 }
 const renderers = {
-  overview: renderOverview, modules: renderModules, sources: renderSources, users: renderUsers, mcp: renderMcp,
+  overview: renderOverview, modules: renderModules, connect: renderConnect, sources: renderSources, users: renderUsers, mcp: renderMcp,
   jobs: () => renderTable("/api/jobs", "jobs"), audit: () => renderTable("/api/audit", "events"),
-  backups: renderBackups, services: renderServices,
+  backups: renderBackups, services: renderServices, stellen: renderStellen,
 };
 async function render() {
   $("title").textContent = labels[current];
@@ -243,6 +341,20 @@ async function action(raw) {
   }
   if (kind === "module" && verb === "fields") {
     await openFieldCatalog(id, false);
+    return;
+  }
+  if (kind === "connect" && verb === "run") {
+    try { await runConnectDiagnostic(id); }
+    catch (error) { $("notice").textContent = error.message; }
+    return;
+  }
+  if (kind === "connect" && verb === "run-all") {
+    try { await runAllConnectDiagnostics(); }
+    catch (error) { $("notice").textContent = error.message; }
+    return;
+  }
+  if (kind === "connect" && verb === "refresh") {
+    await renderConnect();
     return;
   }
   if (kind === "mcp" && verb === "install") {

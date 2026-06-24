@@ -7,7 +7,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI
 
-from .config import find_module
+from .config import find_module, load_user_named_secret
 from .mcp.openstack import create_app
 from .worker_security import install_worker_auth
 
@@ -36,11 +36,31 @@ def _openstack_credentials(module_id: str) -> dict[str, str]:
     return resolved
 
 
+def _openstack_user_credentials(username: str) -> dict[str, str]:
+    token = load_user_named_secret(username, "openstack_token")
+    if token:
+        return {"OS_AUTH_TYPE": "token", "OS_TOKEN": token}
+
+    openstack_username = load_user_named_secret(username, "openstack_username")
+    password = load_user_named_secret(username, "openstack_password")
+    if not openstack_username or not password:
+        return {}
+
+    return {
+        "OS_AUTH_TYPE": "password",
+        "OS_USERNAME": openstack_username,
+        "OS_PASSWORD": password,
+        "OS_PROJECT_NAME": load_user_named_secret(username, "openstack_project_name"),
+        "OS_USER_DOMAIN_NAME": load_user_named_secret(username, "openstack_user_domain") or "Default",
+        "OS_PROJECT_DOMAIN_NAME": load_user_named_secret(username, "openstack_project_domain") or "Default",
+    }
+
+
 def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
         raise ValueError(f"Modul nicht gefunden: {module_id}")
-    return install_worker_auth(create_app(_openstack_credentials(module_id)))
+    return install_worker_auth(create_app(_openstack_credentials(module_id), credential_provider=_openstack_user_credentials))
 
 
 def _install_signal_handlers(server: uvicorn.Server) -> dict[int, Any]:

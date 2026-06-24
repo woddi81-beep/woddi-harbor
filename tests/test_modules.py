@@ -21,6 +21,7 @@ from app.mcp.openstack import OpenStackBackend, create_openstack_connection
 from app.modules import (
     discover_standard_mcp_module,
     execute_module,
+    module_connect_diagnostics,
     module_diagnostics,
     module_test,
     validation_errors_by_module,
@@ -527,8 +528,9 @@ class ModuleTests(unittest.TestCase):
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
         captured: dict[str, object] = {}
 
-        def fake_create_app(credentials: dict[str, str]):
+        def fake_create_app(credentials: dict[str, str], **kwargs: object):
             captured["credentials"] = credentials
+            captured["credential_provider"] = kwargs.get("credential_provider")
             return FastAPI()
 
         with (
@@ -551,13 +553,15 @@ class ModuleTests(unittest.TestCase):
         credentials = captured["credentials"]
         self.assertEqual(credentials["OS_TOKEN"], "")
         self.assertNotIn("OS_APPLICATION_CREDENTIAL_ID", credentials)
+        self.assertTrue(callable(captured["credential_provider"]))
 
     def test_create_openstack_worker_app_drops_environment_token(self) -> None:
         module = ModuleConfig(id="openstack", type="openstack_mcp", transport="local", port=41003)
         captured: dict[str, object] = {}
 
-        def fake_create_app(credentials: dict[str, str]):
+        def fake_create_app(credentials: dict[str, str], **kwargs: object):
             captured["credentials"] = credentials
+            captured["credential_provider"] = kwargs.get("credential_provider")
             return FastAPI()
 
         with (
@@ -581,6 +585,7 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(credentials["OS_TOKEN"], "")
         self.assertEqual(credentials["OS_AUTH_TYPE"], "token")
         self.assertNotIn("OS_PROJECT_NAME", credentials)
+        self.assertTrue(callable(captured["credential_provider"]))
 
     def test_openstack_backend_lists_servers_through_sdk(self) -> None:
         backend = OpenStackBackend(
@@ -735,6 +740,28 @@ class ModuleTests(unittest.TestCase):
         self.assertNotIn("OS_PROJECT_NAME", settings)
         self.assertNotIn("OS_PROJECT_DOMAIN_NAME", settings)
 
+    def test_local_openstack_headers_send_user_without_token(self) -> None:
+        with patch("app.modules.internal_worker_token", return_value="worker-token"):
+            headers = modules_module._local_worker_headers(openstack_user="alice")
+
+        self.assertEqual(headers["Authorization"], "Bearer worker-token")
+        self.assertEqual(headers["X-Harbor-User"], "alice")
+        self.assertNotIn("X-Harbor-OpenStack-Token", headers)
+
+    def test_redaction_preserves_openstack_diagnostics(self) -> None:
+        redacted = modules_module._redact_mapping(
+            {
+                "credentials": {"token_present": True, "password_present": False, "OS_TOKEN": "secret-token"},
+                "token_scope": {"project_scoped": False, "project_id": None, "has_service_catalog": False},
+                "application_credential_secret": "secret",
+            }
+        )
+
+        self.assertEqual(redacted["credentials"]["token_present"], True)
+        self.assertEqual(redacted["credentials"]["OS_TOKEN"], "***")
+        self.assertEqual(redacted["token_scope"]["project_scoped"], False)
+        self.assertEqual(redacted["application_credential_secret"], "***")
+
     def test_module_diagnostics_reports_connection_refused_without_raising(self) -> None:
         module = ModuleConfig(
             id="netbox",
@@ -756,6 +783,96 @@ class ModuleTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("Connection refused", result["health"]["error"])
         self.assertIn("module start netbox", result["hint"])
+
+    def test_module_connect_diagnostics_explains_refused_worker(self) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            transport="local",
+            port=41002,
+            settings={"netbox_url": "http://netbox.example"},
+        )
+        status = {
+            "running": False,
+            "pid": None,
+            "health": None,
+            "index": None,
+            "field_catalog": None,
+            "runtime_state": {},
+            "validation_errors": [],
+        }
+        diagnostics = {
+            "ok": False,
+            "errors": ["Health: Connection refused"],
+            "health": {"ok": False, "error": "Connection refused"},
+            "remote": {"ok": False, "attempts": [{"label": "mcp", "ok": False, "error": "Connection refused"}]},
+            "hint": "Lokalen Worker pruefen oder starten: ./harbor.sh module start netbox",
+            "log_tail": "connection refused",
+        }
+        test_result = {
+            "ok": False,
+            "connected": False,
+            "meaningful_output": False,
+            "action": "discover",
+            "message": "Connection refused",
+        }
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.module_status", return_value=status),
+            patch("app.modules.module_diagnostics", return_value=diagnostics),
+            patch("app.modules.module_test", return_value=test_result),
+        ):
+            result = module_connect_diagnostics("netbox")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["severity"], "error")
+        self.assertIn("Lokaler Worker antwortet nicht", result["summary"])
+        self.assertFalse({check["key"]: check for check in result["checks"]}["worker"]["ok"])
+        self.assertTrue(any("module start netbox" in step for step in result["next_steps"]))
+
+    def test_module_connect_diagnostics_reports_clean_remote_mcp(self) -> None:
+        module = ModuleConfig(
+            id="remote-mcp",
+            type="mcp_http",
+            transport="remote",
+            remote_protocol="mcp",
+            base_url="http://127.0.0.1:8000/mcp",
+        )
+        status = {
+            "running": True,
+            "pid": None,
+            "health": {"ok": True},
+            "index": None,
+            "field_catalog": None,
+            "runtime_state": {},
+            "validation_errors": [],
+        }
+        diagnostics = {
+            "ok": True,
+            "errors": [],
+            "health": {"ok": True},
+            "remote": {"ok": True, "tools": ["search", "stats"], "attempts": [{"label": "tools/list", "ok": True}]},
+        }
+        test_result = {
+            "ok": True,
+            "connected": True,
+            "meaningful_output": True,
+            "action": "discover",
+            "message": "Modultest erfolgreich.",
+            "output_summary": "[\"search\", \"stats\"]",
+        }
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.module_status", return_value=status),
+            patch("app.modules.module_diagnostics", return_value=diagnostics),
+            patch("app.modules.module_test", return_value=test_result),
+        ):
+            result = module_connect_diagnostics("remote-mcp")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["severity"], "ok")
+        self.assertIn("Connect-Pfad ist sauber", result["summary"])
+        self.assertTrue({check["key"]: check for check in result["checks"]}["browse"]["ok"])
 
     def test_module_named_secret_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as secret_dir:

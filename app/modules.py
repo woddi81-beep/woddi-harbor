@@ -119,12 +119,12 @@ def _local_mcp_server_name(module: ModuleConfig) -> str:
     return ""
 
 
-def _local_mcp_auth_configured(module: ModuleConfig, openstack_token: str = "") -> bool:
+def _local_mcp_auth_configured(module: ModuleConfig, openstack_token: str = "", openstack_user: str = "") -> bool:
     if module.type == "netbox_mcp":
         return False
     if module.type == "openstack_mcp":
         settings = _openstack_settings(module, openstack_token)
-        return bool(settings.get("OS_AUTH_URL") and settings.get("OS_TOKEN"))
+        return bool(settings.get("OS_AUTH_URL") and (settings.get("OS_TOKEN") or openstack_user.strip()))
     return False
 
 
@@ -163,9 +163,11 @@ def _local_worker_headers(*, openstack_token: str = "", openstack_user: str = ""
         "Content-Type": "application/json",
         "Authorization": f"Bearer {internal_worker_token()}",
     }
+    if openstack_user.strip():
+        headers[OPENSTACK_USER_HEADER] = openstack_user.strip()
     if openstack_token.strip():
         headers[OPENSTACK_TOKEN_HEADER] = openstack_token.strip()
-        headers[OPENSTACK_USER_HEADER] = openstack_user.strip() or "cli"
+        headers.setdefault(OPENSTACK_USER_HEADER, "cli")
     return headers
 
 
@@ -174,7 +176,11 @@ def _redact_mapping(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             normalized = key.lower()
-            if any(marker in normalized for marker in ("password", "secret", "token", "api_key", "credential")):
+            if isinstance(item, (dict, list)):
+                redacted[key] = _redact_mapping(item)
+            elif isinstance(item, bool) or item is None:
+                redacted[key] = item
+            elif any(marker in normalized for marker in ("password", "secret", "token", "api_key")):
                 redacted[key] = "***" if item else ""
             else:
                 redacted[key] = _redact_mapping(item)
@@ -883,6 +889,342 @@ def module_diagnostics(
     return payload
 
 
+def _diagnostic_check(
+    key: str,
+    label: str,
+    ok: bool,
+    message: str,
+    *,
+    severity: str | None = None,
+    detail: Any = None,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "ok": bool(ok),
+        "severity": severity or ("ok" if ok else "error"),
+        "message": message,
+        "detail": _redact_mapping(detail if detail is not None else {}),
+    }
+
+
+def _join_error_fragments(value: Any) -> str:
+    fragments: list[str] = []
+
+    def collect(item: Any) -> None:
+        if item is None:
+            return
+        if isinstance(item, str):
+            if item.strip():
+                fragments.append(item.strip())
+            return
+        if isinstance(item, dict):
+            for key in ("error", "detail", "message", "hint"):
+                collect(item.get(key))
+            attempts = item.get("attempts")
+            if isinstance(attempts, list):
+                for attempt in attempts:
+                    if isinstance(attempt, dict) and not attempt.get("ok", False):
+                        label = str(attempt.get("label", "")).strip()
+                        text = str(attempt.get("error") or attempt.get("body_preview") or "").strip()
+                        status = attempt.get("status_code")
+                        if text:
+                            fragments.append(f"{label}: {text}" if label else text)
+                        elif status:
+                            fragments.append(f"{label}: HTTP {status}" if label else f"HTTP {status}")
+            return
+        if isinstance(item, list):
+            for child in item:
+                collect(child)
+
+    collect(value)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for fragment in fragments:
+        normalized = fragment.lower()
+        if normalized not in seen:
+            deduped.append(fragment)
+            seen.add(normalized)
+    return " | ".join(deduped)
+
+
+def _connect_endpoint(module: ModuleConfig) -> str:
+    return module.base_url or module.path or f"http://{module.host}:{module.port}"
+
+
+def _module_browse_payload(diagnostics: dict[str, Any]) -> dict[str, Any] | None:
+    remote = diagnostics.get("remote")
+    if isinstance(remote, dict):
+        return remote
+    source = diagnostics.get("source_diagnostics")
+    if isinstance(source, dict):
+        return source
+    return None
+
+
+def _browse_summary(browse: dict[str, Any] | None) -> tuple[bool, str, dict[str, Any]]:
+    if not browse:
+        return False, "Es wurde keine Discovery-/Browse-Antwort erzeugt.", {}
+    tools = browse.get("tools") or browse.get("actions") or browse.get("capabilities") or []
+    count = len(tools) if isinstance(tools, list) else 0
+    if browse.get("ok"):
+        if count:
+            return True, f"Browse erfolgreich, {count} Tool(s)/Action(s) sichtbar.", {"items": tools[:40]}
+        return True, "Browse erfolgreich, aber ohne Tool-/Action-Liste.", {}
+    reason = _join_error_fragments(browse) or "Browse hat keine erfolgreiche Antwort geliefert."
+    return False, f"Browse fehlgeschlagen: {reason}", browse
+
+
+def _connect_next_steps(module: ModuleConfig, checks: list[dict[str, Any]], error_text: str) -> list[str]:
+    lower = error_text.lower()
+    failed_keys = {check["key"] for check in checks if not check.get("ok")}
+    steps: list[str] = []
+
+    config_check = next((check for check in checks if check["key"] == "config"), None)
+    config_detail = config_check.get("detail") if isinstance(config_check, dict) else None
+    if isinstance(config_detail, list) and config_detail:
+        steps.append("Modulkonfiguration korrigieren: " + "; ".join(str(item) for item in config_detail[:4]))
+
+    if "enabled" in failed_keys:
+        steps.append("Modul aktivieren oder bewusst deaktiviert lassen; deaktivierte Module werden im Chat nicht genutzt.")
+
+    if module.transport == "local" and "worker" in failed_keys:
+        steps.append(f"Lokalen Worker starten oder neu starten: ./harbor.sh module start {module.id}")
+        steps.append(f"Worker-Log pruefen: {module_log_path(module.id)}")
+
+    if "index" in failed_keys:
+        steps.append(f"Lokalen Suchindex neu aufbauen: ./harbor.sh module reindex {module.id}")
+
+    if "fields" in failed_keys:
+        steps.append("Feldkatalog ueber die Modulansicht aktualisieren und danach Browse/Test erneut starten.")
+
+    if "credential" in lower or "token" in lower or "unauthorized" in lower or "401" in lower:
+        if module.type == "openstack_mcp":
+            steps.append("OpenStack-Zugang im Admin-Dialog erneuern; bevorzugt Username+Password speichern, damit Harbor projektgescopte Tokens holen kann.")
+        else:
+            steps.append("API-Token/Auth-Konfiguration des Moduls pruefen und danach Browse erneut ausfuehren.")
+
+    if "projektgescoped" in lower or "project-scoped" in lower or "project scoped" in lower:
+        steps.append("OpenStack-Token ist nicht projektgescopet: mit Username+Password oder projektgescoptem Token neu verbinden.")
+
+    if "connection refused" in lower or "connect call failed" in lower:
+        steps.append("Zielprozess lauscht nicht auf dem konfigurierten Host/Port; Port, Service und Firewall pruefen.")
+
+    if "temporary failure in name resolution" in lower or "name or service not known" in lower or "dns" in lower:
+        steps.append("DNS/URL des Upstreams pruefen; vom Harbor-Host muss der Name aufloesbar sein.")
+
+    if "timed out" in lower or "timeout" in lower:
+        steps.append("Upstream antwortet zu langsam oder ist blockiert; Erreichbarkeit pruefen und ggf. Modul-Timeout erhoehen.")
+
+    if "browse" in failed_keys or "test" in failed_keys:
+        steps.append("Browse-JSON und Modultest vergleichen: Discovery muss Tools liefern und der Test muss aussagekraeftige Nutzdaten zurueckgeben.")
+
+    if not steps and failed_keys:
+        steps.append("Raw JSON, Health-Block und Log-Auszug in dieser Ansicht pruefen; dort steht die letzte technische Ursache.")
+    if not steps:
+        steps.append("Kein Connect-Problem sichtbar. Falls der Chat trotzdem scheitert, Rollen-/Tool-Berechtigungen und Prompt-Routing pruefen.")
+
+    deduped: list[str] = []
+    for step in steps:
+        if step not in deduped:
+            deduped.append(step)
+    return deduped
+
+
+def module_connect_diagnostics(
+    module_id: str,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+    run_checks: bool = True,
+    log_lines: int = 60,
+) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+
+    status = module_status(module)
+    validation_errors = status.get("validation_errors") or []
+    checks: list[dict[str, Any]] = [
+        _diagnostic_check(
+            "config",
+            "Konfiguration",
+            not validation_errors,
+            "Konfiguration ist gueltig." if not validation_errors else "Konfiguration blockiert das Modul.",
+            detail=validation_errors,
+        ),
+        _diagnostic_check(
+            "enabled",
+            "Aktivierung",
+            bool(module.enabled),
+            "Modul ist aktiviert." if module.enabled else "Modul ist deaktiviert.",
+            severity="warning" if not module.enabled else "ok",
+        ),
+    ]
+
+    if module.transport == "local":
+        running = bool(status.get("running"))
+        checks.append(
+            _diagnostic_check(
+                "worker",
+                "Worker",
+                running,
+                "Lokaler Worker antwortet auf Health-Checks."
+                if running
+                else "Lokaler Worker antwortet nicht auf Health-Checks.",
+                detail={"pid": status.get("pid"), "health": status.get("health")},
+            )
+        )
+    else:
+        checks.append(
+            _diagnostic_check(
+                "worker",
+                "Worker",
+                True,
+                "Remote-Modul braucht keinen Harbor-Worker.",
+                severity="ok",
+                detail={"endpoint": _connect_endpoint(module)},
+            )
+        )
+
+    index = status.get("index")
+    if isinstance(index, dict):
+        indexed = bool(index.get("exists"))
+        checks.append(
+            _diagnostic_check(
+                "index",
+                "Index",
+                indexed,
+                f"Index vorhanden mit {index.get('document_count', 0)} Dokument(en)."
+                if indexed
+                else "Noch kein lokaler Suchindex vorhanden.",
+                severity="warning" if not indexed else "ok",
+                detail=index,
+            )
+        )
+
+    field_catalog = status.get("field_catalog")
+    if isinstance(field_catalog, dict):
+        field_ok = bool(field_catalog.get("ok"))
+        checks.append(
+            _diagnostic_check(
+                "fields",
+                "Feldkatalog",
+                field_ok,
+                f"Feldkatalog enthaelt {field_catalog.get('resource_count', 0)} Ressource(n)."
+                if field_ok
+                else "Feldkatalog ist leer oder fehlerhaft.",
+                severity="warning" if not field_ok else "ok",
+                detail=field_catalog,
+            )
+        )
+
+    diagnostics: dict[str, Any] | None = None
+    test_result: dict[str, Any] | None = None
+    browse: dict[str, Any] | None = None
+
+    if run_checks:
+        diagnostics = module_diagnostics(
+            module_id,
+            log_lines=log_lines,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
+        checks.append(
+            _diagnostic_check(
+                "diagnose",
+                "Diagnose",
+                bool(diagnostics.get("ok")),
+                "Diagnose meldet keine technischen Fehler."
+                if diagnostics.get("ok")
+                else (_join_error_fragments(diagnostics) or "Diagnose hat Fehler erkannt."),
+                detail={
+                    "errors": diagnostics.get("errors", []),
+                    "hint": diagnostics.get("hint", ""),
+                    "health": diagnostics.get("health", {}),
+                },
+            )
+        )
+        browse = _module_browse_payload(diagnostics)
+        if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
+            browse_ok, browse_message, browse_detail = _browse_summary(browse)
+            checks.append(
+                _diagnostic_check(
+                    "browse",
+                    "Browse",
+                    browse_ok,
+                    browse_message,
+                    detail=browse_detail,
+                )
+            )
+        test_result = module_test(
+            module_id,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
+        if test_result.get("ok"):
+            test_message = str(test_result.get("message") or "Modultest erfolgreich.")
+        elif test_result.get("connected"):
+            test_message = str(test_result.get("message") or "Verbindung steht, Ausgabe ist aber nicht aussagekraeftig.")
+        else:
+            test_message = str(test_result.get("message") or "Modultest konnte keine Verbindung herstellen.")
+        checks.append(
+            _diagnostic_check(
+                "test",
+                "Modultest",
+                bool(test_result.get("ok")),
+                test_message,
+                severity="warning" if test_result.get("connected") and not test_result.get("ok") else None,
+                detail={
+                    "action": test_result.get("action"),
+                    "connected": test_result.get("connected"),
+                    "meaningful_output": test_result.get("meaningful_output"),
+                    "expected_terms": test_result.get("expected_terms", []),
+                    "output_summary": test_result.get("output_summary", ""),
+                },
+            )
+        )
+
+    has_error = any(not check.get("ok") and check.get("severity") != "warning" for check in checks)
+    has_warning = any(not check.get("ok") or check.get("severity") == "warning" for check in checks)
+    severity = "error" if has_error else "warning" if has_warning else "ok"
+    error_text = _join_error_fragments(
+        {
+            "checks": checks,
+            "diagnostics": diagnostics or {},
+            "test": test_result or {},
+            "runtime": status.get("runtime_state", {}),
+        }
+    )
+    next_steps = _connect_next_steps(module, checks, error_text)
+    if severity == "ok":
+        summary = "Connect-Pfad ist sauber: Status, Browse und Test liefern verwertbare Antworten." if run_checks else "Basisstatus ohne erkennbare Connect-Fehler."
+    elif severity == "warning":
+        summary = "Connect-Pfad ist erreichbar, aber es gibt Warnungen oder unvollstaendige Nutzdaten."
+    else:
+        failing = next((check for check in checks if not check.get("ok") and check.get("severity") != "warning"), None)
+        summary = failing["message"] if failing else "Connect-Diagnose hat blockierende Fehler erkannt."
+
+    return {
+        "ok": severity != "error",
+        "severity": severity,
+        "module_id": module.id,
+        "name": module.display_name(),
+        "type": module.type,
+        "transport": module.transport,
+        "endpoint": _connect_endpoint(module),
+        "ran_checks": run_checks,
+        "updated_at": _timestamp(),
+        "summary": summary,
+        "checks": checks,
+        "next_steps": next_steps,
+        "status": status,
+        "browse": browse,
+        "diagnostics": diagnostics,
+        "test": test_result,
+    }
+
+
 def module_field_catalog(module_id: str) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
@@ -931,10 +1273,10 @@ def refresh_module_field_catalog(
     try:
         if service == "openstack":
             effective_openstack_token = openstack_token.strip() or os.getenv("OS_TOKEN", "").strip()
-            if not effective_openstack_token:
+            if not effective_openstack_token and not openstack_user.strip():
                 raise ValueError(
-                    "OpenStack User-Token fehlt fuer diesen Benutzer. "
-                    "Token in der Harbor-Weboberflaeche erneuern."
+                    "OpenStack Credentials fehlen fuer diesen Benutzer. "
+                    "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
                 )
             execute_module(
                 module.id,
@@ -1453,7 +1795,7 @@ def discover_standard_mcp_module(
                 module_secret(module)
                 or (
                     _is_local_mcp_module(module)
-                    and _local_mcp_auth_configured(module, openstack_token)
+                    and _local_mcp_auth_configured(module, openstack_token, openstack_user)
                 )
             ),
             "session_id": session_id or "",
@@ -1476,7 +1818,7 @@ def discover_standard_mcp_module(
             module_secret(module)
             or (
                 _is_local_mcp_module(module)
-                and _local_mcp_auth_configured(module, openstack_token)
+                and _local_mcp_auth_configured(module, openstack_token, openstack_user)
             )
         ),
         "session_id": session_id or "",
@@ -1609,10 +1951,10 @@ def execute_module(
                 effective_openstack_token = openstack_token.strip()
                 if module.type == "openstack_mcp" and not effective_openstack_token:
                     effective_openstack_token = os.getenv("OS_TOKEN", "").strip()
-                if module.type == "openstack_mcp" and not effective_openstack_token:
+                if module.type == "openstack_mcp" and not effective_openstack_token and not openstack_user.strip():
                     raise ValueError(
-                        "OpenStack User-Token fehlt fuer diesen Benutzer. "
-                        "Token in der Harbor-Weboberflaeche erneuern."
+                        "OpenStack Credentials fehlen fuer diesen Benutzer. "
+                        "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
                     )
                 result = _call_mcp_tool(
                     module,

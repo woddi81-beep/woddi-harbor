@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.7 - 2026-06-24
+
+### Added
+
+- Admin-only Connect diagnostics view for all modules with basis status,
+  Browse/Discovery, module smoke test, raw diagnostic payloads and actionable
+  next steps for worker, DNS, credential, timeout, field catalog and index
+  issues.
+- Admin-only Connect diagnostics API under `/api/connect-diagnostics/modules`.
+
+### Fixed
+
+- Stellen admin routes now import their state helpers explicitly and use the
+  shared audit event signature.
+- The repository now passes a complete `ruff check .` run.
+
+## 0.6.6 - 2026-06-19
+
+### Fixed
+
+- OpenStack MCP diagnostics now keep structured `credentials` and `token_scope`
+  metadata visible while still redacting actual token/password values.
+- OpenStack Username+Password credentials saved per Harbor user are now loaded
+  by the local worker and can be used when no request token is present.
+- OpenStack token scope validation now also recognizes Keystone AccessInfo
+  payloads that expose project context in the raw token body without a service
+  catalog.
+
 ## 0.6.5 - 2026-06-19
 
 ### Fixed
