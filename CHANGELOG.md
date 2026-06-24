@@ -15,6 +15,8 @@
 - Stellen admin routes now import their state helpers explicitly and use the
   shared audit event signature.
 - The repository now passes a complete `ruff check .` run.
+- OpenStack token scope validation now accepts Keystone token payloads that
+  expose `project_id` and `user_id` as top-level token metadata.
 
 ## 0.6.6 - 2026-06-19
 

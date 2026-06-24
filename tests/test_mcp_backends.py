@@ -230,6 +230,36 @@ class ProjectPayloadNoCatalogConnection(Connection):
         )()
 
 
+class TopLevelProjectPayloadConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session = type(
+            "Session",
+            (),
+            {
+                "auth": type(
+                    "Auth",
+                    (),
+                    {
+                        "get_access": lambda _self, _session: type(
+                            "Access",
+                            (),
+                            {
+                                "_data": {
+                                    "token": {
+                                        "project_id": "project-1",
+                                        "user_id": "user-1",
+                                    }
+                                },
+                                "has_service_catalog": lambda _self: False,
+                            },
+                        )()
+                    },
+                )()
+            },
+        )()
+
+
 class McpBackendTests(unittest.TestCase):
     def test_netbox_health_does_not_block_on_upstream_discovery(self) -> None:
         with patch.object(
@@ -526,6 +556,20 @@ class McpBackendTests(unittest.TestCase):
 
         self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
         self.assertEqual(health["project"]["id"], "project-1")
+        self.assertFalse(health["project"]["has_service_catalog"])
+
+    def test_openstack_top_level_project_payload_without_catalog_is_allowed(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: TopLevelProjectPayloadConnection(),
+        )
+
+        result = backend.call_tool("list_servers", {"status": "ACTIVE"})
+        health = backend.health()
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
+        self.assertEqual(health["project"]["id"], "project-1")
+        self.assertEqual(health["project"]["user_id"], "user-1")
         self.assertFalse(health["project"]["has_service_catalog"])
 
     def test_openstack_exposes_bounded_volume_listing(self) -> None:

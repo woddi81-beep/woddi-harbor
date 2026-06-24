@@ -241,6 +241,23 @@ def _access_project_payload(access: Any) -> dict[str, Any]:
     return project if isinstance(project, dict) else {}
 
 
+def _access_user_payload(access: Any) -> dict[str, Any]:
+    user = _safe_getattr(access, "_user")
+    if isinstance(user, dict):
+        return user
+    token = _access_token_payload(access)
+    user = token.get("user")
+    return user if isinstance(user, dict) else {}
+
+
+def _payload_field(payload: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = _safe_string(payload.get(name))
+        if value:
+            return value
+    return ""
+
+
 def _access_has_service_catalog(access: Any) -> bool:
     catalog_probe = _safe_getattr(access, "has_service_catalog")
     if callable(catalog_probe):
@@ -253,14 +270,36 @@ def _access_has_service_catalog(access: Any) -> bool:
 
 
 def _access_scope(access: Any) -> dict[str, Any]:
+    token = _access_token_payload(access)
     project = _access_project_payload(access)
-    project_id = _safe_string(_safe_getattr(access, "project_id")) or _safe_string(project.get("id"))
-    project_name = _safe_string(_safe_getattr(access, "project_name")) or _safe_string(project.get("name"))
+    user = _access_user_payload(access)
+    project_id = (
+        _safe_string(_safe_getattr(access, "project_id"))
+        or _payload_field(project, "id")
+        or _payload_field(token, "project_id", "tenant_id")
+    )
+    project_name = (
+        _safe_string(_safe_getattr(access, "project_name"))
+        or _payload_field(project, "name")
+        or _payload_field(token, "project_name", "tenant_name")
+    )
+    user_id = (
+        _safe_string(_safe_getattr(access, "user_id"))
+        or _payload_field(user, "id")
+        or _payload_field(token, "user_id")
+    )
+    user_name = (
+        _safe_string(_safe_getattr(access, "user_name"))
+        or _payload_field(user, "name", "username")
+        or _payload_field(token, "user_name", "username")
+    )
     project_scoped = bool(_safe_getattr(access, "project_scoped", False) or project_id or project)
     return {
         "project_scoped": project_scoped,
         "project_id": project_id or None,
         "project_name": project_name or None,
+        "user_id": user_id or None,
+        "user_name": user_name or None,
         "has_service_catalog": _access_has_service_catalog(access),
     }
 
@@ -485,6 +524,8 @@ class OpenStackBackend:
             self._project_context = {
                 "id": project_id or None,
                 "name": project_name or None,
+                "user_id": token_scope.get("user_id") or None,
+                "user_name": token_scope.get("user_name") or None,
                 "project_scoped": project_scoped,
                 "has_service_catalog": has_service_catalog,
             }
@@ -503,6 +544,8 @@ class OpenStackBackend:
         return {
             "project_id": self._project_context.get("id") or None,
             "project_name": self._project_context.get("name") or None,
+            "user_id": self._project_context.get("user_id") or None,
+            "user_name": self._project_context.get("user_name") or None,
             "project_scoped": self._project_context.get("project_scoped"),
             "has_service_catalog": self._project_context.get("has_service_catalog"),
         }
