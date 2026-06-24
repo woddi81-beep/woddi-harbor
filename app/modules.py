@@ -124,7 +124,7 @@ def _local_mcp_auth_configured(module: ModuleConfig, openstack_token: str = "", 
         return False
     if module.type == "openstack_mcp":
         settings = _openstack_settings(module, openstack_token)
-        return bool(settings.get("OS_AUTH_URL") and (settings.get("OS_TOKEN") or openstack_user.strip()))
+        return bool(settings.get("OS_AUTH_URL") and (settings.get("OS_TOKEN") or os.getenv("OS_TOKEN", "").strip()))
     return False
 
 
@@ -956,7 +956,6 @@ def _module_diagnostics_hint(module: ModuleConfig, payload: dict[str, Any]) -> s
         for marker in (
             "credentials fehlen",
             "token erneuern",
-            "username+password",
             "projektgescoped",
             "project-scoped",
             "project scoped",
@@ -967,8 +966,7 @@ def _module_diagnostics_hint(module: ModuleConfig, payload: dict[str, Any]) -> s
     ):
         return (
             "OpenStack-Zugang fuer diesen Harbor-Benutzer erneuern: "
-            "im Chat einen projektgescopten User-Token speichern oder im "
-            "Admin-Dialog Username+Password konfigurieren."
+            "im Chat oder Admin-Dialog einen projektgescopten User-Token speichern."
         )
     return f"Lokalen Worker pruefen oder starten: ./harbor.sh module start {module.id}"
 
@@ -1025,12 +1023,14 @@ def _connect_next_steps(module: ModuleConfig, checks: list[dict[str, Any]], erro
 
     if "credential" in lower or "token" in lower or "unauthorized" in lower or "401" in lower:
         if module.type == "openstack_mcp":
-            steps.append("OpenStack-Zugang im Admin-Dialog erneuern; bevorzugt Username+Password speichern, damit Harbor projektgescopte Tokens holen kann.")
+            steps.append("OpenStack-Zugang fuer diesen Harbor-Benutzer erneuern: projektgescopten User-Token speichern.")
+        elif module.type == "netbox_mcp":
+            steps.append("NetBox API anonym aus dem Harbor-Netz erreichbar machen; URL, sichere Netze und read-only API-Rechte pruefen.")
         else:
             steps.append("API-Token/Auth-Konfiguration des Moduls pruefen und danach Browse erneut ausfuehren.")
 
     if "projektgescoped" in lower or "project-scoped" in lower or "project scoped" in lower:
-        steps.append("OpenStack-Token ist nicht projektgescopet: mit Username+Password oder projektgescoptem Token neu verbinden.")
+        steps.append("OpenStack-Token ist nicht projektgescopet: Token direkt im Zielprojekt erzeugen und neu speichern.")
 
     if "connection refused" in lower or "connect call failed" in lower:
         steps.append("Zielprozess lauscht nicht auf dem konfigurierten Host/Port; Port, Service und Firewall pruefen.")
@@ -1112,6 +1112,36 @@ def module_connect_diagnostics(
             )
         )
 
+    if module.type == "openstack_mcp":
+        effective_openstack_token = openstack_token.strip() or os.getenv("OS_TOKEN", "").strip()
+        checks.append(
+            _diagnostic_check(
+                "credential",
+                "OpenStack Token",
+                bool(effective_openstack_token),
+                "Projektgescoptes User-Token ist fuer diesen Diagnoseaufruf vorhanden."
+                if effective_openstack_token
+                else "Fuer diesen Harbor-Benutzer ist kein OpenStack User-Token hinterlegt.",
+                detail={
+                    "token_present": bool(effective_openstack_token),
+                    "token_source": "request_or_user_secret" if openstack_token.strip() else "environment" if effective_openstack_token else "missing",
+                    "scope_mode": "project_from_token",
+                },
+            )
+        )
+
+    if module.type == "netbox_mcp":
+        checks.append(
+            _diagnostic_check(
+                "auth_mode",
+                "NetBox Auth",
+                True,
+                "NetBox wird anonym und read-only abgefragt.",
+                severity="ok",
+                detail={"authentication": "anonymous", "read_only": True, "netbox_url": _netbox_url(module)},
+            )
+        )
+
     index = status.get("index")
     if isinstance(index, dict):
         indexed = bool(index.get("exists"))
@@ -1170,6 +1200,24 @@ def module_connect_diagnostics(
                 },
             )
         )
+        source_diagnostics = diagnostics.get("source_diagnostics")
+        if isinstance(source_diagnostics, dict):
+            source_ok = bool(source_diagnostics.get("ok", True)) and not source_diagnostics.get("error")
+            source_tool = str(source_diagnostics.get("tool") or "").strip()
+            checks.append(
+                _diagnostic_check(
+                    "source",
+                    "Upstream-Daten",
+                    source_ok,
+                    f"{source_tool or 'Source discovery'} liefert verwertbare Nutzdaten."
+                    if source_ok
+                    else (
+                        f"{source_tool or 'Source discovery'} ist fehlgeschlagen: "
+                        f"{source_diagnostics.get('error') or _join_error_fragments(source_diagnostics) or 'unbekannter Fehler'}"
+                    ),
+                    detail=source_diagnostics,
+                )
+            )
         browse = _module_browse_payload(diagnostics)
         if module.type in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
             browse_ok, browse_message, browse_detail = _browse_summary(browse)
@@ -1301,7 +1349,7 @@ def refresh_module_field_catalog(
             if not effective_openstack_token and not openstack_user.strip():
                 raise ValueError(
                     "OpenStack Credentials fehlen fuer diesen Benutzer. "
-                    "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
+                    "Projektgescopten User-Token im OpenStack-Dialog speichern."
                 )
             execute_module(
                 module.id,
@@ -1979,7 +2027,7 @@ def execute_module(
                 if module.type == "openstack_mcp" and not effective_openstack_token and not openstack_user.strip():
                     raise ValueError(
                         "OpenStack Credentials fehlen fuer diesen Benutzer. "
-                        "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
+                        "Projektgescopten User-Token im OpenStack-Dialog speichern."
                     )
                 result = _call_mcp_tool(
                     module,

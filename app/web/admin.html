@@ -73,16 +73,9 @@
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
       <h3>Connect OpenStack</h3>
-      <p class="muted">Variante A: Username + Password — Harbor holt automatisch ein projekt-gescoptes Token.</p>
-      <label>Username<input name="username" autocomplete="username" placeholder="User-Login"></label>
-      <label>Password<input name="password" type="password" autocomplete="current-password" placeholder="Passwort"></label>
-      <label>Projekt-Name<input name="project_name" placeholder="plusone-se"></label>
-      <label>User Domain<input name="user_domain_name" placeholder="monsoon3" value="Default"></label>
-      <label>Projekt Domain<input name="project_domain_name" placeholder="Default" value="Default"></label>
-      <hr>
-      <p class="muted">Variante B: Token direkt (bereits projekt-gescopt).</p>
+      <p class="muted">Harbor verwendet ausschließlich projektgescopte OpenStack User-Tokens. Der Projektkontext wird aus Keystone gelesen.</p>
       <label>
-        <span>Projektgescoptes User-Token <span class="help" title="Das Zielprojekt wird ausschließlich aus dem Token gelesen." aria-label="Hinweis zum Projektkontext">?</span></span>
+        <span>Projektgescoptes User-Token <span class="help" title="Nur das Feld id aus 'openstack token issue -f json' eintragen; vollständiges JSON wird beim Speichern auf id reduziert." aria-label="Hinweis zum Projektkontext">?</span></span>
         <input name="token" type="password" autocomplete="new-password" placeholder="User-Token eingeben">
       </label>
       <p id="openstack-token-state" class="muted"></p>

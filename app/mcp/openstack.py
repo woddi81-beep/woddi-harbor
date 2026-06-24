@@ -25,6 +25,10 @@ DEFAULT_RESULT_LIMIT = 100
 MAX_RESULT_LIMIT = 500
 OPENSTACK_TOKEN_HEADER = "X-Harbor-OpenStack-Token"
 OPENSTACK_USER_HEADER = "X-Harbor-User"
+HARBOR_TOKEN_PROJECT_ID = "_HARBOR_TOKEN_PROJECT_ID"
+HARBOR_TOKEN_PROJECT_NAME = "_HARBOR_TOKEN_PROJECT_NAME"
+HARBOR_TOKEN_USER_ID = "_HARBOR_TOKEN_USER_ID"
+HARBOR_TOKEN_USER_NAME = "_HARBOR_TOKEN_USER_NAME"
 USER_BACKEND_IDLE_TTL_SECONDS = 4 * 60 * 60
 MAX_USER_BACKENDS = 128
 CATALOGLESS_TOKEN_WARNING = (
@@ -76,19 +80,16 @@ class OpenStackDiagnosticError(RuntimeError):
 
 
 def _credential_diagnostics(credentials: dict[str, str]) -> dict[str, Any]:
-    password_mode = bool(credentials.get("OS_USERNAME") and credentials.get("OS_PASSWORD"))
     token_mode = bool(credentials.get("OS_TOKEN"))
     return {
         "auth_url": credentials.get("OS_AUTH_URL") or None,
         "region_name": credentials.get("OS_REGION_NAME") or None,
         "interface": credentials.get("OS_INTERFACE") or None,
-        "auth_type": "password" if password_mode else "token" if token_mode else credentials.get("OS_AUTH_TYPE") or "unknown",
+        "auth_type": "token" if token_mode else credentials.get("OS_AUTH_TYPE") or "unknown",
         "token_present": token_mode,
-        "username_present": bool(credentials.get("OS_USERNAME")),
-        "password_present": bool(credentials.get("OS_PASSWORD")),
-        "project_name_configured": bool(credentials.get("OS_PROJECT_NAME")),
-        "project_id_configured": bool(credentials.get("OS_PROJECT_ID")),
-        "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or None,
+        "validated_project_id": credentials.get(HARBOR_TOKEN_PROJECT_ID) or None,
+        "validated_project_name": credentials.get(HARBOR_TOKEN_PROJECT_NAME) or None,
+        "validated_user_id": credentials.get(HARBOR_TOKEN_USER_ID) or None,
         "timeout_seconds": _timeout_seconds(credentials),
     }
 
@@ -106,8 +107,8 @@ def _diagnostic_payload(
     hints: list[str] = []
     if not credentials.get("OS_AUTH_URL"):
         hints.append("OS_AUTH_URL fehlt.")
-    if not credentials.get("OS_TOKEN") and not (credentials.get("OS_USERNAME") and credentials.get("OS_PASSWORD")):
-        hints.append("Es ist weder ein User-Token noch Username+Password konfiguriert.")
+    if not credentials.get("OS_TOKEN"):
+        hints.append("Es ist kein OpenStack User-Token fuer diesen Harbor-Benutzer konfiguriert.")
     if "connection refused" in lower_message or "unreachable" in lower_message:
         hints.append("Identity/Auth URL, DNS, Routing und Firewall pruefen.")
     if "timeout" in lower_message or "timed out" in lower_message:
@@ -115,9 +116,9 @@ def _diagnostic_payload(
     if "unscoped" in lower_message or "project-scoped" in lower_message:
         hints.append(
             "Der Token muss projektgescopt sein; "
-            "bei token-only kann Harbor den Projektkontext nicht nachtraeglich setzen."
+            "Harbor liest den Projektkontext direkt aus Keystone."
         )
-        hints.append("Wenn nur Token erlaubt sind: Token direkt im Zielprojekt erzeugen/ausstellen lassen.")
+        hints.append("Token direkt im Zielprojekt erzeugen/ausstellen lassen.")
     if "service catalog" in lower_message:
         hints.append(
             "Ein projektgescopter Token ohne Service-Katalog wird als Auth-Kontext akzeptiert; "
@@ -147,6 +148,152 @@ def openstack_sdk_available() -> bool:
     return True
 
 
+def _token_endpoint(auth_url: str) -> str:
+    normalized = auth_url.rstrip("/")
+    if normalized.endswith("/auth/tokens"):
+        return normalized
+    if normalized.endswith("/v3"):
+        return f"{normalized}/auth/tokens"
+    return f"{normalized}/v3/auth/tokens"
+
+
+def _scope_from_token_body(body: dict[str, Any]) -> dict[str, Any]:
+    token = body.get("token") if isinstance(body.get("token"), dict) else body
+    project = token.get("project") if isinstance(token.get("project"), dict) else {}
+    user = token.get("user") if isinstance(token.get("user"), dict) else {}
+    project_id = _payload_field(project, "id") or _payload_field(token, "project_id", "tenant_id")
+    project_name = _payload_field(project, "name") or _payload_field(token, "project_name", "tenant_name")
+    user_id = _payload_field(user, "id") or _payload_field(token, "user_id")
+    user_name = _payload_field(user, "name", "username") or _payload_field(token, "user_name", "username")
+    return {
+        "project_scoped": bool(project_id or project),
+        "project_id": project_id or None,
+        "project_name": project_name or None,
+        "user_id": user_id or None,
+        "user_name": user_name or None,
+        "has_service_catalog": "catalog" in token,
+        "expires_at": token.get("expires_at") or token.get("expires") or None,
+    }
+
+
+def _token_scope_from_metadata(credentials: dict[str, str]) -> dict[str, Any] | None:
+    project_id = _safe_string(credentials.get(HARBOR_TOKEN_PROJECT_ID))
+    if not project_id:
+        return None
+    return {
+        "project_scoped": True,
+        "project_id": project_id,
+        "project_name": _safe_string(credentials.get(HARBOR_TOKEN_PROJECT_NAME)) or None,
+        "user_id": _safe_string(credentials.get(HARBOR_TOKEN_USER_ID)) or None,
+        "user_name": _safe_string(credentials.get(HARBOR_TOKEN_USER_NAME)) or None,
+        "has_service_catalog": False,
+        "expires_at": None,
+    }
+
+
+def validate_openstack_token_scope(credentials: dict[str, str]) -> dict[str, Any]:
+    metadata_scope = _token_scope_from_metadata(credentials)
+    if metadata_scope:
+        return metadata_scope
+    token = credentials.get("OS_TOKEN", "").strip()
+    auth_url = credentials.get("OS_AUTH_URL", "").strip()
+    if not token or not auth_url:
+        message = "OpenStack Token-Validierung nicht moeglich: OS_AUTH_URL oder OS_TOKEN fehlt."
+        raise OpenStackDiagnosticError(
+            message,
+            _diagnostic_payload(
+                credentials,
+                operation="validate_token",
+                phase="token_validation",
+                message=message,
+            ),
+        )
+    endpoint = _token_endpoint(auth_url)
+    try:
+        with httpx.Client(timeout=_timeout_seconds(credentials), follow_redirects=False) as client:
+            response = client.get(
+                endpoint,
+                headers={
+                    "Accept": "application/json",
+                    "X-Auth-Token": token,
+                    "X-Subject-Token": token,
+                },
+            )
+            response.raise_for_status()
+            body = response.json()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in {401, 403, 404}:
+            message = (
+                f"OpenStack Token konnte bei Keystone nicht validiert werden "
+                f"(HTTP {status}). Token ist ungueltig, abgelaufen oder der "
+                "Provider erlaubt keine Self-Validation dieses Tokens."
+            )
+        else:
+            message = f"OpenStack Token-Validierung fehlgeschlagen (HTTP {status})."
+        raise OpenStackDiagnosticError(
+            message,
+            _diagnostic_payload(
+                credentials,
+                operation="validate_token",
+                phase="token_validation",
+                message=message,
+                exc=exc,
+            ),
+        ) from exc
+    except Exception as exc:
+        if _is_timeout_error(exc):
+            message = (
+                f"OpenStack Token-Validierung an {endpoint} timed out after "
+                f"{_timeout_seconds(credentials):.0f}s."
+            )
+        else:
+            message = f"OpenStack Token-Validierung fehlgeschlagen: {exc}"
+        raise OpenStackDiagnosticError(
+            message,
+            _diagnostic_payload(
+                credentials,
+                operation="validate_token",
+                phase="token_validation",
+                message=message,
+                exc=exc,
+            ),
+        ) from exc
+    scope = _scope_from_token_body(body if isinstance(body, dict) else {})
+    if not scope.get("project_scoped"):
+        message = (
+            "OpenStack Token ist gueltig, aber Keystone meldet keinen Projekt-Scope. "
+            "Erzeuge den Token direkt im Zielprojekt und speichere den Wert aus dem Feld 'id'."
+        )
+        raise OpenStackDiagnosticError(
+            message,
+            _diagnostic_payload(
+                credentials,
+                operation="validate_token",
+                phase="scope_validation",
+                message=message,
+                access=scope,
+            ),
+        )
+    return scope
+
+
+def _with_validated_token_scope(credentials: dict[str, str]) -> dict[str, str]:
+    if not credentials.get("OS_TOKEN"):
+        return credentials
+    scope = validate_openstack_token_scope(credentials)
+    enriched = dict(credentials)
+    if scope.get("project_id"):
+        enriched[HARBOR_TOKEN_PROJECT_ID] = str(scope["project_id"])
+    if scope.get("project_name"):
+        enriched[HARBOR_TOKEN_PROJECT_NAME] = str(scope["project_name"])
+    if scope.get("user_id"):
+        enriched[HARBOR_TOKEN_USER_ID] = str(scope["user_id"])
+    if scope.get("user_name"):
+        enriched[HARBOR_TOKEN_USER_NAME] = str(scope["user_name"])
+    return enriched
+
+
 def create_openstack_connection(credentials: dict[str, str]) -> Any:
     try:
         from openstack.connection import Connection
@@ -165,33 +312,18 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         "connect_retries": 1,
     }
 
-    password = credentials.get("OS_PASSWORD", "").strip()
-    username = credentials.get("OS_USERNAME", "").strip()
     token = credentials.get("OS_TOKEN", "").strip()
+    token_project_id = credentials.get(HARBOR_TOKEN_PROJECT_ID, "").strip()
 
-    if password and username:
-        # Password-based auth with project scope (recommended)
+    if token:
         options.update({
-            "auth_type": "password",
-            "auth_method": "v3password",
-            "username": username,
-            "password": password,
-            "user_domain_name": credentials.get("OS_USER_DOMAIN_NAME") or credentials.get("OS_DOMAIN_NAME") or "Default",
-            "project_name": credentials.get("OS_PROJECT_NAME") or credentials.get("OS_PROJECT_ID") or "",
-            "project_domain_name": credentials.get("OS_PROJECT_DOMAIN_NAME") or "Default",
-        })
-    elif token:
-        # The project context must come from the token itself. Harbor does not
-        # rescope per-user tokens because users may only be allowed to provide a token.
-        options.update({
-            "auth_type": "token",
+            "auth_type": "v3token" if token_project_id else "token",
             "token": token,
         })
+        if token_project_id:
+            options["project_id"] = token_project_id
     else:
-        raise ValueError(
-            "OpenStack: Entweder OS_TOKEN oder OS_PASSWORD+OS_USERNAME angeben. "
-            "Password+Project ist empfohlen fuer projekt-gescoped Tokens."
-        )
+        raise ValueError("OpenStack: OS_TOKEN fehlt. Harbor verwendet ausschliesslich User-Tokens.")
 
     return Connection(**{key: value for key, value in options.items() if value is not None})
 
@@ -430,7 +562,12 @@ class OpenStackBackend:
                 return self._connection
             timeout_seconds = _timeout_seconds(self.credentials)
             try:
-                connection = self.connection_factory(self.credentials)
+                connection_credentials = (
+                    _with_validated_token_scope(self.credentials)
+                    if self.connection_factory is create_openstack_connection
+                    else self.credentials
+                )
+                connection = self.connection_factory(connection_credentials)
                 connection.authorize()
                 access = connection.session.auth.get_access(connection.session)
             except Exception as exc:
@@ -453,7 +590,6 @@ class OpenStackBackend:
                         ),
                     ) from exc
                 auth_url = self.credentials.get("OS_AUTH_URL", "")
-                user = self.credentials.get("OS_USERNAME", "")
                 project = self.credentials.get("OS_PROJECT_NAME", "")
                 if "connection refused" in str(exc).lower():
                     message = (
@@ -473,9 +609,8 @@ class OpenStackBackend:
                 if "unscoped" in str(exc).lower():
                     message = (
                         f"OpenStack token is not project-scoped. "
-                        f"Auth URL: {auth_url}, User: {user}, Project: {project}. "
-                        f"Use Username+Password or create a "
-                        f"project-scoped token with 'openstack token issue --project {project}'."
+                        f"Auth URL: {auth_url}, Project: {project}. "
+                        "Create a project-scoped token directly in the target project."
                     )
                     raise OpenStackDiagnosticError(
                         message,
@@ -507,8 +642,7 @@ class OpenStackBackend:
                 msg = "OpenStack token ist nicht projektgescoped / not project-scoped. "
                 msg += (
                     "Create the token directly in the target project (OpenStack CLI: "
-                    "'openstack token issue --project <name>') or use "
-                    "Username+Password instead of token auth. "
+                    "'openstack token issue --project <name>'). "
                 )
                 msg += "Check OS_AUTH_URL and the token issuer/scope."
                 raise OpenStackDiagnosticError(
@@ -585,7 +719,7 @@ class OpenStackBackend:
                         "Error: Connection refused."
                     )
                 elif "unscoped" in str(exc).lower():
-                    msg += "Token is unscoped — Username+Password or project-scoped token required."
+                    msg += "Token is unscoped — project-scoped token required."
                 else:
                     msg += f"Error: {exc}"
                 raise OpenStackDiagnosticError(
@@ -708,9 +842,9 @@ class OpenStackBackend:
             "server": SERVER_NAME,
             "backend": "openstacksdk",
             "openstack_sdk": openstack_sdk_available(),
-            "auth_configured": bool(self.credentials.get("OS_AUTH_URL") and (self.credentials.get("OS_TOKEN") or (self.credentials.get("OS_USERNAME") and self.credentials.get("OS_PASSWORD")))),
+            "auth_configured": bool(self.credentials.get("OS_AUTH_URL") and self.credentials.get("OS_TOKEN")),
             "timeout_seconds": _timeout_seconds(self.credentials),
-            "scope_mode": "password_project" if self.credentials.get("OS_PASSWORD") else "token_project",
+            "scope_mode": "token_project",
             "credential_mode": "user_token",
             "project": self._project_context or None,
             "warnings": self._warnings(),
@@ -1210,7 +1344,7 @@ class OpenStackUserBackendRegistry:
         self._base_credentials = {
             key: value
             for key, value in base_credentials.items()
-            if key not in {"OS_TOKEN", "OS_USERNAME", "OS_PASSWORD"}
+            if key != "OS_TOKEN"
         }
         self._credential_provider = credential_provider
         self._backend_factory = backend_factory
@@ -1232,12 +1366,9 @@ class OpenStackUserBackendRegistry:
             if credentials.get("OS_TOKEN"):
                 credentials["OS_AUTH_TYPE"] = "token"
                 return credentials
-            if credentials.get("OS_USERNAME") and credentials.get("OS_PASSWORD"):
-                credentials["OS_AUTH_TYPE"] = "password"
-                return credentials
         raise ValueError(
             "OpenStack Credentials fehlen fuer diesen Benutzer. "
-            "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
+            "Projektgescopten User-Token im OpenStack-Dialog speichern."
         )
 
     def get(self, username: str, token: str = "") -> OpenStackBackend:
@@ -1306,7 +1437,7 @@ def create_app(credentials: dict[str, str], *, credential_provider: Callable[[st
             "openstack_sdk": openstack_sdk_available(),
             "auth_configured": bool(base_credentials.get("OS_AUTH_URL")),
             "timeout_seconds": _timeout_seconds(base_credentials),
-            "scope_mode": "password_project" if base_credentials.get("OS_PASSWORD") else "token_project",
+            "scope_mode": "token_project",
             "credential_mode": "per_user_secret_or_request_token" if credential_provider else "per_user_request_token",
             "credentials": _credential_diagnostics(base_credentials),
             "tool_count": len(_tool_schema()),
@@ -1387,5 +1518,10 @@ __all__ = [
     "OpenStackBackend",
     "OpenStackDiagnosticError",
     "OpenStackUserBackendRegistry",
+    "HARBOR_TOKEN_PROJECT_ID",
+    "HARBOR_TOKEN_PROJECT_NAME",
+    "HARBOR_TOKEN_USER_ID",
+    "HARBOR_TOKEN_USER_NAME",
     "MCP_PROTOCOL_VERSION",
+    "validate_openstack_token_scope",
 ]

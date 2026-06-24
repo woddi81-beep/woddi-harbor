@@ -457,11 +457,6 @@ $("openstack-form").addEventListener("submit", async (event) => {
   const form = event.currentTarget;
   const payload = {
     token: form.token.value,
-    username: form.username.value,
-    password: form.password.value,
-    project_name: form.project_name.value,
-    user_domain_name: form.user_domain_name.value,
-    project_domain_name: form.project_domain_name.value,
     auth_url: form.auth_url.value.trim(), region_name: form.region_name.value.trim(),
     timeout_seconds: Number(form.timeout_seconds.value || 60), port: Number(form.port.value || 0),
   };

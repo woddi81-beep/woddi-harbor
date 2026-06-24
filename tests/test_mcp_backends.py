@@ -10,7 +10,13 @@ import httpx
 from app.field_cache import load_field_catalog, update_catalog_from_tool_result
 from app.mcp.netbox import NetBoxBackend
 from app.mcp.netbox import create_app as create_netbox_app
-from app.mcp.openstack import OpenStackBackend, OpenStackDiagnosticError, OpenStackUserBackendRegistry
+from app.mcp.openstack import (
+    HARBOR_TOKEN_PROJECT_ID,
+    OpenStackBackend,
+    OpenStackDiagnosticError,
+    OpenStackUserBackendRegistry,
+    validate_openstack_token_scope,
+)
 from app.mcp.openstack import create_app as create_openstack_app
 
 
@@ -49,6 +55,32 @@ class FakeHTTPClient:
 
     def close(self) -> None:
         return None
+
+
+class FakeKeystoneValidationClient:
+    last_request: dict[str, object] = {}
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+    def __enter__(self) -> FakeKeystoneValidationClient:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+    def get(self, url: str, *, headers: dict[str, str]) -> FakeHTTPResponse:
+        self.__class__.last_request = {"url": url, "headers": headers}
+        return FakeHTTPResponse(
+            {
+                "token": {
+                    "project": {"id": "project-1", "name": "production"},
+                    "user": {"id": "user-1", "name": "alice"},
+                    "catalog": [],
+                }
+            }
+        )
 
 
 class Resource:
@@ -313,7 +345,7 @@ class McpBackendTests(unittest.TestCase):
         self.assertFalse(bob.closed)  # type: ignore[attr-defined]
         self.assertNotIn("token-a", str(registry.stats()))
 
-    def test_openstack_registry_uses_password_credentials_provider(self) -> None:
+    def test_openstack_registry_uses_token_credentials_provider(self) -> None:
         created: list[OpenStackBackend] = []
 
         class Backend(OpenStackBackend):
@@ -324,9 +356,8 @@ class McpBackendTests(unittest.TestCase):
         registry = OpenStackUserBackendRegistry(
             {"OS_AUTH_URL": "https://identity.example/v3"},
             credential_provider=lambda _username: {
-                "OS_USERNAME": "alice",
-                "OS_PASSWORD": "secret",
-                "OS_PROJECT_NAME": "production",
+                "OS_TOKEN": "stored-token",
+                HARBOR_TOKEN_PROJECT_ID: "project-1",
             },
             backend_factory=Backend,
         )
@@ -335,8 +366,25 @@ class McpBackendTests(unittest.TestCase):
         backend = registry.get("alice")
 
         self.assertIs(backend, created[0])
-        self.assertEqual(backend.credentials["OS_AUTH_TYPE"], "password")
-        self.assertEqual(backend.credentials["OS_PROJECT_NAME"], "production")
+        self.assertEqual(backend.credentials["OS_AUTH_TYPE"], "token")
+        self.assertEqual(backend.credentials["OS_TOKEN"], "stored-token")
+        self.assertEqual(backend.credentials[HARBOR_TOKEN_PROJECT_ID], "project-1")
+
+    def test_openstack_token_validation_reads_project_scope_from_keystone(self) -> None:
+        with patch("app.mcp.openstack.httpx.Client", FakeKeystoneValidationClient):
+            scope = validate_openstack_token_scope(
+                {"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "secret-token"}
+            )
+
+        self.assertTrue(scope["project_scoped"])
+        self.assertEqual(scope["project_id"], "project-1")
+        self.assertEqual(scope["project_name"], "production")
+        self.assertEqual(scope["user_id"], "user-1")
+        self.assertTrue(scope["has_service_catalog"])
+        self.assertEqual(FakeKeystoneValidationClient.last_request["url"], "https://identity.example/v3/auth/tokens")
+        headers = FakeKeystoneValidationClient.last_request["headers"]
+        self.assertEqual(headers["X-Auth-Token"], "secret-token")  # type: ignore[index]
+        self.assertEqual(headers["X-Subject-Token"], "secret-token")  # type: ignore[index]
 
     def test_netbox_fields_use_native_filter_and_response_cache(self) -> None:
         backend = NetBoxBackend("https://netbox.example")

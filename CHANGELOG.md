@@ -18,8 +18,13 @@
 - OpenStack token scope validation now accepts Keystone token payloads that
   expose `project_id` and `user_id` as top-level token metadata.
 - OpenStack module diagnostics now point to per-user credential renewal instead
-  of a generic worker restart when discovery fails because of token/password
-  problems.
+  of a generic worker restart when discovery fails because of token problems.
+- OpenStack auth is token-only end to end; Harbor self-validates the supplied
+  token at Keystone, reads the project scope, and builds the SDK connection with
+  `v3token` plus the validated project id.
+- NetBox remains anonymous/read-only, and Connect diagnostics now show this auth
+  mode explicitly while also checking source discovery separately from MCP
+  browse.
 
 ## 0.6.6 - 2026-06-19
 

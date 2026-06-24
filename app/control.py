@@ -187,11 +187,6 @@ class BackupCreateRequest(BaseModel):
 
 class OpenStackConfigureRequest(BaseModel):
     token: str = Field(default="", max_length=8192)
-    username: str = Field(default="", max_length=1024)
-    password: str = Field(default="", max_length=1024)
-    project_name: str = Field(default="", max_length=1024)
-    user_domain_name: str = Field(default="Default", max_length=256)
-    project_domain_name: str = Field(default="Default", max_length=256)
     auth_url: str = Field(min_length=1, max_length=2048)
     region_name: str = Field(default="", max_length=255)
     timeout_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
@@ -206,6 +201,61 @@ class NetBoxConfigureRequest(BaseModel):
     netbox_url: str = Field(min_length=1, max_length=2048)
     timeout_seconds: float = Field(default=30.0, ge=5.0, le=600.0)
     port: int = Field(default=0, ge=0, le=65535)
+
+
+OPENSTACK_LEGACY_USER_SECRETS = (
+    "openstack_username",
+    "openstack_password",
+    "openstack_project_name",
+    "openstack_user_domain",
+    "openstack_project_domain",
+)
+OPENSTACK_TOKEN_METADATA_SECRETS = {
+    "project_id": "openstack_token_project_id",
+    "project_name": "openstack_token_project_name",
+    "user_id": "openstack_token_user_id",
+    "user_name": "openstack_token_user_name",
+    "expires": "openstack_token_expires",
+}
+
+
+def _parse_openstack_token_input(raw_value: str) -> tuple[str, dict[str, str]]:
+    raw = raw_value.strip()
+    if not raw:
+        return "", {}
+    if not raw.startswith("{"):
+        return raw, {}
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("OpenStack Token JSON muss ein Objekt sein.")
+    token_value = str(payload.get("id") or payload.get("token") or "").strip()
+    if not token_value:
+        raise ValueError("OpenStack Token JSON enthaelt kein Feld 'id'.")
+    metadata: dict[str, str] = {}
+    for source_key in ("project_id", "project_name", "user_id", "user_name", "expires"):
+        value = str(payload.get(source_key) or "").strip()
+        if value:
+            metadata[source_key] = value
+    return token_value, metadata
+
+
+def _save_openstack_token_for_user(username: str, raw_token: str) -> str:
+    token, metadata = _parse_openstack_token_input(raw_token)
+    if not token:
+        return ""
+    save_user_named_secret(username, "openstack_token", token)
+    for metadata_key, secret_name in OPENSTACK_TOKEN_METADATA_SECRETS.items():
+        value = metadata.get(metadata_key, "")
+        if value:
+            save_user_named_secret(username, secret_name, value)
+        else:
+            delete_user_named_secret(username, secret_name)
+    return token
+
+
+def _delete_openstack_legacy_user_credentials(username: str) -> None:
+    for secret_name in OPENSTACK_LEGACY_USER_SECRETS:
+        delete_user_named_secret(username, secret_name)
 
 
 def _record_activity(kind: str, label: str, detail: str = "") -> None:
@@ -1025,7 +1075,6 @@ def create_app() -> FastAPI:
         existing = find_module("openstack")
         old_token = load_user_named_secret(_user.username, "openstack_token")
         new_token = body.token.strip()
-        use_password = bool(body.username and body.password)
         module = ModuleConfig(
             id="openstack",
             name="OpenStack MCP",
@@ -1062,29 +1111,17 @@ def create_app() -> FastAPI:
             ],
             test_action="discover",
             settings={
-                "auth_type": "password" if use_password else "token",
+                "auth_type": "token",
                 "auth_url": body.auth_url.strip(),
                 "region_name": body.region_name.strip(),
                 "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
             },
-            notes="Harbor nutzt Username+Password (empfohlen) oder ein projektgescoptes User-Token.",
+            notes="Harbor nutzt ausschliesslich projektgescopte OpenStack User-Tokens.",
         )
         try:
             if new_token:
-                save_user_named_secret(_user.username, "openstack_token", new_token)
-            if use_password:
-                save_user_named_secret(_user.username, "openstack_username", body.username)
-                save_user_named_secret(_user.username, "openstack_password", body.password)
-                save_user_named_secret(_user.username, "openstack_project_name", body.project_name)
-                save_user_named_secret(_user.username, "openstack_user_domain", body.user_domain_name)
-                save_user_named_secret(_user.username, "openstack_project_domain", body.project_domain_name)
-                delete_user_named_secret(_user.username, "openstack_token")
-            else:
-                delete_user_named_secret(_user.username, "openstack_username")
-                delete_user_named_secret(_user.username, "openstack_password")
-                delete_user_named_secret(_user.username, "openstack_project_name")
-                delete_user_named_secret(_user.username, "openstack_user_domain")
-                delete_user_named_secret(_user.username, "openstack_project_domain")
+                _save_openstack_token_for_user(_user.username, new_token)
+            _delete_openstack_legacy_user_credentials(_user.username)
             upsert_module(module)
             delete_module_named_secret("openstack", "openstack_token")
             delete_module_named_secret("openstack", "openstack_application_credential_secret")
@@ -1119,7 +1156,8 @@ def create_app() -> FastAPI:
         _user: HarborUser = require_role("viewer"),
     ) -> dict[str, Any]:
         try:
-            save_user_named_secret(_user.username, "openstack_token", body.token)
+            _save_openstack_token_for_user(_user.username, body.token)
+            _delete_openstack_legacy_user_credentials(_user.username)
             delete_module_named_secret("openstack", "openstack_token")
             delete_module_named_secret("openstack", "openstack_application_credential_secret")
             delete_module_named_secret("openstack", "openstack_password")
@@ -1141,6 +1179,9 @@ def create_app() -> FastAPI:
     @app.delete("/api/integrations/openstack/token")
     def openstack_token_delete(_user: HarborUser = require_role("viewer")) -> dict[str, Any]:
         delete_user_named_secret(_user.username, "openstack_token")
+        for secret_name in OPENSTACK_TOKEN_METADATA_SECRETS.values():
+            delete_user_named_secret(_user.username, secret_name)
+        _delete_openstack_legacy_user_credentials(_user.username)
         record_audit(
             "integration.openstack.token.delete",
             "openstack",

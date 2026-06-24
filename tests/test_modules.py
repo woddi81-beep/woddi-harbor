@@ -17,7 +17,7 @@ from app.config import (
     save_user_named_secret,
 )
 from app.mcp.netbox import NetBoxBackend
-from app.mcp.openstack import OpenStackBackend, create_openstack_connection
+from app.mcp.openstack import HARBOR_TOKEN_PROJECT_ID, OpenStackBackend, create_openstack_connection
 from app.modules import (
     discover_standard_mcp_module,
     execute_module,
@@ -661,16 +661,16 @@ class ModuleTests(unittest.TestCase):
             {
                 "OS_AUTH_URL": "https://identity.example/v3",
                 "OS_TOKEN": "project-scoped-token",
-                "OS_PROJECT_NAME": "",
-                "OS_PROJECT_DOMAIN_NAME": "",
+                HARBOR_TOKEN_PROJECT_ID: "project-1",
             }
         )
 
-        self.assertEqual(connection.config.config["auth_type"], "token")
+        self.assertEqual(connection.config.config["auth_type"], "v3token")
         self.assertEqual(
             connection.config.config["auth"],
             {
                 "auth_url": "https://identity.example/v3",
+                "project_id": "project-1",
                 "token": "project-scoped-token",
             },
         )
@@ -751,7 +751,7 @@ class ModuleTests(unittest.TestCase):
     def test_redaction_preserves_openstack_diagnostics(self) -> None:
         redacted = modules_module._redact_mapping(
             {
-                "credentials": {"token_present": True, "password_present": False, "OS_TOKEN": "secret-token"},
+                "credentials": {"token_present": True, "OS_TOKEN": "secret-token"},
                 "token_scope": {"project_scoped": False, "project_id": None, "has_service_catalog": False},
                 "application_credential_secret": "secret",
             }
@@ -803,7 +803,7 @@ class ModuleTests(unittest.TestCase):
         }
         credential_error = ValueError(
             "OpenStack Credentials fehlen fuer diesen Benutzer. "
-            "Token erneuern oder Username+Password im OpenStack-Dialog speichern."
+            "Projektgescopten User-Token im OpenStack-Dialog speichern."
         )
         with (
             patch("app.modules.find_module", return_value=module),

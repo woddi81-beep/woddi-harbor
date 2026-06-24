@@ -8,7 +8,13 @@ import uvicorn
 from fastapi import FastAPI
 
 from .config import find_module, load_user_named_secret
-from .mcp.openstack import create_app
+from .mcp.openstack import (
+    HARBOR_TOKEN_PROJECT_ID,
+    HARBOR_TOKEN_PROJECT_NAME,
+    HARBOR_TOKEN_USER_ID,
+    HARBOR_TOKEN_USER_NAME,
+    create_app,
+)
 from .worker_security import install_worker_auth
 
 
@@ -38,22 +44,22 @@ def _openstack_credentials(module_id: str) -> dict[str, str]:
 
 def _openstack_user_credentials(username: str) -> dict[str, str]:
     token = load_user_named_secret(username, "openstack_token")
-    if token:
-        return {"OS_AUTH_TYPE": "token", "OS_TOKEN": token}
-
-    openstack_username = load_user_named_secret(username, "openstack_username")
-    password = load_user_named_secret(username, "openstack_password")
-    if not openstack_username or not password:
+    if not token:
         return {}
-
-    return {
-        "OS_AUTH_TYPE": "password",
-        "OS_USERNAME": openstack_username,
-        "OS_PASSWORD": password,
-        "OS_PROJECT_NAME": load_user_named_secret(username, "openstack_project_name"),
-        "OS_USER_DOMAIN_NAME": load_user_named_secret(username, "openstack_user_domain") or "Default",
-        "OS_PROJECT_DOMAIN_NAME": load_user_named_secret(username, "openstack_project_domain") or "Default",
+    credentials = {
+        "OS_AUTH_TYPE": "token",
+        "OS_TOKEN": token,
     }
+    for secret_name, credential_key in (
+        ("openstack_token_project_id", HARBOR_TOKEN_PROJECT_ID),
+        ("openstack_token_project_name", HARBOR_TOKEN_PROJECT_NAME),
+        ("openstack_token_user_id", HARBOR_TOKEN_USER_ID),
+        ("openstack_token_user_name", HARBOR_TOKEN_USER_NAME),
+    ):
+        value = load_user_named_secret(username, secret_name)
+        if value:
+            credentials[credential_key] = value
+    return credentials
 
 
 def create_worker_app(module_id: str) -> FastAPI:

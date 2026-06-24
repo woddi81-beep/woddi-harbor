@@ -350,6 +350,35 @@ class OpenStackConfigurationTests(unittest.TestCase):
         self.assertNotIn("project_name", module.settings)
         self.assertTrue(result["token_configured"])
 
+    def test_openstack_configure_extracts_id_from_token_json(self) -> None:
+        captured_secrets: dict[str, str] = {}
+
+        def fake_save(_username: str, name: str, value: str) -> None:
+            captured_secrets[name] = value
+
+        endpoint = self._endpoint("openstack_configure")
+        body = OpenStackConfigureRequest(
+            token='{"id":"token-id","project_id":"project-1","user_id":"user-1","expires":"2026-06-24T17:17:08+0000"}',
+            auth_url="https://identity.example/v3",
+            region_name="RegionOne",
+        )
+        with (
+            patch("app.control.find_module", return_value=None),
+            patch("app.control.load_user_named_secret", return_value=""),
+            patch("app.control.save_user_named_secret", side_effect=fake_save),
+            patch("app.control.delete_user_named_secret"),
+            patch("app.control.upsert_module", side_effect=lambda module: module),
+            patch("app.control.delete_module_named_secret"),
+            patch("app.control.module_status", return_value={"id": "openstack"}),
+            patch("app.control.record_audit"),
+        ):
+            endpoint(body=body, _user=HarborUser(username="operator", password_hash="unused", role="operator"))
+
+        self.assertEqual(captured_secrets["openstack_token"], "token-id")
+        self.assertEqual(captured_secrets["openstack_token_project_id"], "project-1")
+        self.assertEqual(captured_secrets["openstack_token_user_id"], "user-1")
+        self.assertNotIn("id", {key: value for key, value in captured_secrets.items() if key != "openstack_token"})
+
     def test_openstack_configure_accepts_project_scoped_token_without_project(self) -> None:
         captured: dict[str, object] = {}
 
