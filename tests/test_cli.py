@@ -9,6 +9,42 @@ from app.cli import app, module_add_netbox_mcp, module_add_openstack_local_mcp, 
 
 
 class CliModuleTests(unittest.TestCase):
+    def test_ops_status_prints_service_overview(self) -> None:
+        with patch(
+            "app.cli.service_overview",
+            return_value={"version": {"version": "1.2.3"}, "services": [{"id": "harbor"}]},
+        ) as overview:
+            result = CliRunner().invoke(app, ["ops", "status"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn('"version": "1.2.3"', result.output)
+        overview.assert_called_once_with(include_health=True)
+
+    def test_ops_restart_module_uses_profile_action(self) -> None:
+        with patch("app.cli.run_service_profile_action", return_value={"ok": True}) as run_action:
+            result = CliRunner().invoke(app, ["ops", "restart", "module:openstack"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        run_action.assert_called_once_with("module:openstack", "restart")
+
+    def test_service_run_uses_profile_action(self) -> None:
+        with patch("app.cli.run_service_profile_action", return_value={"ok": True}) as run_action:
+            result = CliRunner().invoke(app, ["service", "run", "module:openstack", "restart"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        run_action.assert_called_once_with("module:openstack", "restart")
+
+    def test_ops_update_can_skip_restart(self) -> None:
+        with (
+            patch("app.cli.update_checkout", return_value={"ok": True, "changed": True, "restart_required": True}) as update,
+            patch("app.cli.restart_all") as restart,
+        ):
+            result = CliRunner().invoke(app, ["ops", "update", "--no-restart"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        update.assert_called_once()
+        restart.assert_not_called()
+
     def test_module_call_accepts_positional_payload(self) -> None:
         with patch("app.cli.execute_module", return_value={"ok": True}) as execute:
             result = CliRunner().invoke(app, ["module", "call", "openstack", "list_servers", "{}"])

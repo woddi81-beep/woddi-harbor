@@ -5,10 +5,8 @@ import json
 import os
 import secrets
 import shutil
-import subprocess
 import sys
 from dataclasses import replace
-from pathlib import Path
 from typing import Optional
 
 import typer
@@ -49,6 +47,7 @@ from .mcp_lifecycle import (
     stop_instance,
     upgrade_instance,
 )
+from .operations import run_service_profile_action, service_overview, update_checkout
 from .modules import (
     discover_remote_module,
     execute_module,
@@ -71,7 +70,7 @@ from .modules import (
 )
 from .preflight import production_check
 from .runtime import restart_all, start_all, stop_all, uninstall_runtime
-from .services import health_check_service, install_and_optionally_enable_service, service_action
+from .services import health_check_service, install_and_optionally_enable_service
 from .sources import configure_document_sources, source_overview, sync_source
 from .version import __version__
 from .worker import run_worker
@@ -91,6 +90,7 @@ backup_app = typer.Typer(no_args_is_help=True)
 source_app = typer.Typer(no_args_is_help=True)
 runtime_app = typer.Typer(no_args_is_help=True)
 server_app = typer.Typer(no_args_is_help=True)
+ops_app = typer.Typer(no_args_is_help=True)
 app.add_typer(module_app, name="module")
 app.add_typer(llm_app, name="llm")
 app.add_typer(service_app, name="service")
@@ -100,6 +100,7 @@ app.add_typer(backup_app, name="backup")
 app.add_typer(source_app, name="source")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(server_app, name="server")
+app.add_typer(ops_app, name="ops")
 console = Console()
 
 
@@ -110,55 +111,9 @@ def _bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _run_capture(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
-
-
 def auto_update_checkout() -> dict[str, object]:
     """Best-effort source update used by systemd/manual startup."""
-    root = Path(__file__).resolve().parent.parent
-    if not _bool_env("HARBOR_AUTO_UPDATE", True):
-        return {"ok": True, "skipped": True, "reason": "disabled"}
-    if not (root / ".git").exists():
-        return {"ok": True, "skipped": True, "reason": "not-a-git-checkout"}
-    if shutil.which("git") is None:
-        return {"ok": True, "skipped": True, "reason": "git-not-found"}
-
-    upstream = _run_capture(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=root)
-    if upstream.returncode != 0:
-        return {"ok": True, "skipped": True, "reason": "no-upstream"}
-
-    status = _run_capture(["git", "status", "--porcelain"], cwd=root)
-    if status.returncode != 0:
-        return {"ok": False, "skipped": True, "reason": "status-failed", "stderr": status.stderr.strip()}
-    if status.stdout.strip():
-        return {"ok": True, "skipped": True, "reason": "dirty-working-tree"}
-
-    before = _run_capture(["git", "rev-parse", "HEAD"], cwd=root)
-    pull = _run_capture(["git", "pull", "--ff-only"], cwd=root)
-    if pull.returncode != 0:
-        return {"ok": False, "changed": False, "reason": "pull-failed", "stderr": pull.stderr.strip()}
-
-    after = _run_capture(["git", "rev-parse", "HEAD"], cwd=root)
-    changed = before.stdout.strip() != after.stdout.strip()
-    install: dict[str, object] = {"ok": True, "skipped": not changed}
-    if changed:
-        completed = _run_capture([sys.executable, "-m", "pip", "install", "-e", str(root)], cwd=root)
-        install = {
-            "ok": completed.returncode == 0,
-            "returncode": completed.returncode,
-            "stdout": completed.stdout[-1200:].strip(),
-            "stderr": completed.stderr[-1200:].strip(),
-        }
-    return {
-        "ok": bool(install.get("ok", True)),
-        "skipped": False,
-        "changed": changed,
-        "before": before.stdout.strip(),
-        "after": after.stdout.strip(),
-        "pull": pull.stdout.strip() or pull.stderr.strip(),
-        "install": install,
-    }
+    return update_checkout(enabled=_bool_env("HARBOR_AUTO_UPDATE", True))
 
 
 def _print_update_result(result: dict[str, object]) -> None:
@@ -417,6 +372,43 @@ def runtime_uninstall(yes: bool = typer.Option(False, "--yes", help="Confirm rem
     console.print_json(json.dumps(result, ensure_ascii=False))
     if not result["ok"]:
         raise typer.Exit(code=2)
+
+
+@ops_app.command("status")
+def ops_status(no_health: bool = typer.Option(False, "--no-health", help="Do not run service health checks.")) -> None:
+    """Show version and status for all Harbor service profiles."""
+    console.print_json(json.dumps(service_overview(include_health=not no_health), ensure_ascii=False))
+
+
+@ops_app.command("restart")
+def ops_restart(target: str = typer.Argument("all", help="all, harbor or a service profile like module:openstack")) -> None:
+    """Restart one Harbor service profile or the complete Harbor runtime."""
+    normalized = target.strip()
+    result = restart_all() if normalized in {"all", "harbor"} else run_service_profile_action(normalized, "restart")
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result.get("ok", False):
+        raise typer.Exit(code=2)
+
+
+def _run_update_command(*, restart: bool) -> None:
+    result = update_checkout()
+    if restart and result.get("restart_required"):
+        result["restart"] = restart_all()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result.get("ok", False):
+        raise typer.Exit(code=2)
+
+
+@ops_app.command("update")
+def ops_update(restart: bool = typer.Option(True, "--restart/--no-restart", help="Restart Harbor after a changed update.")) -> None:
+    """Pull the configured Git upstream, reinstall Harbor and restart when changed."""
+    _run_update_command(restart=restart)
+
+
+@app.command("update")
+def update_command(restart: bool = typer.Option(True, "--restart/--no-restart", help="Restart Harbor after a changed update.")) -> None:
+    """Update the checkout to the configured Git upstream."""
+    _run_update_command(restart=restart)
 
 
 @app.command()
@@ -1159,9 +1151,28 @@ def service_run(
     profile_id: str = typer.Argument(..., help="harbor or module:<module-id>"),
     action: str = typer.Argument(..., help="start|stop|restart|enable|disable|status"),
 ) -> None:
-    """Run a systemd action for an installed profile."""
-    result = service_action(profile_id, action)
+    """Run an action for a Harbor service profile."""
+    result = run_service_profile_action(profile_id, action)
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Service Action"))
+
+
+@service_app.command("status")
+def service_status(profile_id: str = typer.Argument("", help="Optional: harbor or module:<module-id>")) -> None:
+    """Show status for one service profile or all profiles."""
+    if profile_id.strip():
+        result = run_service_profile_action(profile_id.strip(), "status")
+    else:
+        result = service_overview()
+    console.print_json(json.dumps(result, ensure_ascii=False))
+
+
+@service_app.command("restart")
+def service_restart(profile_id: str = typer.Argument(..., help="harbor or module:<module-id>")) -> None:
+    """Restart a Harbor service profile using systemd or the local module runtime."""
+    result = restart_all() if profile_id.strip() == "harbor" else run_service_profile_action(profile_id.strip(), "restart")
+    console.print_json(json.dumps(result, ensure_ascii=False))
+    if not result.get("ok", False):
+        raise typer.Exit(code=2)
 
 
 @service_app.command("check")

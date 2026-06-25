@@ -243,6 +243,7 @@ Profiles ansehen:
 
 ```bash
 ./harbor.sh service list
+./harbor.sh ops status
 ```
 
 Harbor als User-Service installieren:
@@ -261,6 +262,14 @@ Lokales Modul als User-Service installieren:
 ```
 
 Der gleiche Flow funktioniert mit `--mode system`, sofern du die noetigen Rechte hast.
+
+Betrieb und Updates:
+
+```bash
+./harbor.sh ops restart module:openstack
+./harbor.sh ops restart all
+./harbor.sh ops update
+```
 
 ## Auth
 

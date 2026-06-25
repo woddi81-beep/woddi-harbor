@@ -94,10 +94,53 @@ def start_all() -> dict[str, Any]:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     PID_DIR.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
-    pid = _read_harbor_pid()
+    user_units = _installed_units()
+    system_units = _profile_units("system")
+    profiles = sync_service_profiles()
+    harbor_managed_by_systemd = "woddi-harbor.service" in user_units or any(
+        profile.kind == "harbor" and profile.systemd_mode == "system"
+        for profile in profiles
+    )
+    systemd_module_ids = {
+        profile.module_id
+        for profile in profiles
+        if profile.kind == "module" and profile.systemd_mode in {"user", "system"}
+    }
 
-    if _harbor_healthy():
-        results.append({"component": "harbor", "ok": True, "status": "already-running", "pid": pid})
+    if user_units:
+        results.append(
+            {
+                "component": "systemd-user",
+                **_run(["systemctl", "--user", "start", *user_units]),
+            }
+        )
+    if system_units:
+        results.append(
+            {
+                "component": "systemd-system",
+                **_run(["systemctl", "start", *system_units]),
+            }
+        )
+
+    if harbor_managed_by_systemd:
+        healthy = _wait_for_harbor(True)
+        results.append(
+            {
+                "component": "harbor",
+                "ok": healthy,
+                "status": "systemd-running" if healthy else "systemd-start-failed",
+                "unit": next(
+                    (
+                        profile.resolved_unit_name() + ".service"
+                        for profile in profiles
+                        if profile.kind == "harbor" and profile.systemd_mode in {"user", "system"}
+                    ),
+                    "woddi-harbor.service",
+                ),
+            }
+        )
+    elif _harbor_healthy():
+        results.append({"component": "harbor", "ok": True, "status": "already-running", "pid": _read_harbor_pid()})
     else:
         log_path = LOG_DIR / "harbor.log"
         with log_path.open("a", encoding="utf-8") as log_handle:
@@ -123,6 +166,8 @@ def start_all() -> dict[str, Any]:
         for module in load_modules():
             if not module.enabled or module.transport != "local" or module.type not in LOCAL_WORKER_TYPES:
                 continue
+            if module.id in systemd_module_ids:
+                continue
             try:
                 module_result = start_module(module.id)
                 results.append(
@@ -142,8 +187,15 @@ def _stop_local_modules() -> list[dict[str, Any]]:
     from .modules import stop_module
 
     results: list[dict[str, Any]] = []
+    systemd_module_ids = {
+        profile.module_id
+        for profile in sync_service_profiles()
+        if profile.kind == "module" and profile.systemd_mode in {"user", "system"}
+    }
     for module in load_modules():
         if module.transport != "local":
+            continue
+        if module.id in systemd_module_ids:
             continue
         try:
             module_result = stop_module(module.id)
@@ -194,6 +246,14 @@ def _installed_units() -> list[str]:
     unit_dir = Path.home() / ".config/systemd/user"
     managed = [unit for unit in MANAGED_USER_UNITS if (unit_dir / unit).exists() or (unit_dir / unit).is_symlink()]
     return [*managed, *_installed_module_units()]
+
+
+def _profile_units(mode: str) -> list[str]:
+    return [
+        profile.resolved_unit_name() + ".service"
+        for profile in sync_service_profiles()
+        if profile.systemd_mode == mode
+    ]
 
 
 def _orphan_mcp_processes() -> list[int]:
@@ -258,12 +318,20 @@ def stop_all() -> dict[str, Any]:
             results.append({"component": f"mcp:{instance['id']}", "ok": False, "error": str(exc)})
     results.append(_stop_orphan_mcp_processes())
 
-    units = _installed_units()
-    if units:
+    user_units = _installed_units()
+    if user_units:
         results.append(
             {
                 "component": "systemd-user",
-                **_run(["systemctl", "--user", "stop", *units]),
+                **_run(["systemctl", "--user", "stop", *user_units]),
+            }
+        )
+    system_units = _profile_units("system")
+    if system_units:
+        results.append(
+            {
+                "component": "systemd-system",
+                **_run(["systemctl", "stop", *system_units]),
             }
         )
     if shutil.which("docker"):

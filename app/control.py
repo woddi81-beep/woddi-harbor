@@ -8,7 +8,6 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -73,7 +72,7 @@ from .modules import (
     warm_module_runtime_caches,
 )
 from .observability import prometheus_metrics, request_finished, request_started
-from .services import health_check_service, list_service_profiles, service_action
+from .operations import run_service_profile_action, schedule_runtime_restart, service_overview, update_checkout
 from .sources import source_overview
 from .state import (
     append_chat_message,
@@ -1473,13 +1472,40 @@ def create_app() -> FastAPI:
 
     @app.get("/api/services")
     def services(_user=require_role("admin")) -> dict[str, Any]:
-        return {"services": [asdict(profile) for profile in list_service_profiles()]}
+        return service_overview()
 
     @app.post("/api/services/{profile_id}/{action}")
     def service_run(profile_id: str, action: str, _user: HarborUser = require_role("admin")) -> dict[str, Any]:
         try:
-            result = health_check_service(profile_id) if action == "check" else service_action(profile_id, action)
+            result = (
+                schedule_runtime_restart()
+                if profile_id == "harbor" and action == "restart"
+                else run_service_profile_action(profile_id, action)
+            )
             record_audit(f"service.{action}", profile_id, actor=_user.username, outcome="success" if result.get("ok") else "failure")
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/system/restart")
+    def system_restart(_user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        result = schedule_runtime_restart()
+        record_audit("system.restart", "harbor", actor=_user.username, outcome="queued")
+        return result
+
+    @app.post("/api/system/update")
+    def system_update(_user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        try:
+            result = update_checkout()
+            if result.get("restart_required"):
+                result["restart"] = schedule_runtime_restart()
+            record_audit(
+                "system.update",
+                "harbor",
+                actor=_user.username,
+                outcome="success" if result.get("ok") else "failure",
+                detail={"changed": bool(result.get("changed")), "skipped": bool(result.get("skipped"))},
+            )
             return result
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

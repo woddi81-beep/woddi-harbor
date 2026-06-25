@@ -1,5 +1,5 @@
 const views = ["overview", "modules", "connect", "sources", "users", "mcp", "jobs", "audit", "backups", "services", "stellen"];
-const labels = { overview: "Overview", modules: "Modules", connect: "Connect", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Services", stellen: "Positions" };
+const labels = { overview: "Overview", modules: "Modules", connect: "Connect", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Betrieb", stellen: "Positions" };
 let current = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 const $ = (id) => document.getElementById(id);
 
@@ -260,10 +260,40 @@ async function renderBackups() {
 }
 async function renderServices() {
   const data = await api("/api/services");
-  $("content").innerHTML = `<div class="grid">${data.services.map((item) => card(item.id,
-    `<span class="badge">${esc(item.kind)}</span><p class="endpoint">${esc(item.systemd_mode || "nicht installiert")}</p>`,
-    buttons([["Prüfen", `service:check:${item.id}`], ["Start", `service:start:${item.id}`], ["Stop", `service:stop:${item.id}`, true], ["Restart", `service:restart:${item.id}`]])
-  )).join("")}</div>`;
+  const services = data.services || [];
+  const version = data.version || {};
+  const running = services.filter((item) => item.running).length;
+  const updateState = version.dirty ? "Lokale Änderungen" : version.update_available ? "Update verfügbar" : version.update_supported ? "Aktuell" : "Kein Upstream";
+  $("content").innerHTML = `<div class="page-actions">
+    <div><strong>Betrieb</strong><span class="muted">Harbor Runtime, Module und installierte Units</span></div>
+    <div class="row"><button class="primary" data-action="system:update">Auf aktuelle Version</button><button class="danger" data-action="system:restart">Harbor neu starten</button></div>
+  </div>
+  <div class="metric-grid">
+    ${metric("Version", version.version || "n/a", `${version.branch || "-"} · ${version.git_rev || "unknown"}`)}
+    ${metric("Update", updateState, version.upstream || "kein Git-Upstream", version.update_available ? "bad" : version.dirty ? "bad" : "good")}
+    ${metric("Dienste", `${running}/${services.length}`, "laufen / bekannt", running === services.length ? "good" : "")}
+    ${metric("Runtime", "Restart", "vollständige Harbor-Runtime")}
+  </div>
+  <div class="grid">${services.map((item) => {
+    const health = item.health || {};
+    const systemd = health.systemd || {};
+    const runtime = health.runtime || {};
+    const actions = item.kind === "harbor"
+      ? [["Prüfen", `service:check:${item.id}`], ["Restart", `service:restart:${item.id}`, true]]
+      : [["Prüfen", `service:check:${item.id}`], ["Start", `service:start:${item.id}`], ["Stop", `service:stop:${item.id}`, true], ["Restart", `service:restart:${item.id}`]];
+    return card(item.display_name || item.id,
+      `<div class="card-status">${badge(item.running, "läuft", "gestoppt")} ${badge(item.ok, "gesund", "prüfen")} <span class="badge">${esc(item.kind)}</span></div>
+      <dl class="facts compact">
+        <div><dt>Profil</dt><dd>${esc(item.id)}</dd></div>
+        <div><dt>Unit</dt><dd>${esc(item.systemd_mode === "none" ? "nicht installiert" : item.unit)}</dd></div>
+        <div><dt>Modus</dt><dd>${esc(item.systemd_mode || "none")}</dd></div>
+        <div><dt>Runtime</dt><dd>${esc(runtime.url || runtime.message || runtime.error || (item.running ? "aktiv" : "inaktiv"))}</dd></div>
+        <div><dt>Systemd</dt><dd>${esc(systemd.returncode === undefined ? (systemd.message || "-") : `rc ${systemd.returncode}`)}</dd></div>
+      </dl>
+      <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(health, null, 2))}</pre></details>`,
+      buttons(actions)
+    );
+  }).join("") || empty("Keine Service-Profile gefunden.")}</div>`;
 }
 async function renderStellen() {
   const data = await api("/api/stellen");
@@ -368,6 +398,15 @@ async function action(raw) {
     select.replaceChildren(...packages.map((item) => new Option(`${item.id} @ ${item.version}`, `${item.id}|${item.version}`)));
     if (packages[0]) { select.value = `${packages[0].id}|${packages[0].version}`; form.version.value = packages[0].version; }
     $("mcp-instance-dialog").showModal(); return;
+  }
+  if (kind === "system" && verb === "update") {
+    await requestAndRender("/api/system/update", "POST");
+    return;
+  }
+  if (kind === "system" && verb === "restart") {
+    if (!confirm("Harbor komplett neu starten?")) return;
+    await requestAndRender("/api/system/restart", "POST");
+    return;
   }
   if (kind === "module") path = `/api/modules/${encodeURIComponent(id)}/${verb}`;
   if (kind === "source") path = `/api/sources/${encodeURIComponent(id)}/sync`;

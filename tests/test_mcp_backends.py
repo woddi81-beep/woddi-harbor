@@ -91,6 +91,33 @@ class Resource:
         return self.payload
 
 
+class BrokenImageResource:
+    def __init__(self) -> None:
+        self._body = {"id": "image-1", "name": "ubuntu"}
+        self._header = {}
+        self._computed = {}
+
+    def to_dict(self) -> dict[str, object]:
+        raise AttributeError("'Image' object has no attribute 'owner_seen'")
+
+
+class BrokenServerResource:
+    def __init__(self) -> None:
+        self._body = {
+            "id": "vm-1",
+            "name": "prod",
+            "status": "ACTIVE",
+            "project_id": "project-1",
+            "image": BrokenImageResource(),
+            "token": "secret-token",
+        }
+        self._header = {}
+        self._computed = {}
+
+    def to_dict(self) -> dict[str, object]:
+        raise AttributeError("'Image' object has no attribute 'owner_seen'")
+
+
 class Compute:
     def __init__(self) -> None:
         self.server_calls = 0
@@ -114,6 +141,12 @@ class Compute:
                 "totalRAMUsed": 25600,
             }
         )
+
+    def availability_zones(self):
+        return [
+            Resource(id="az-1", name="nova", state={"available": True}),
+            Resource(id="az-2", name="edge", state={"available": False}),
+        ]
 
 
 class BlockStorage:
@@ -177,6 +210,12 @@ class Connection:
 
     def authorize(self) -> str:
         return "token"
+
+
+class BrokenServerConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.compute.servers = lambda *, details=False: [BrokenServerResource()]
 
 
 class UnscopedConnection(Connection):
@@ -564,6 +603,33 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual(active_full["structuredContent"]["data"][0]["token"], "[redacted]")
         self.assertEqual(active_full["structuredContent"]["data"][0]["admin_pass"], "[redacted]")
 
+    def test_openstack_server_listing_tolerates_broken_nested_sdk_resource(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: BrokenServerConnection(),
+        )
+
+        result = backend.call_tool("list_servers", {"status": "ACTIVE"})
+
+        row = result["structuredContent"]["data"][0]
+        self.assertEqual(row["name"], "prod")
+        self.assertEqual(row["image"], {"id": "image-1", "name": "ubuntu"})
+        self.assertEqual(row["token"], "[redacted]")
+
+    def test_openstack_operation_diagnostics_use_validated_project_name(self) -> None:
+        connection = Connection()
+        connection.compute.servers = lambda *, details=False: (_ for _ in ()).throw(RuntimeError("sdk failure"))
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: connection,
+        )
+
+        with self.assertRaises(OpenStackDiagnosticError) as context:
+            backend.call_tool("list_servers", {})
+
+        self.assertIn("Project: production", str(context.exception))
+        self.assertEqual(context.exception.diagnostics["token_scope"]["project_name"], "production")
+
     def test_openstack_unscoped_token_reports_structured_diagnostics(self) -> None:
         backend = OpenStackBackend(
             credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
@@ -632,6 +698,16 @@ class McpBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "zwischen"):
             backend.call_tool("list_volumes", {"limit": 10000})
 
+    def test_openstack_lists_availability_zones(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token", "OS_PROJECT_ID": "project-1"},
+            connection_factory=lambda _credentials: Connection(),
+        )
+
+        result = backend.call_tool("list_availability_zones", {"name": "nova"})
+
+        self.assertEqual(result["structuredContent"]["data"], [{"id": "az-1", "name": "nova", "state": {"available": True}}])
+
     def test_openstack_storage_statistics_calculate_quota_percentages(self) -> None:
         connection = Connection()
         backend = OpenStackBackend(
@@ -653,10 +729,11 @@ class McpBackendTests(unittest.TestCase):
             connection_factory=lambda _credentials: connection,
         )
 
-        result = backend.call_tool("discover_resources", {"resources": ["server", "volume"]})
+        result = backend.call_tool("discover_resources", {"resources": ["server", "volume", "availability_zone"]})
         resources = result["structuredContent"]["data"]["resources"]
-        self.assertEqual([item["resource"] for item in resources], ["server", "volume"])
+        self.assertEqual([item["resource"] for item in resources], ["server", "volume", "availability_zone"])
         self.assertIn("status", resources[0]["observed_fields"])
+        self.assertIn("state", resources[2]["observed_fields"])
         self.assertTrue(all(item["available"] for item in resources))
 
     def test_field_catalog_caches_openstack_resource_discovery(self) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -684,6 +684,17 @@ class OpenStackBackend:
             "has_service_catalog": self._project_context.get("has_service_catalog"),
         }
 
+    def _diagnostic_project_label(self) -> str:
+        return str(
+            self._project_context.get("name")
+            or self._project_context.get("id")
+            or self.credentials.get(HARBOR_TOKEN_PROJECT_NAME)
+            or self.credentials.get(HARBOR_TOKEN_PROJECT_ID)
+            or self.credentials.get("OS_PROJECT_NAME")
+            or self.credentials.get("OS_PROJECT_ID")
+            or "unbekannt"
+        )
+
     def _cached(self, operation: str, arguments: dict[str, Any], loader: Callable[[], Any]) -> Any:
         cache_key = json.dumps([operation, arguments], ensure_ascii=False, sort_keys=True, default=str)
 
@@ -711,7 +722,7 @@ class OpenStackBackend:
                         ),
                     ) from exc
                 auth_url = self.credentials.get("OS_AUTH_URL", "unbekannt")
-                project = self.credentials.get("OS_PROJECT_NAME", "unbekannt")
+                project = self._diagnostic_project_label()
                 msg = f"OpenStack {operation} failed (URL: {auth_url}, Project: {project}). "
                 if "connection refused" in str(exc).lower():
                     msg += (
@@ -738,18 +749,67 @@ class OpenStackBackend:
 
     @classmethod
     def _serialize(cls, resource: Any) -> dict[str, Any]:
-        if isinstance(resource, dict):
-            payload = resource
-        elif hasattr(resource, "to_dict"):
-            payload = resource.to_dict()
-        else:
-            payload = {
-                key: value
-                for key, value in vars(resource).items()
-                if not key.startswith("_")
-            }
+        payload = cls._to_plain(resource)
         serialized = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
         return cls._redact(serialized)
+
+    @classmethod
+    def _raw_resource_payload(cls, resource: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for attribute in ("_body", "_header", "_computed"):
+            values = _safe_getattr(resource, attribute)
+            if isinstance(values, Mapping):
+                payload.update(dict(values))
+        if payload:
+            return payload
+        try:
+            return {
+                key: value
+                for key, value in vars(resource).items()
+                if not key.startswith("_") and not callable(value)
+            }
+        except TypeError:
+            return {}
+
+    @classmethod
+    def _to_plain(cls, value: Any, seen: set[int] | None = None) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        seen = seen or set()
+        value_id = id(value)
+        if value_id in seen:
+            return str(value)
+        if isinstance(value, Mapping):
+            seen.add(value_id)
+            try:
+                return {str(key): cls._to_plain(item, seen) for key, item in value.items()}
+            finally:
+                seen.discard(value_id)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            seen.add(value_id)
+            try:
+                return [cls._to_plain(item, seen) for item in value]
+            finally:
+                seen.discard(value_id)
+        to_dict = _safe_getattr(value, "to_dict")
+        if callable(to_dict):
+            seen.add(value_id)
+            try:
+                try:
+                    payload = to_dict()
+                except Exception:
+                    payload = cls._raw_resource_payload(value)
+                return cls._to_plain(payload, seen)
+            finally:
+                seen.discard(value_id)
+        raw_payload = cls._raw_resource_payload(value)
+        if raw_payload:
+            seen.add(value_id)
+            try:
+                return cls._to_plain(raw_payload, seen)
+            finally:
+                seen.discard(value_id)
+        return value
 
     @classmethod
     def _redact(cls, value: Any) -> Any:

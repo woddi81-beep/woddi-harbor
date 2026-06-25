@@ -284,6 +284,68 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertIn("edge-sw01", messages[0]["content"])
 
 
+class OperationsApiTests(unittest.TestCase):
+    @staticmethod
+    def _endpoint(name: str):
+        application = create_app()
+        return next(route.endpoint for route in application.routes if getattr(route, "name", "") == name)
+
+    def test_services_endpoint_returns_operational_overview(self) -> None:
+        endpoint = self._endpoint("services")
+        overview = {
+            "version": {"version": "1.2.3", "git_rev": "abc123"},
+            "services": [{"id": "harbor", "running": True}],
+        }
+        with patch("app.control.service_overview", return_value=overview):
+            result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
+
+        self.assertEqual(result, overview)
+
+    def test_service_restart_harbor_is_scheduled(self) -> None:
+        endpoint = self._endpoint("service_run")
+        with (
+            patch("app.control.schedule_runtime_restart", return_value={"ok": True, "scheduled": True}) as schedule,
+            patch("app.control.run_service_profile_action") as run_action,
+            patch("app.control.record_audit"),
+        ):
+            result = endpoint(
+                profile_id="harbor",
+                action="restart",
+                _user=HarborUser(username="admin", password_hash="unused", role="admin"),
+            )
+
+        self.assertTrue(result["scheduled"])
+        schedule.assert_called_once()
+        run_action.assert_not_called()
+
+    def test_service_restart_module_uses_profile_action(self) -> None:
+        endpoint = self._endpoint("service_run")
+        with (
+            patch("app.control.run_service_profile_action", return_value={"ok": True, "message": "restarted"}) as run_action,
+            patch("app.control.record_audit"),
+        ):
+            result = endpoint(
+                profile_id="module:openstack",
+                action="restart",
+                _user=HarborUser(username="admin", password_hash="unused", role="admin"),
+            )
+
+        self.assertTrue(result["ok"])
+        run_action.assert_called_once_with("module:openstack", "restart")
+
+    def test_system_update_schedules_restart_when_required(self) -> None:
+        endpoint = self._endpoint("system_update")
+        with (
+            patch("app.control.update_checkout", return_value={"ok": True, "changed": True, "restart_required": True}),
+            patch("app.control.schedule_runtime_restart", return_value={"ok": True, "scheduled": True}) as schedule,
+            patch("app.control.record_audit"),
+        ):
+            result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
+
+        self.assertTrue(result["restart"]["scheduled"])
+        schedule.assert_called_once()
+
+
 class OpenStackConfigurationTests(unittest.TestCase):
     @staticmethod
     def _endpoint(name: str):
