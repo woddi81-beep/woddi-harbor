@@ -941,6 +941,8 @@ class OpenStackBackend:
         field_filters: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         connection = self._get_connection()
+        if resource == "project":
+            return self._project_fields([self._project_context.copy()][: self._limit(arguments)], arguments)
         loaders = self._resource_loaders(connection)
         return self._list_resources(f"{resource}.list", arguments, loaders[resource], field_filters=field_filters)
 
@@ -982,6 +984,9 @@ class OpenStackBackend:
         }
 
     def _all_resources(self, resource: str) -> list[dict[str, Any]]:
+        if resource == "project":
+            self._get_connection()
+            return [self._project_context.copy()]
         connection = self._get_connection()
         loader = self._resource_loaders(connection)[resource]
         rows = self._cached(f"{resource}.list", {}, lambda: [self._serialize(item) for item in loader()])

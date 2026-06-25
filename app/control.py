@@ -750,6 +750,8 @@ def _guess_openstack_tool(message: str) -> str:
         return "list_volumes"
     if has({"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"}):
         return "get_project_statistics"
+    if has({"server", "servers", "instance", "instances", "instanz", "instanzen", "vm", "vms"}):
+        return "list_servers"
     if has({"project", "projects", "projekt", "projekte", "tenant", "tenants", "mandant", "mandanten"}):
         return "list_projects"
     if has({"image", "images", "abbild", "abbilder", "template", "templates"}):

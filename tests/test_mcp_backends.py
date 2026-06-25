@@ -237,6 +237,17 @@ class OwnerSeenDetailsConnection(Connection):
         self.compute = OwnerSeenDetailsCompute()
 
 
+class BrokenIdentityProjects:
+    def projects(self):
+        raise AttributeError("'Project' object has no attribute 'owner_seen'")
+
+
+class BrokenIdentityProjectsConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.identity = BrokenIdentityProjects()
+
+
 class UnscopedConnection(Connection):
     def __init__(self) -> None:
         super().__init__()
@@ -646,6 +657,19 @@ class McpBackendTests(unittest.TestCase):
 
         self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
         self.assertEqual(connection.compute.detail_attempts, [True, False])
+
+    def test_openstack_project_discovery_uses_validated_scope_not_identity_list(self) -> None:
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: BrokenIdentityProjectsConnection(),
+        )
+
+        result = backend.call_tool("discover_resources", {"resources": ["project"]})
+
+        resource = result["structuredContent"]["data"]["resources"][0]
+        self.assertTrue(resource["available"])
+        self.assertTrue(resource["has_objects"])
+        self.assertIn("id", resource["observed_fields"])
 
     def test_openstack_operation_diagnostics_use_validated_project_name(self) -> None:
         connection = Connection()

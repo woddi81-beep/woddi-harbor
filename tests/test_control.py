@@ -290,6 +290,37 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(snippets[0]["tool"], "list_servers")
         self.assertEqual(snippets[0]["results"][0]["name"], "prod-api-01")
 
+    def test_context_for_chat_prioritizes_servers_over_project_word(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "list_servers")
+            return {
+                "ok": True,
+                "data": {"structuredContent": {"data": [{"name": "prod-api-01"}]}},
+            }
+
+        with patch("app.control.load_modules", return_value=[module]), patch(
+            "app.control.execute_module",
+            side_effect=fake_execute,
+        ):
+            snippets, used_modules = _context_for_chat("Welche Server gibt es im Projekt PlusOne SE?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "list_servers")
+
     def test_context_for_chat_routes_german_openstack_network_questions(self) -> None:
         module = ModuleConfig(
             id="openstack",
