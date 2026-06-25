@@ -151,6 +151,24 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(used_modules, ["netbox-prod"])
         self.assertEqual(snippets[0]["module"], "netbox-prod")
 
+    def test_context_for_chat_reports_selected_module_context_failures(self) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        with patch("app.control.load_modules", return_value=[module]), patch(
+            "app.control._context_for_module",
+            side_effect=RuntimeError("upstream failed"),
+        ):
+            snippets, used_modules = _context_for_chat("Zeige NetBox Daten", ["netbox"])
+
+        self.assertEqual(used_modules, ["netbox"])
+        self.assertEqual(snippets[0]["kind"], "netbox")
+        self.assertIn("upstream failed", snippets[0]["note"])
+
     def test_context_for_chat_includes_openstack_results(self) -> None:
         module = ModuleConfig(
             id="openstack",
@@ -238,6 +256,72 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(used_modules, ["openstack"])
         self.assertEqual(snippets[0]["tool"], "get_storage_statistics")
         self.assertEqual(snippets[0]["results"][0]["quota"]["capacity_gib"]["percent"], 40.0)
+
+    def test_context_for_chat_lists_openstack_servers_without_generic_name_filter(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "list_servers")
+            self.assertEqual(payload, {"limit": 5})
+            return {
+                "ok": True,
+                "data": {"structuredContent": {"data": [{"name": "prod-api-01"}]}},
+            }
+
+        with patch("app.control.load_modules", return_value=[module]), patch(
+            "app.control.execute_module",
+            side_effect=fake_execute,
+        ):
+            snippets, used_modules = _context_for_chat("Welche OpenStack Server gibt es?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "list_servers")
+        self.assertEqual(snippets[0]["results"][0]["name"], "prod-api-01")
+
+    def test_context_for_chat_routes_german_openstack_network_questions(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "list_networks")
+            self.assertEqual(payload, {"limit": 5})
+            return {
+                "ok": True,
+                "data": {"structuredContent": {"data": [{"name": "private-net"}]}},
+            }
+
+        with patch("app.control.load_modules", return_value=[module]), patch(
+            "app.control.execute_module",
+            side_effect=fake_execute,
+        ):
+            snippets, used_modules = _context_for_chat("Welche Netze gibt es in OpenStack?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "list_networks")
+        self.assertEqual(snippets[0]["results"][0]["name"], "private-net")
 
     def test_context_for_chat_routes_netbox_field_questions_to_description(self) -> None:
         module = ModuleConfig(

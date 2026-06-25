@@ -412,7 +412,10 @@ def _context_for_chat(
             module = future_map[future]
             try:
                 context = future.result()
-            except Exception:
+            except Exception as exc:
+                if selected and module.id in selected:
+                    snippets.append(_context_error(module, exc))
+                    used_modules.append(module.id)
                 continue
             if not context:
                 continue
@@ -421,6 +424,21 @@ def _context_for_chat(
     snippets.sort(key=lambda item: module_order.get(str(item.get("module", "")), 0))
     used_modules.sort(key=lambda item: module_order.get(item, 0))
     return snippets, used_modules
+
+
+def _context_error(module: ModuleConfig, exc: Exception) -> dict[str, Any]:
+    if _is_openstack_module(module):
+        kind = "openstack"
+    elif _is_netbox_module(module):
+        kind = "netbox"
+    else:
+        kind = module.type
+    return {
+        "module": module.id,
+        "kind": kind,
+        "results": [],
+        "note": f"Modulabfrage fehlgeschlagen: {exc}",
+    }
 
 
 def _context_for_module(
@@ -511,19 +529,34 @@ def _should_use_openstack(message: str, selected_modules: set[str], module: Modu
         r"\bopenstack\b",
         r"\bserver(?:s)?\b",
         r"\binstance(?:s)?\b",
+        r"\binstanz(?:en)?\b",
         r"\bproject(?:s)?\b",
+        r"\bprojekt(?:e)?\b",
         r"\bimage(?:s)?\b",
+        r"\babbild(?:er)?\b",
         r"\bflavor(?:s)?\b",
         r"\bnetwork(?:s)?\b",
+        r"\bnetz(?:e)?\b",
+        r"\bnetzwerk(?:e)?\b",
         r"\bsubnet(?:s)?\b",
+        r"\bsubnetz(?:e)?\b",
+        r"\bteilnetz(?:e)?\b",
         r"\bport(?:s)?\b",
         r"\brouter(?:s)?\b",
         r"\btenant(?:s)?\b",
         r"\bfloating ip(?:s)?\b",
+        r"\bfloating-ip(?:s)?\b",
+        r"\bfip(?:s)?\b",
+        r"\bsecurity group(?:s)?\b",
+        r"\bsicherheitsgruppe(?:n)?\b",
         r"\bstorage\b",
         r"\bspeicher\b",
         r"\bvolume(?:s)?\b",
         r"\bvolumen\b",
+        r"\bverf(?:ü|ue)gbarkeitszone(?:n)?\b",
+        r"\bavailability zone(?:s)?\b",
+        r"\bload balancer(?:s)?\b",
+        r"\bloadbalancer(?:s)?\b",
         r"\bquota\b",
         r"\bauslastung\b",
         r"\bstatisti(?:k|cs)\b",
@@ -691,28 +724,153 @@ def _query_netbox_context(module: ModuleConfig, message: str) -> dict[str, Any] 
 
 def _guess_openstack_tool(message: str) -> str:
     lower = message.lower()
-    if any(term in lower for term in {"discovery", "felder", "fields", "schema", "erfasst", "ressourcen"}):
+
+    def has(terms: set[str]) -> bool:
+        for term in terms:
+            escaped = re.escape(term)
+            if re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", lower):
+                return True
+        return False
+
+    if has({"discovery", "entdecken", "felder", "fields", "schema", "erfasst", "ressourcen", "resourcen"}):
         return "discover_resources"
-    if any(term in lower for term in {"storage", "speicher", "volume", "volumen", "cinder"}):
-        if any(term in lower for term in {"statistik", "status", "auslastung", "quota", "prozent", "%", "voll", "frei"}):
+    if has({"availability zone", "availability zones", "verfügbarkeitszone", "verfügbarkeitszonen", "verfuegbarkeitszone", "verfuegbarkeitszonen"}):
+        return "list_availability_zones"
+    if has({"floating ip", "floating ips", "floating-ip", "floating-ips", "fip", "fips"}):
+        return "list_floating_ips"
+    if has({"security group", "security groups", "sicherheitsgruppe", "sicherheitsgruppen"}):
+        return "list_security_groups"
+    if has({"load balancer", "load balancers", "loadbalancer", "loadbalancers", "octavia"}):
+        return "list_load_balancers"
+    if has({"server group", "server groups", "servergruppe", "servergruppen"}):
+        return "list_server_groups"
+    if has({"storage", "speicher", "volume", "volumen", "datenträger", "datentraeger", "cinder"}):
+        if has({"statistik", "status", "auslastung", "quota", "prozent", "%", "voll", "frei"}):
             return "get_storage_statistics"
-    if any(term in lower for term in {"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"}):
+        return "list_volumes"
+    if has({"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"}):
         return "get_project_statistics"
-    if "project" in lower or "tenant" in lower:
+    if has({"project", "projects", "projekt", "projekte", "tenant", "tenants", "mandant", "mandanten"}):
         return "list_projects"
-    if "image" in lower:
+    if has({"image", "images", "abbild", "abbilder", "template", "templates"}):
         return "list_images"
-    if "flavor" in lower:
+    if has({"flavor", "flavors", "größe", "größen", "groesse", "groessen", "instanztyp", "instanztypen"}):
         return "list_flavors"
-    if "network" in lower:
+    if has({"network", "networks", "netz", "netze", "netzwerk", "netzwerke"}):
         return "list_networks"
-    if "subnet" in lower:
+    if has({"subnet", "subnets", "subnetz", "subnetze", "teilnetz", "teilnetze"}):
         return "list_subnets"
-    if "router" in lower:
+    if has({"router", "routers"}):
         return "list_routers"
-    if "port" in lower:
+    if has({"port", "ports", "interface", "interfaces", "schnittstelle", "schnittstellen"}):
         return "list_ports"
+    if has({"snapshot", "snapshots"}):
+        return "list_volume_snapshots"
+    if has({"backup", "backups", "sicherung", "sicherungen"}):
+        return "list_volume_backups"
+    if has({"keypair", "keypairs", "key pair", "key pairs", "ssh key", "ssh keys", "schlüssel", "schluessel"}):
+        return "list_keypairs"
+    if has({"stack", "stacks", "heat"}):
+        return "list_stacks"
     return "list_servers"
+
+
+def _extract_openstack_query(message: str) -> str:
+    quoted = re.findall(r'"([^"]+)"', message)
+    if quoted:
+        return quoted[0].strip()
+    tokens = re.findall(r"[a-zA-Z0-9_.:/-]+", message)
+    stop_words = {
+        "alle",
+        "all",
+        "bitte",
+        "den",
+        "der",
+        "des",
+        "die",
+        "das",
+        "es",
+        "gibt",
+        "in",
+        "list",
+        "liste",
+        "mir",
+        "my",
+        "openstack",
+        "show",
+        "status",
+        "und",
+        "von",
+        "welche",
+        "welcher",
+        "welches",
+        "zeige",
+        "zu",
+        "abbild",
+        "abbilder",
+        "availability",
+        "backup",
+        "backups",
+        "flavor",
+        "flavors",
+        "floating",
+        "fip",
+        "fips",
+        "image",
+        "images",
+        "instance",
+        "instances",
+        "instanz",
+        "instanzen",
+        "keypair",
+        "keypairs",
+        "load",
+        "balancer",
+        "loadbalancer",
+        "network",
+        "networks",
+        "netz",
+        "netze",
+        "netzwerk",
+        "netzwerke",
+        "port",
+        "ports",
+        "project",
+        "projects",
+        "projekt",
+        "projekte",
+        "router",
+        "routers",
+        "security",
+        "group",
+        "groups",
+        "server",
+        "servers",
+        "snapshot",
+        "snapshots",
+        "stack",
+        "stacks",
+        "storage",
+        "subnet",
+        "subnets",
+        "subnetz",
+        "subnetze",
+        "tenant",
+        "tenants",
+        "volume",
+        "volumes",
+        "volumen",
+        "zone",
+        "zones",
+    }
+    likely_names = [
+        token
+        for token in tokens
+        if len(token) > 1
+        and token.lower() not in stop_words
+        and ("." in token or "-" in token or "_" in token or any(character.isdigit() for character in token))
+    ]
+    return " ".join(likely_names[:2]).strip()
 
 
 def _query_openstack_context(
@@ -723,7 +881,7 @@ def _query_openstack_context(
     openstack_user: str = "",
 ) -> dict[str, Any] | None:
     tool_name = _guess_openstack_tool(message)
-    query = _extract_netbox_query(message)
+    query = _extract_openstack_query(message)
     arguments: dict[str, Any] = (
         {}
         if tool_name in {"discover_resources", "get_storage_statistics", "get_project_statistics"}

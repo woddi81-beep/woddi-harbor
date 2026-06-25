@@ -945,9 +945,23 @@ class OpenStackBackend:
         return self._list_resources(f"{resource}.list", arguments, loaders[resource], field_filters=field_filters)
 
     @staticmethod
+    def _is_owner_seen_sdk_error(exc: Exception) -> bool:
+        text = str(exc)
+        return "owner_seen" in text and "Image" in text
+
+    @classmethod
+    def _load_servers(cls, connection: Any) -> list[Any]:
+        try:
+            return list(connection.compute.servers(details=True))
+        except AttributeError as exc:
+            if not cls._is_owner_seen_sdk_error(exc):
+                raise
+            return list(connection.compute.servers(details=False))
+
+    @staticmethod
     def _resource_loaders(connection: Any) -> dict[str, Callable[[], Any]]:
         return {
-            "server": lambda: connection.compute.servers(details=True),
+            "server": lambda: OpenStackBackend._load_servers(connection),
             "project": lambda: connection.identity.projects(),
             "image": lambda: connection.image.images(),
             "flavor": lambda: connection.compute.flavors(),
@@ -1265,7 +1279,7 @@ class OpenStackBackend:
             payload = self._list_resources(
                 "server.list",
                 arguments,
-                lambda: connection.compute.servers(details=True),
+                lambda: self._load_servers(connection),
                 field_filters={"status": "status", "project": "project_id"},
             )
             return self._tool_result(name, arguments, payload)

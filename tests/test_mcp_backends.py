@@ -218,6 +218,25 @@ class BrokenServerConnection(Connection):
         self.compute.servers = lambda *, details=False: [BrokenServerResource()]
 
 
+class OwnerSeenDetailsCompute(Compute):
+    def __init__(self) -> None:
+        super().__init__()
+        self.detail_attempts: list[bool] = []
+
+    def servers(self, *, details: bool = False):
+        self.server_calls += 1
+        self.detail_attempts.append(details)
+        if details:
+            raise AttributeError("'Image' object has no attribute 'owner_seen'")
+        return [Resource(id="vm-1", name="prod", status="ACTIVE")]
+
+
+class OwnerSeenDetailsConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.compute = OwnerSeenDetailsCompute()
+
+
 class UnscopedConnection(Connection):
     def __init__(self) -> None:
         super().__init__()
@@ -615,6 +634,18 @@ class McpBackendTests(unittest.TestCase):
         self.assertEqual(row["name"], "prod")
         self.assertEqual(row["image"], {"id": "image-1", "name": "ubuntu"})
         self.assertEqual(row["token"], "[redacted]")
+
+    def test_openstack_server_listing_falls_back_when_details_hit_owner_seen_bug(self) -> None:
+        connection = OwnerSeenDetailsConnection()
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: connection,
+        )
+
+        result = backend.call_tool("list_servers", {"limit": 5})
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
+        self.assertEqual(connection.compute.detail_attempts, [True, False])
 
     def test_openstack_operation_diagnostics_use_validated_project_name(self) -> None:
         connection = Connection()
