@@ -948,14 +948,13 @@ class OpenStackBackend:
 
     @staticmethod
     def _is_owner_seen_sdk_error(exc: Exception) -> bool:
-        text = str(exc)
-        return "owner_seen" in text and "Image" in text
+        return "owner_seen" in str(exc)
 
     @classmethod
     def _load_servers(cls, connection: Any) -> list[Any]:
         try:
             return list(connection.compute.servers(details=True))
-        except AttributeError as exc:
+        except Exception as exc:
             if not cls._is_owner_seen_sdk_error(exc):
                 raise
             return list(connection.compute.servers(details=False))

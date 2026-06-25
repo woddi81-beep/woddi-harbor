@@ -237,6 +237,21 @@ class OwnerSeenDetailsConnection(Connection):
         self.compute = OwnerSeenDetailsCompute()
 
 
+class WrappedOwnerSeenDetailsCompute(OwnerSeenDetailsCompute):
+    def servers(self, *, details: bool = False):
+        self.server_calls += 1
+        self.detail_attempts.append(details)
+        if details:
+            raise RuntimeError("OpenStack SDK failed: 'Image' object has no attribute 'owner_seen'")
+        return [Resource(id="vm-1", name="prod", status="ACTIVE")]
+
+
+class WrappedOwnerSeenDetailsConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.compute = WrappedOwnerSeenDetailsCompute()
+
+
 class BrokenIdentityProjects:
     def projects(self):
         raise AttributeError("'Project' object has no attribute 'owner_seen'")
@@ -648,6 +663,18 @@ class McpBackendTests(unittest.TestCase):
 
     def test_openstack_server_listing_falls_back_when_details_hit_owner_seen_bug(self) -> None:
         connection = OwnerSeenDetailsConnection()
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: connection,
+        )
+
+        result = backend.call_tool("list_servers", {"limit": 5})
+
+        self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
+        self.assertEqual(connection.compute.detail_attempts, [True, False])
+
+    def test_openstack_server_listing_falls_back_when_sdk_wraps_owner_seen_bug(self) -> None:
+        connection = WrappedOwnerSeenDetailsConnection()
         backend = OpenStackBackend(
             credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
             connection_factory=lambda _credentials: connection,
