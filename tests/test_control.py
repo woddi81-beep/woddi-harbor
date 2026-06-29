@@ -291,7 +291,7 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(snippets[0]["tool"], "list_servers")
         self.assertEqual(snippets[0]["results"][0]["name"], "prod-api-01")
 
-    def test_context_for_chat_routes_openstack_server_count_to_project_statistics(self) -> None:
+    def test_context_for_chat_routes_openstack_server_count_to_compute_limits(self) -> None:
         module = ModuleConfig(
             id="openstack",
             type="openstack_mcp",
@@ -307,11 +307,11 @@ class ControlChatContextTests(unittest.TestCase):
             **credentials: str,
         ) -> dict[str, object]:
             self.assertEqual(module_id, "openstack")
-            self.assertEqual(action, "get_project_statistics")
+            self.assertEqual(action, "get_compute_limits")
             self.assertEqual(payload, {})
             return {
                 "ok": True,
-                "data": {"structuredContent": {"data": {"inventory": {"server": {"count": 7}}}}},
+                "data": {"structuredContent": {"data": {"absolute": {"totalInstancesUsed": 7, "maxTotalInstances": 20}}}},
             }
 
         with (
@@ -322,8 +322,8 @@ class ControlChatContextTests(unittest.TestCase):
             snippets, used_modules = _context_for_chat("Wieviele Server siehst du?", None)
 
         self.assertEqual(used_modules, ["openstack"])
-        self.assertEqual(snippets[0]["tool"], "get_project_statistics")
-        self.assertEqual(snippets[0]["results"][0]["inventory"]["server"]["count"], 7)
+        self.assertEqual(snippets[0]["tool"], "get_compute_limits")
+        self.assertEqual(snippets[0]["results"][0]["absolute"]["totalInstancesUsed"], 7)
 
     def test_context_for_chat_answers_openstack_resource_overview_from_field_catalog(self) -> None:
         module = ModuleConfig(
@@ -449,9 +449,9 @@ class ControlChatContextTests(unittest.TestCase):
             snippets, used_modules = _context_for_chat("Wieviele Server siehst du?", None)
 
         self.assertEqual(used_modules, ["openstack"])
-        self.assertEqual(snippets[0]["tool"], "get_project_statistics")
+        self.assertEqual(snippets[0]["tool"], "get_compute_limits")
 
-    def test_context_for_chat_uses_field_catalog_for_unavailable_server_count(self) -> None:
+    def test_context_for_chat_uses_compute_limits_for_server_count_with_unavailable_catalog_server(self) -> None:
         openstack = ModuleConfig(
             id="openstack",
             type="openstack_mcp",
@@ -473,17 +473,30 @@ class ControlChatContextTests(unittest.TestCase):
             },
         }
 
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "get_compute_limits")
+            self.assertEqual(payload, {})
+            return {
+                "ok": True,
+                "data": {"structuredContent": {"data": {"absolute": {"totalInstancesUsed": 7}}}},
+            }
+
         with (
             patch("app.control.load_modules", return_value=[openstack]),
             patch("app.control.load_field_catalog", return_value=catalog),
-            patch("app.control.execute_module", side_effect=AssertionError("Known server.list failure should be answered from field catalog.")),
+            patch("app.control.execute_module", side_effect=fake_execute),
         ):
             snippets, used_modules = _context_for_chat("Wieviele Server siehst du?", None)
 
         self.assertEqual(used_modules, ["openstack"])
-        self.assertEqual(snippets[0]["tool"], "get_project_statistics")
-        self.assertEqual(snippets[0]["results"][0]["inventory"]["server"]["count"], None)
-        self.assertIn("owner_seen", snippets[0]["results"][0]["errors"]["server"])
+        self.assertEqual(snippets[0]["tool"], "get_compute_limits")
+        self.assertEqual(snippets[0]["results"][0]["absolute"]["totalInstancesUsed"], 7)
 
     def test_direct_context_answer_formats_openstack_field_catalog(self) -> None:
         answer = _direct_context_answer(
@@ -542,6 +555,29 @@ class ControlChatContextTests(unittest.TestCase):
 
         self.assertIn("7 OpenStack-Server", answer)
         self.assertIn("5 active", answer)
+
+    def test_direct_context_answer_formats_openstack_server_count_from_compute_limits(self) -> None:
+        answer = _direct_context_answer(
+            "Wieviele Server siehst du?",
+            [
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "get_compute_limits",
+                    "results": [
+                        {
+                            "absolute": {
+                                "totalInstancesUsed": 7,
+                                "maxTotalInstances": 20,
+                            }
+                        }
+                    ],
+                }
+            ],
+        )
+
+        self.assertIn("7 OpenStack-Server", answer)
+        self.assertIn("7 von 20", answer)
 
     def test_direct_context_answer_formats_openstack_server_count_error(self) -> None:
         answer = _direct_context_answer(

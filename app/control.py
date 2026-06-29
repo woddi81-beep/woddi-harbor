@@ -1141,6 +1141,7 @@ def _guess_openstack_tool(message: str, module: ModuleConfig | None = None) -> s
     if has({"discovery", "entdecken", "felder", "fields", "schema", "erfasst", "ressourcen", "resourcen"}):
         return "discover_resources"
     count_terms = {"anzahl", "bestand", "count", "how many", "inventar", "wie viele", "wieviele", "wie viel", "wieviel"}
+    server_terms = {"server", "servers", "instance", "instances", "instanz", "instanzen", "vm", "vms"}
     if has({"availability zone", "availability zones", "verfügbarkeitszone", "verfügbarkeitszonen", "verfuegbarkeitszone", "verfuegbarkeitszonen"}):
         return "list_availability_zones"
     if has({"floating ip", "floating ips", "floating-ip", "floating-ips", "fip", "fips"}):
@@ -1155,9 +1156,11 @@ def _guess_openstack_tool(message: str, module: ModuleConfig | None = None) -> s
         if has({"statistik", "status", "auslastung", "quota", "prozent", "%", "voll", "frei"} | count_terms):
             return "get_storage_statistics"
         return "list_volumes"
+    if has(server_terms) and has(count_terms):
+        return "get_compute_limits"
     if has({"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"} | count_terms):
         return "get_project_statistics"
-    if has({"server", "servers", "instance", "instances", "instanz", "instanzen", "vm", "vms"}):
+    if has(server_terms):
         return "list_servers"
     if has({"project", "projects", "projekt", "projekte", "tenant", "tenants", "mandant", "mandanten"}):
         return "list_projects"
@@ -1298,7 +1301,7 @@ def _query_openstack_context(
     field_matches = _matching_catalog_resources(message, module)
     resource_matches = _matching_catalog_resources(message, module, include_fields=False)
     unavailable_count_context = _openstack_unavailable_count_context(message, resource_matches)
-    if unavailable_count_context:
+    if unavailable_count_context and tool_name != "get_compute_limits":
         return unavailable_count_context
     if tool_name == "discover_resources" or _is_catalog_overview_question(message) or (field_matches and not resource_matches):
         catalog_context = _openstack_field_catalog_context(module, message)
@@ -1307,7 +1310,7 @@ def _query_openstack_context(
     query = _extract_openstack_query(message)
     arguments: dict[str, Any] = (
         {}
-        if tool_name in {"discover_resources", "get_storage_statistics", "get_project_statistics"}
+        if tool_name in {"discover_resources", "get_compute_limits", "get_storage_statistics", "get_project_statistics"}
         else {"limit": 5}
     )
     if query:
@@ -1366,6 +1369,24 @@ def _format_status_counts(statuses: Any) -> str:
     return ", ".join(parts)
 
 
+def _find_numeric_value(value: Any, candidates: set[str]) -> int | float | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").lower()
+            if normalized in candidates and isinstance(item, (int, float)) and not isinstance(item, bool):
+                return item
+        for item in value.values():
+            found = _find_numeric_value(item, candidates)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_numeric_value(item, candidates)
+            if found is not None:
+                return found
+    return None
+
+
 def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
     openstack_context = [item for item in context if item.get("kind") == "openstack"]
     if len(openstack_context) != 1:
@@ -1420,6 +1441,19 @@ def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
             return f"Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. {note}"
         if server.get("available") is False:
             return "Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. get_project_statistics lieferte keinen server.count."
+    if tool == "get_compute_limits" and isinstance(payload, dict):
+        used = _find_numeric_value(payload, {"totalinstancesused", "instancesused", "usedinstances"})
+        limit = _find_numeric_value(payload, {"maxtotalinstances", "instances", "maxinstances", "totalinstances"})
+        if used is not None:
+            count = int(used) if isinstance(used, float) and used.is_integer() else used
+            answer = f"Ich sehe laut OpenStack-Compute-Limits {count} OpenStack-Server."
+            if limit is not None:
+                limit_text = int(limit) if isinstance(limit, float) and limit.is_integer() else limit
+                answer += f" Quota: {count} von {limit_text} Instanzen genutzt."
+            return answer
+        note = str(item.get("note") or "").strip()
+        if note:
+            return f"Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. {note}"
     return ""
 
 
