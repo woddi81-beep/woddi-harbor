@@ -8,6 +8,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -42,6 +43,7 @@ from .config import (
 )
 from .jobs import submit_job
 from .llm import complete_chat, extract_chat_content, llm_health, stream_chat
+from .mcp.openstack import OpenStackDiagnosticError, validate_openstack_token_scope
 from .mcp_lifecycle import (
     create_instance,
     install_package,
@@ -115,6 +117,7 @@ _WARMUP_STOP = threading.Event()
 _WARMUP_THREAD: threading.Thread | None = None
 _DASHBOARD_CACHE = BoundedTTLCache[dict[str, Any]](ttl_seconds=2.0, max_entries=1)
 _LLM_HEALTH_CACHE = BoundedTTLCache[dict[str, Any]](ttl_seconds=5.0, max_entries=4)
+_OPENSTACK_TOKEN_SCOPE_CACHE = BoundedTTLCache[dict[str, Any]](ttl_seconds=60.0, max_entries=128)
 
 
 class ExecuteRequest(BaseModel):
@@ -212,10 +215,69 @@ OPENSTACK_LEGACY_USER_SECRETS = (
 OPENSTACK_TOKEN_METADATA_SECRETS = {
     "project_id": "openstack_token_project_id",
     "project_name": "openstack_token_project_name",
+    "project_domain_id": "openstack_token_project_domain_id",
+    "project_domain_name": "openstack_token_project_domain_name",
     "user_id": "openstack_token_user_id",
     "user_name": "openstack_token_user_name",
-    "expires": "openstack_token_expires",
+    "user_domain_id": "openstack_token_user_domain_id",
+    "user_domain_name": "openstack_token_user_domain_name",
+    "expires_at": "openstack_token_expires",
 }
+
+
+def _payload_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _payload_string(payload: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = payload.get(name)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _openstack_token_metadata_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    token_payload = _payload_dict(payload.get("token")) or payload
+    project = _payload_dict(token_payload.get("project"))
+    user = _payload_dict(token_payload.get("user"))
+    project_domain = _payload_dict(project.get("domain"))
+    user_domain = _payload_dict(user.get("domain"))
+    metadata = {
+        "project_id": _payload_string(project, "id") or _payload_string(token_payload, "project_id", "tenant_id"),
+        "project_name": _payload_string(project, "name") or _payload_string(token_payload, "project_name", "tenant_name"),
+        "project_domain_id": (
+            _payload_string(project_domain, "id")
+            or _payload_string(project, "domain_id")
+            or _payload_string(token_payload, "project_domain_id")
+            or _payload_string(payload, "project_domain_id")
+        ),
+        "project_domain_name": (
+            _payload_string(project_domain, "name")
+            or _payload_string(project, "domain_name")
+            or _payload_string(token_payload, "project_domain_name")
+            or _payload_string(payload, "project_domain_name")
+        ),
+        "user_id": _payload_string(user, "id") or _payload_string(token_payload, "user_id"),
+        "user_name": _payload_string(user, "name", "username") or _payload_string(token_payload, "user_name", "username"),
+        "user_domain_id": (
+            _payload_string(user_domain, "id")
+            or _payload_string(user, "domain_id")
+            or _payload_string(token_payload, "user_domain_id")
+            or _payload_string(payload, "user_domain_id")
+        ),
+        "user_domain_name": (
+            _payload_string(user_domain, "name")
+            or _payload_string(user, "domain_name")
+            or _payload_string(token_payload, "user_domain_name")
+            or _payload_string(payload, "user_domain_name")
+        ),
+        "expires_at": _payload_string(token_payload, "expires_at", "expires") or _payload_string(payload, "expires_at", "expires"),
+    }
+    return {key: value for key, value in metadata.items() if value}
 
 
 def _parse_openstack_token_input(raw_value: str) -> tuple[str, dict[str, str]]:
@@ -227,14 +289,13 @@ def _parse_openstack_token_input(raw_value: str) -> tuple[str, dict[str, str]]:
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("OpenStack Token JSON muss ein Objekt sein.")
-    token_value = str(payload.get("id") or payload.get("token") or "").strip()
+    token_value = _payload_string(payload, "id", "token_id")
+    token_field = payload.get("token")
+    if not token_value and isinstance(token_field, str):
+        token_value = token_field.strip()
     if not token_value:
         raise ValueError("OpenStack Token JSON enthaelt kein Feld 'id'.")
-    metadata: dict[str, str] = {}
-    for source_key in ("project_id", "project_name", "user_id", "user_name", "expires"):
-        value = str(payload.get(source_key) or "").strip()
-        if value:
-            metadata[source_key] = value
+    metadata = _openstack_token_metadata_from_payload(payload)
     return token_value, metadata
 
 
@@ -250,6 +311,136 @@ def _save_openstack_token_for_user(username: str, raw_token: str) -> str:
         else:
             delete_user_named_secret(username, secret_name)
     return token
+
+
+def _openstack_token_scope_payload(
+    source: str,
+    metadata: dict[str, Any],
+    *,
+    configured: bool,
+    error: str = "",
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    project_scoped = bool(metadata.get("project_scoped") or metadata.get("project_id") or metadata.get("project_name"))
+    payload = {
+        "source": source,
+        "project_scoped": project_scoped,
+        "project_id": metadata.get("project_id") or None,
+        "project_name": metadata.get("project_name") or None,
+        "project_domain_id": metadata.get("project_domain_id") or None,
+        "project_domain_name": metadata.get("project_domain_name") or None,
+        "user_id": metadata.get("user_id") or None,
+        "user_name": metadata.get("user_name") or None,
+        "user_domain_id": metadata.get("user_domain_id") or None,
+        "user_domain_name": metadata.get("user_domain_name") or None,
+        "expires_at": metadata.get("expires_at") or metadata.get("expires") or None,
+        "has_service_catalog": metadata.get("has_service_catalog") if "has_service_catalog" in metadata else None,
+    }
+    if error:
+        payload["error"] = error
+    if diagnostics:
+        payload["diagnostics"] = diagnostics
+    if not configured:
+        payload["source"] = "none"
+    return payload
+
+
+def _openstack_live_token_scope(module: ModuleConfig | None, token: str) -> dict[str, Any] | None:
+    if not token or not module or module.type != "openstack_mcp":
+        return None
+    auth_url = str(module.settings.get("auth_url") or "").strip()
+    if not auth_url:
+        return None
+    credentials = {
+        "OS_AUTH_URL": auth_url,
+        "OS_TOKEN": token,
+        "OS_REGION_NAME": str(module.settings.get("region_name") or "").strip(),
+        "OS_TIMEOUT": str(module.timeout_seconds or 60.0),
+    }
+    cache_key = sha256(
+        json.dumps(
+            {
+                "auth_url": credentials["OS_AUTH_URL"],
+                "region_name": credentials["OS_REGION_NAME"],
+                "timeout": credentials["OS_TIMEOUT"],
+                "token": sha256(token.encode("utf-8")).hexdigest(),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    def load_scope() -> dict[str, Any]:
+        try:
+            return {
+                "ok": True,
+                "scope": validate_openstack_token_scope(credentials),
+            }
+        except OpenStackDiagnosticError as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "diagnostics": exc.diagnostics,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+            }
+
+    return _OPENSTACK_TOKEN_SCOPE_CACHE.get_or_load(cache_key, load_scope)
+
+
+def _openstack_token_scope_for_user(
+    username: str,
+    *,
+    module: ModuleConfig | None = None,
+    token: str = "",
+    token_configured: bool | None = None,
+) -> dict[str, Any]:
+    configured = bool(load_user_named_secret(username, "openstack_token")) if token_configured is None else token_configured
+    metadata = {key: load_user_named_secret(username, secret_name) for key, secret_name in OPENSTACK_TOKEN_METADATA_SECRETS.items()}
+    has_metadata = configured and any(metadata.values())
+    if has_metadata:
+        return _openstack_token_scope_payload("saved_token_metadata", metadata, configured=configured)
+    live_scope = _openstack_live_token_scope(module, token) if configured else None
+    if live_scope:
+        if live_scope.get("ok"):
+            return _openstack_token_scope_payload("keystone_validation", live_scope.get("scope") or {}, configured=configured)
+        return _openstack_token_scope_payload(
+            "validation_error",
+            {},
+            configured=configured,
+            error=str(live_scope.get("error") or "OpenStack Token-Validierung fehlgeschlagen."),
+            diagnostics=live_scope.get("diagnostics") if isinstance(live_scope.get("diagnostics"), dict) else None,
+        )
+    return {
+        **_openstack_token_scope_payload("token_present", {}, configured=configured),
+    }
+
+
+def _openstack_configuration_payload(user: HarborUser) -> dict[str, Any]:
+    module = find_module("openstack")
+    settings = module.settings if module and module.type == "openstack_mcp" else {}
+    token = load_user_named_secret(user.username, "openstack_token")
+    token_configured = bool(token)
+    return {
+        "configured": bool(module and module.type == "openstack_mcp"),
+        "auth_url": str(settings.get("auth_url", "")),
+        "region_name": str(settings.get("region_name", "")),
+        "timeout_seconds": module.timeout_seconds if module and module.type == "openstack_mcp" else 60.0,
+        "port": module.port if module and module.type == "openstack_mcp" else 0,
+        "token_configured": token_configured,
+        "token_owner": user.username,
+        "token_scope": _openstack_token_scope_for_user(
+            user.username,
+            module=module,
+            token=token,
+            token_configured=token_configured,
+        ),
+        "can_configure": user.role in {"operator", "admin"},
+        "credential_mode": "per_user",
+        "scope_mode": "project_from_token",
+    }
 
 
 def _delete_openstack_legacy_user_credentials(username: str) -> None:
@@ -1107,8 +1298,11 @@ def create_app() -> FastAPI:
         return JSONResponse(payload, status_code=200 if payload["ok"] else 503)
 
     @app.get("/api/dashboard")
-    def dashboard(_user=require_role("admin")) -> dict[str, Any]:
-        return _dashboard_payload()
+    def dashboard(_user: HarborUser = require_role("admin")) -> dict[str, Any]:
+        return {
+            **_dashboard_payload(),
+            "openstack": _openstack_configuration_payload(_user),
+        }
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics(_user=Depends(require_metrics_access)) -> PlainTextResponse:
@@ -1214,20 +1408,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/integrations/openstack")
     def openstack_configuration(_user: HarborUser = require_role("viewer")) -> dict[str, Any]:
-        module = find_module("openstack")
-        settings = module.settings if module and module.type == "openstack_mcp" else {}
-        return {
-            "configured": bool(module and module.type == "openstack_mcp"),
-            "auth_url": str(settings.get("auth_url", "")),
-            "region_name": str(settings.get("region_name", "")),
-            "timeout_seconds": module.timeout_seconds if module and module.type == "openstack_mcp" else 60.0,
-            "port": module.port if module and module.type == "openstack_mcp" else 0,
-            "token_configured": bool(load_user_named_secret(_user.username, "openstack_token")),
-            "token_owner": _user.username,
-            "can_configure": _user.role in {"operator", "admin"},
-            "credential_mode": "per_user",
-            "scope_mode": "project_from_token",
-        }
+        return _openstack_configuration_payload(_user)
 
     @app.put("/api/integrations/openstack")
     def openstack_configure(body: OpenStackConfigureRequest, _user: HarborUser = require_role("operator")) -> dict[str, Any]:

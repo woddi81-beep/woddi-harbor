@@ -30,12 +30,58 @@ function formatUptime(seconds) {
 function metric(label, value, detail, tone = "") {
   return `<article class="metric ${tone}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(detail)}</small></article>`;
 }
+function contextValue(primary, secondary = "") {
+  if (!primary && !secondary) return `<span class="context-empty">n/a</span>`;
+  return `<strong>${esc(primary || secondary)}</strong>${primary && secondary ? `<small>${esc(secondary)}</small>` : ""}`;
+}
+function renderOpenStackContext(openstack) {
+  const scope = openstack?.token_scope || {};
+  const ready = Boolean(openstack?.configured);
+  const token = Boolean(openstack?.token_configured);
+  const scoped = Boolean(scope.project_scoped);
+  const validationError = scope.source === "validation_error";
+  const severity = ready && token && scoped ? "ok" : validationError || !token ? "error" : "warning";
+  const summary = !ready
+    ? "Integration nicht eingerichtet"
+    : !token
+      ? `Token für ${openstack?.token_owner || "diesen Benutzer"} fehlt`
+      : validationError
+        ? "Token-Validierung fehlgeschlagen"
+      : scoped
+        ? scope.source === "keystone_validation" ? "Projektkontext aus Keystone" : "Projektkontext aus Token-Metadaten"
+        : "Token vorhanden, Projektkontext noch nicht gespeichert";
+  const project = scope.project_name || scope.project_id || "";
+  const projectDetail = scope.project_name && scope.project_id ? scope.project_id : "";
+  const domain = scope.project_domain_name || scope.project_domain_id || scope.user_domain_name || scope.user_domain_id || "";
+  const domainDetail = scope.project_domain_name && scope.project_domain_id ? scope.project_domain_id : "";
+  const user = scope.user_name || scope.user_id || openstack?.token_owner || "";
+  const userDetail = scope.user_name && scope.user_id ? scope.user_id : "";
+  return `<section class="context-panel openstack-context">
+    <div class="context-head">
+      <div>
+        <span class="eyebrow">OpenStack Kontext</span>
+        <h3>${esc(summary)}</h3>
+      </div>
+      <div class="row">${severityBadge(severity)}<button data-action="module:openstack">OpenStack</button></div>
+    </div>
+    ${scope.error ? `<p class="context-error">${esc(scope.error)}</p>` : ""}
+    <div class="context-grid">
+      <div><span>Domain</span>${contextValue(domain, domainDetail)}</div>
+      <div><span>Projekt</span>${contextValue(project, projectDetail)}</div>
+      <div><span>Benutzer</span>${contextValue(user, userDetail)}</div>
+      <div><span>Ablauf</span>${contextValue(scope.expires_at || "")}</div>
+      <div><span>Auth URL</span>${contextValue(openstack?.auth_url || "")}</div>
+      <div><span>Region</span>${contextValue(openstack?.region_name || "")}</div>
+    </div>
+  </section>`;
+}
 
 async function renderOverview() {
   const data = await api("/api/dashboard");
   const cache = data.modules.metrics;
   const hitRate = `${Math.round(cache.query_cache_hit_rate * 100)} %`;
   $("content").innerHTML = `
+    ${renderOpenStackContext(data.openstack)}
     <div class="metric-grid">
       ${metric("LLM", data.llm.connected ? "Verbunden" : "Nicht bereit", data.llm.model || data.llm.detail, data.llm.connected ? "good" : "bad")}
       ${metric("Module", `${data.modules.active}/${data.modules.total}`, "aktiv / konfiguriert", data.modules.invalid ? "bad" : "good")}

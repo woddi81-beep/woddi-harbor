@@ -478,22 +478,76 @@ class OpenStackConfigurationTests(unittest.TestCase):
             },
         )
         endpoint = self._endpoint("openstack_configuration")
+        secrets = {
+            "openstack_token": "super-secret-token",
+            "openstack_token_project_id": "project-1",
+            "openstack_token_project_name": "production",
+            "openstack_token_project_domain_name": "Default",
+            "openstack_token_user_name": "alice",
+            "openstack_token_expires": "2026-06-24T17:17:08+0000",
+        }
         with (
             patch("app.control.find_module", return_value=module),
-            patch("app.control.load_user_named_secret", return_value="super-secret-token") as load_secret,
+            patch(
+                "app.control.load_user_named_secret",
+                side_effect=lambda _username, name: secrets.get(name, ""),
+            ) as load_secret,
         ):
             result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
 
-        load_secret.assert_called_once_with("admin", "openstack_token")
+        self.assertEqual(load_secret.call_args_list[0].args, ("admin", "openstack_token"))
         self.assertTrue(result["token_configured"])
         self.assertEqual(result["token_owner"], "admin")
+        self.assertEqual(result["token_scope"]["project_id"], "project-1")
+        self.assertEqual(result["token_scope"]["project_name"], "production")
+        self.assertEqual(result["token_scope"]["project_domain_name"], "Default")
+        self.assertEqual(result["token_scope"]["user_name"], "alice")
+        self.assertEqual(result["token_scope"]["expires_at"], "2026-06-24T17:17:08+0000")
         self.assertTrue(result["can_configure"])
         self.assertEqual(result["credential_mode"], "per_user")
         self.assertEqual(result["scope_mode"], "project_from_token")
-        self.assertNotIn("project_id", result)
-        self.assertNotIn("project_name", result)
+        self.assertNotIn("project_id", {key: value for key, value in result.items() if key != "token_scope"})
+        self.assertNotIn("project_name", {key: value for key, value in result.items() if key != "token_scope"})
         self.assertNotIn("token", {key: value for key, value in result.items() if key != "token_configured"})
         self.assertNotIn("super-secret-token", str(result))
+
+    def test_openstack_configuration_validates_raw_token_for_scope_display(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            transport="local",
+            timeout_seconds=12,
+            settings={
+                "auth_url": "https://identity.example/v3",
+                "region_name": "RegionOne",
+            },
+        )
+        endpoint = self._endpoint("openstack_configuration")
+        with (
+            patch("app.control.find_module", return_value=module),
+            patch(
+                "app.control.load_user_named_secret",
+                side_effect=lambda _username, name: "raw-token" if name == "openstack_token" else "",
+            ),
+            patch(
+                "app.control.validate_openstack_token_scope",
+                return_value={
+                    "project_scoped": True,
+                    "project_id": "project-1",
+                    "project_name": "production",
+                    "project_domain_name": "Default",
+                    "user_name": "alice",
+                    "has_service_catalog": True,
+                },
+            ) as validate_scope,
+        ):
+            result = endpoint(_user=HarborUser(username="admin", password_hash="unused", role="admin"))
+
+        validate_scope.assert_called_once()
+        self.assertEqual(result["token_scope"]["source"], "keystone_validation")
+        self.assertEqual(result["token_scope"]["project_name"], "production")
+        self.assertEqual(result["token_scope"]["project_domain_name"], "Default")
+        self.assertNotIn("raw-token", str(result))
 
     def test_openstack_configure_stores_token_outside_module(self) -> None:
         captured: dict[str, object] = {}
@@ -535,7 +589,10 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         endpoint = self._endpoint("openstack_configure")
         body = OpenStackConfigureRequest(
-            token='{"id":"token-id","project_id":"project-1","user_id":"user-1","expires":"2026-06-24T17:17:08+0000"}',
+            token=(
+                '{"id":"token-id","project_id":"project-1","project_domain_name":"Default",'
+                '"user_id":"user-1","user_domain_id":"domain-1","expires":"2026-06-24T17:17:08+0000"}'
+            ),
             auth_url="https://identity.example/v3",
             region_name="RegionOne",
         )
@@ -553,7 +610,10 @@ class OpenStackConfigurationTests(unittest.TestCase):
 
         self.assertEqual(captured_secrets["openstack_token"], "token-id")
         self.assertEqual(captured_secrets["openstack_token_project_id"], "project-1")
+        self.assertEqual(captured_secrets["openstack_token_project_domain_name"], "Default")
         self.assertEqual(captured_secrets["openstack_token_user_id"], "user-1")
+        self.assertEqual(captured_secrets["openstack_token_user_domain_id"], "domain-1")
+        self.assertEqual(captured_secrets["openstack_token_expires"], "2026-06-24T17:17:08+0000")
         self.assertNotIn("id", {key: value for key, value in captured_secrets.items() if key != "openstack_token"})
 
     def test_openstack_configure_accepts_project_scoped_token_without_project(self) -> None:
@@ -592,7 +652,7 @@ class OpenStackConfigurationTests(unittest.TestCase):
             patch("app.control.find_module", return_value=None),
             patch(
                 "app.control.load_user_named_secret",
-                side_effect=lambda username, _name: tokens[username],
+                side_effect=lambda username, name: tokens[username] if name == "openstack_token" else "",
             ),
         ):
             alice = endpoint(_user=HarborUser(username="alice", password_hash="unused", role="viewer"))

@@ -161,6 +161,8 @@ def _scope_from_token_body(body: dict[str, Any]) -> dict[str, Any]:
     token = body.get("token") if isinstance(body.get("token"), dict) else body
     project = token.get("project") if isinstance(token.get("project"), dict) else {}
     user = token.get("user") if isinstance(token.get("user"), dict) else {}
+    project_domain = project.get("domain") if isinstance(project.get("domain"), dict) else {}
+    user_domain = user.get("domain") if isinstance(user.get("domain"), dict) else {}
     project_id = _payload_field(project, "id") or _payload_field(token, "project_id", "tenant_id")
     project_name = _payload_field(project, "name") or _payload_field(token, "project_name", "tenant_name")
     user_id = _payload_field(user, "id") or _payload_field(token, "user_id")
@@ -169,8 +171,32 @@ def _scope_from_token_body(body: dict[str, Any]) -> dict[str, Any]:
         "project_scoped": bool(project_id or project),
         "project_id": project_id or None,
         "project_name": project_name or None,
+        "project_domain_id": (
+            _payload_field(project_domain, "id")
+            or _payload_field(project, "domain_id")
+            or _payload_field(token, "project_domain_id")
+            or None
+        ),
+        "project_domain_name": (
+            _payload_field(project_domain, "name")
+            or _payload_field(project, "domain_name")
+            or _payload_field(token, "project_domain_name")
+            or None
+        ),
         "user_id": user_id or None,
         "user_name": user_name or None,
+        "user_domain_id": (
+            _payload_field(user_domain, "id")
+            or _payload_field(user, "domain_id")
+            or _payload_field(token, "user_domain_id")
+            or None
+        ),
+        "user_domain_name": (
+            _payload_field(user_domain, "name")
+            or _payload_field(user, "domain_name")
+            or _payload_field(token, "user_domain_name")
+            or None
+        ),
         "has_service_catalog": "catalog" in token,
         "expires_at": token.get("expires_at") or token.get("expires") or None,
     }
@@ -405,6 +431,8 @@ def _access_scope(access: Any) -> dict[str, Any]:
     token = _access_token_payload(access)
     project = _access_project_payload(access)
     user = _access_user_payload(access)
+    project_domain = project.get("domain") if isinstance(project.get("domain"), dict) else {}
+    user_domain = user.get("domain") if isinstance(user.get("domain"), dict) else {}
     project_id = (
         _safe_string(_safe_getattr(access, "project_id"))
         or _payload_field(project, "id")
@@ -430,8 +458,32 @@ def _access_scope(access: Any) -> dict[str, Any]:
         "project_scoped": project_scoped,
         "project_id": project_id or None,
         "project_name": project_name or None,
+        "project_domain_id": (
+            _payload_field(project_domain, "id")
+            or _payload_field(project, "domain_id")
+            or _payload_field(token, "project_domain_id")
+            or None
+        ),
+        "project_domain_name": (
+            _payload_field(project_domain, "name")
+            or _payload_field(project, "domain_name")
+            or _payload_field(token, "project_domain_name")
+            or None
+        ),
         "user_id": user_id or None,
         "user_name": user_name or None,
+        "user_domain_id": (
+            _payload_field(user_domain, "id")
+            or _payload_field(user, "domain_id")
+            or _payload_field(token, "user_domain_id")
+            or None
+        ),
+        "user_domain_name": (
+            _payload_field(user_domain, "name")
+            or _payload_field(user, "domain_name")
+            or _payload_field(token, "user_domain_name")
+            or None
+        ),
         "has_service_catalog": _access_has_service_catalog(access),
     }
 
@@ -658,8 +710,12 @@ class OpenStackBackend:
             self._project_context = {
                 "id": project_id or None,
                 "name": project_name or None,
+                "domain_id": token_scope.get("project_domain_id") or None,
+                "domain_name": token_scope.get("project_domain_name") or None,
                 "user_id": token_scope.get("user_id") or None,
                 "user_name": token_scope.get("user_name") or None,
+                "user_domain_id": token_scope.get("user_domain_id") or None,
+                "user_domain_name": token_scope.get("user_domain_name") or None,
                 "project_scoped": project_scoped,
                 "has_service_catalog": has_service_catalog,
             }
@@ -678,8 +734,12 @@ class OpenStackBackend:
         return {
             "project_id": self._project_context.get("id") or None,
             "project_name": self._project_context.get("name") or None,
+            "project_domain_id": self._project_context.get("domain_id") or None,
+            "project_domain_name": self._project_context.get("domain_name") or None,
             "user_id": self._project_context.get("user_id") or None,
             "user_name": self._project_context.get("user_name") or None,
+            "user_domain_id": self._project_context.get("user_domain_id") or None,
+            "user_domain_name": self._project_context.get("user_domain_name") or None,
             "project_scoped": self._project_context.get("project_scoped"),
             "has_service_catalog": self._project_context.get("has_service_catalog"),
         }
