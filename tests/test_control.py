@@ -290,6 +290,119 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(snippets[0]["tool"], "list_servers")
         self.assertEqual(snippets[0]["results"][0]["name"], "prod-api-01")
 
+    def test_context_for_chat_routes_openstack_server_count_to_project_statistics(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "get_project_statistics")
+            self.assertEqual(payload, {})
+            return {
+                "ok": True,
+                "data": {"structuredContent": {"data": {"inventory": {"server": {"count": 7}}}}},
+            }
+
+        with (
+            patch("app.control.load_modules", return_value=[module]),
+            patch("app.control.load_field_catalog", return_value={"resources": {}}),
+            patch("app.control.execute_module", side_effect=fake_execute),
+        ):
+            snippets, used_modules = _context_for_chat("Wieviele Server siehst du?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "get_project_statistics")
+        self.assertEqual(snippets[0]["results"][0]["inventory"]["server"]["count"], 7)
+
+    def test_context_for_chat_answers_openstack_resource_overview_from_field_catalog(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        catalog = {
+            "updated_at": "2026-06-29T09:12:04",
+            "resource_count": 2,
+            "resources": {
+                "server": {
+                    "tool": "list_servers",
+                    "available": False,
+                    "has_objects": False,
+                    "fields": [],
+                    "field_count": 0,
+                    "error": "OpenStack server.list failed: owner_seen",
+                },
+                "volume": {
+                    "tool": "list_volumes",
+                    "available": True,
+                    "has_objects": True,
+                    "fields": [{"path": "id"}, {"path": "name"}, {"path": "status"}, {"path": "size"}],
+                    "field_count": 4,
+                },
+            },
+        }
+
+        with (
+            patch("app.control.load_modules", return_value=[module]),
+            patch("app.control.load_field_catalog", return_value=catalog),
+            patch("app.control.execute_module", side_effect=AssertionError("OpenStack should not be queried for catalog overview.")),
+        ):
+            snippets, used_modules = _context_for_chat("Welche Ressourcen siehst du?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "field_catalog")
+        payload = snippets[0]["results"][0]
+        self.assertEqual(payload["resource_count"], 2)
+        self.assertEqual(payload["available_resource_count"], 1)
+        self.assertEqual(payload["unavailable_resources"][0]["name"], "server")
+        self.assertEqual(payload["resources"][0]["name"], "volume")
+        self.assertEqual(payload["resources"][0]["fields"], ["id", "name", "status", "size"])
+
+    def test_context_for_chat_maps_openstack_field_questions_from_field_catalog(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        catalog = {
+            "resource_count": 1,
+            "resources": {
+                "floating_ip": {
+                    "tool": "list_floating_ips",
+                    "available": True,
+                    "has_objects": True,
+                    "fields": [{"path": "id"}, {"path": "fixed_ip_address"}, {"path": "floating_ip_address"}],
+                    "field_count": 3,
+                },
+            },
+        }
+
+        with (
+            patch("app.control.load_modules", return_value=[module]),
+            patch("app.control.load_field_catalog", return_value=catalog),
+            patch("app.control.execute_module", side_effect=AssertionError("OpenStack should not be queried for field catalog questions.")),
+        ):
+            snippets, used_modules = _context_for_chat("Wo gibt es das Feld fixed_ip_address?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "field_catalog")
+        self.assertEqual(snippets[0]["results"][0]["resources"][0]["name"], "floating_ip")
+        self.assertIn("fixed_ip_address", snippets[0]["results"][0]["resources"][0]["fields"])
+
     def test_context_for_chat_prioritizes_servers_over_project_word(self) -> None:
         module = ModuleConfig(
             id="openstack",

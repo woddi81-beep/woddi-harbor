@@ -41,6 +41,7 @@ from .config import (
     save_users,
     system_prompt,
 )
+from .field_cache import load_field_catalog
 from .jobs import submit_job
 from .llm import complete_chat, extract_chat_content, llm_health, stream_chat
 from .mcp.openstack import OpenStackDiagnosticError, validate_openstack_token_scope
@@ -652,7 +653,7 @@ def _context_for_module(
             return None
         return {"module": module.id, "kind": module.type, "hits": hits[:3], "cache_hit": bool(result.get("data", {}).get("cache_hit"))}
     if _is_openstack_module(module) and _should_use_openstack(message, selected_modules, module):
-        if allowed_tools is not None and _guess_openstack_tool(message) not in allowed_tools:
+        if allowed_tools is not None and _guess_openstack_tool(message, module) not in allowed_tools:
             return None
         openstack_context = _query_openstack_context(
             module,
@@ -682,6 +683,135 @@ def _is_netbox_module(module: ModuleConfig) -> bool:
 def _is_openstack_module(module: ModuleConfig) -> bool:
     provider = str(module.provider or "").strip().lower()
     return module.type == "openstack_mcp" or provider == "openstack-mcp-server" or module.id.strip().lower() == "openstack"
+
+
+def _tokenize_catalog_text(value: str) -> set[str]:
+    text = value.replace("_", " ").replace("-", " ").replace(".", " ").lower()
+    tokens = {token for token in re.findall(r"[a-z0-9äöüß]+", text) if len(token) > 2}
+    if value:
+        tokens.add(value.lower())
+        tokens.add(value.replace("_", " ").lower())
+        tokens.add(value.replace("_", "-").lower())
+    return tokens
+
+
+def _field_catalog_resources(module: ModuleConfig) -> dict[str, Any]:
+    try:
+        catalog = load_field_catalog(module.id)
+    except Exception:
+        return {}
+    resources = catalog.get("resources", {}) if isinstance(catalog, dict) else {}
+    return resources if isinstance(resources, dict) else {}
+
+
+def _catalog_resource_terms(name: str, resource: dict[str, Any], *, include_fields: bool = True) -> set[str]:
+    terms = _tokenize_catalog_text(name)
+    tool = str(resource.get("tool") or "")
+    if tool:
+        terms.update(_tokenize_catalog_text(tool.removeprefix("list_")))
+    if include_fields:
+        for field in resource.get("fields", []) if isinstance(resource.get("fields"), list) else []:
+            if not isinstance(field, dict):
+                continue
+            path = str(field.get("path") or "").strip()
+            if path:
+                terms.update(_tokenize_catalog_text(path))
+    return {term for term in terms if term}
+
+
+def _message_matches_terms(message: str, terms: set[str]) -> bool:
+    lower = message.lower()
+    for term in sorted(terms, key=len, reverse=True):
+        escaped = re.escape(term)
+        if re.search(rf"(?<![a-z0-9äöüß]){escaped}(?![a-z0-9äöüß])", lower):
+            return True
+    return False
+
+
+def _matching_catalog_resources(message: str, module: ModuleConfig, *, include_fields: bool = True) -> list[tuple[str, dict[str, Any]]]:
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for name, raw in _field_catalog_resources(module).items():
+        if not isinstance(raw, dict):
+            continue
+        if _message_matches_terms(message, _catalog_resource_terms(str(name), raw, include_fields=include_fields)):
+            matches.append((str(name), raw))
+    matches.sort(key=lambda item: len(str(item[0])), reverse=True)
+    return matches
+
+
+def _is_catalog_overview_question(message: str) -> bool:
+    lower = message.lower()
+    return any(
+        term in lower
+        for term in (
+            "welche felder",
+            "welche ressourcen",
+            "welche resourcen",
+            "welche resources",
+            "was siehst du",
+            "was kannst du sehen",
+            "schema",
+            "felder",
+            "fields",
+            "ressourcen",
+            "resourcen",
+            "resources",
+        )
+    )
+
+
+def _catalog_resource_for_tool(module: ModuleConfig, tool_name: str) -> tuple[str, dict[str, Any]] | None:
+    for name, raw in _field_catalog_resources(module).items():
+        if isinstance(raw, dict) and str(raw.get("tool") or "") == tool_name:
+            return str(name), raw
+    return None
+
+
+def _openstack_field_catalog_context(module: ModuleConfig, message: str) -> dict[str, Any] | None:
+    try:
+        catalog = load_field_catalog(module.id)
+    except Exception as exc:
+        return {"tool": "field_catalog", "results": [], "note": f"Feldkatalog konnte nicht gelesen werden: {exc}"}
+    resources = catalog.get("resources", {}) if isinstance(catalog, dict) else {}
+    if not isinstance(resources, dict) or not resources:
+        return None
+    matched_names = {name for name, _resource in _matching_catalog_resources(message, module)}
+    selected_items = [
+        (str(name), resource)
+        for name, resource in resources.items()
+        if isinstance(resource, dict) and (not matched_names or str(name) in matched_names)
+    ]
+    selected_items.sort(key=lambda item: (not bool(item[1].get("available", True)), item[0]))
+    detailed = bool(matched_names) or any(term in message.lower() for term in {"felder", "fields", "schema"})
+    resource_summaries: list[dict[str, Any]] = []
+    for name, resource in selected_items[:30]:
+        fields = resource.get("fields", []) if isinstance(resource.get("fields"), list) else []
+        field_limit = 80 if detailed and len(selected_items) <= 3 else 16
+        summary = {
+            "name": name,
+            "tool": resource.get("tool") or None,
+            "available": bool(resource.get("available", True)),
+            "has_objects": bool(resource.get("has_objects", False)),
+            "field_count": int(resource.get("field_count", 0) or len(fields)),
+            "fields": [str(field.get("path")) for field in fields[:field_limit] if isinstance(field, dict) and field.get("path")],
+            "error": resource.get("error") or None,
+        }
+        resource_summaries.append(summary)
+    unavailable = [
+        {"name": name, "tool": resource.get("tool") or None, "error": resource.get("error") or None}
+        for name, resource in resources.items()
+        if isinstance(resource, dict) and not bool(resource.get("available", True))
+    ]
+    payload = {
+        "source": "field_catalog",
+        "updated_at": catalog.get("updated_at") or "",
+        "resource_count": int(catalog.get("resource_count", 0) or len(resources)),
+        "available_resource_count": sum(1 for resource in resources.values() if isinstance(resource, dict) and bool(resource.get("available", True))),
+        "resources": resource_summaries,
+        "unavailable_resources": unavailable,
+        "errors": catalog.get("errors", []) if isinstance(catalog.get("errors"), list) else [],
+    }
+    return {"tool": "field_catalog", "results": [payload], "note": "OpenStack-Feldkatalog aus dem lokalen Cache."}
 
 
 def _should_use_netbox(message: str, selected_modules: set[str], module: ModuleConfig) -> bool:
@@ -748,11 +878,18 @@ def _should_use_openstack(message: str, selected_modules: set[str], module: Modu
         r"\bavailability zone(?:s)?\b",
         r"\bload balancer(?:s)?\b",
         r"\bloadbalancer(?:s)?\b",
+        r"\bresource(?:s)?\b",
+        r"\bressource(?:n)?\b",
+        r"\bresourcen?\b",
         r"\bquota\b",
         r"\bauslastung\b",
         r"\bstatisti(?:k|cs)\b",
     )
-    return any(re.search(pattern, lower) for pattern in token_patterns)
+    if any(re.search(pattern, lower) for pattern in token_patterns):
+        return True
+    if _is_catalog_overview_question(message) and _field_catalog_resources(module):
+        return True
+    return bool(_matching_catalog_resources(message, module))
 
 
 def _extract_netbox_query(message: str) -> str:
@@ -913,7 +1050,7 @@ def _query_netbox_context(module: ModuleConfig, message: str) -> dict[str, Any] 
     return {"object_type": "unknown", "results": [], "note": "NetBox: keine passenden Objekte gefunden."}
 
 
-def _guess_openstack_tool(message: str) -> str:
+def _guess_openstack_tool(message: str, module: ModuleConfig | None = None) -> str:
     lower = message.lower()
 
     def has(terms: set[str]) -> bool:
@@ -925,6 +1062,7 @@ def _guess_openstack_tool(message: str) -> str:
 
     if has({"discovery", "entdecken", "felder", "fields", "schema", "erfasst", "ressourcen", "resourcen"}):
         return "discover_resources"
+    count_terms = {"anzahl", "bestand", "count", "how many", "inventar", "wie viele", "wieviele", "wie viel", "wieviel"}
     if has({"availability zone", "availability zones", "verfügbarkeitszone", "verfügbarkeitszonen", "verfuegbarkeitszone", "verfuegbarkeitszonen"}):
         return "list_availability_zones"
     if has({"floating ip", "floating ips", "floating-ip", "floating-ips", "fip", "fips"}):
@@ -936,10 +1074,10 @@ def _guess_openstack_tool(message: str) -> str:
     if has({"server group", "server groups", "servergruppe", "servergruppen"}):
         return "list_server_groups"
     if has({"storage", "speicher", "volume", "volumen", "datenträger", "datentraeger", "cinder"}):
-        if has({"statistik", "status", "auslastung", "quota", "prozent", "%", "voll", "frei"}):
+        if has({"statistik", "status", "auslastung", "quota", "prozent", "%", "voll", "frei"} | count_terms):
             return "get_storage_statistics"
         return "list_volumes"
-    if has({"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"}):
+    if has({"statistik", "statistics", "auslastung", "quota", "übersicht", "uebersicht"} | count_terms):
         return "get_project_statistics"
     if has({"server", "servers", "instance", "instances", "instanz", "instanzen", "vm", "vms"}):
         return "list_servers"
@@ -965,6 +1103,11 @@ def _guess_openstack_tool(message: str) -> str:
         return "list_keypairs"
     if has({"stack", "stacks", "heat"}):
         return "list_stacks"
+    if module is not None:
+        for _name, resource in _matching_catalog_resources(message, module, include_fields=False):
+            tool = str(resource.get("tool") or "").strip()
+            if tool:
+                return tool
     return "list_servers"
 
 
@@ -1073,7 +1216,13 @@ def _query_openstack_context(
     openstack_token: str = "",
     openstack_user: str = "",
 ) -> dict[str, Any] | None:
-    tool_name = _guess_openstack_tool(message)
+    tool_name = _guess_openstack_tool(message, module)
+    field_matches = _matching_catalog_resources(message, module)
+    resource_matches = _matching_catalog_resources(message, module, include_fields=False)
+    if tool_name == "discover_resources" or _is_catalog_overview_question(message) or (field_matches and not resource_matches):
+        catalog_context = _openstack_field_catalog_context(module, message)
+        if catalog_context:
+            return catalog_context
     query = _extract_openstack_query(message)
     arguments: dict[str, Any] = (
         {}
@@ -1092,7 +1241,11 @@ def _query_openstack_context(
             openstack_user=openstack_user,
         )
     except Exception as exc:
-        return {"tool": tool_name, "results": [], "note": f"OpenStack-Abfrage fehlgeschlagen: {exc}"}
+        note = f"OpenStack-Abfrage fehlgeschlagen: {exc}"
+        catalog_resource = _catalog_resource_for_tool(module, tool_name)
+        if catalog_resource and catalog_resource[1].get("error"):
+            note = f"{note} Feldkatalog meldet fuer {catalog_resource[0]}: {catalog_resource[1]['error']}"
+        return {"tool": tool_name, "results": [], "note": note}
     data = result.get("data", {})
     if not isinstance(data, dict):
         return {"tool": tool_name, "results": [], "note": "OpenStack lieferte kein gueltiges Ergebnis."}
