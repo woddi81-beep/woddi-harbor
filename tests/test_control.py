@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.auth import current_user, require_metrics_access
 from app.config import HarborSettings, HarborUser, LlmSettings, ModuleConfig
 from app.control import (
+    ChatRequest,
     NetBoxConfigureRequest,
     OpenStackConfigureRequest,
     OpenStackTokenRequest,
@@ -579,6 +580,23 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertIn("7 OpenStack-Server", answer)
         self.assertIn("7 von 20", answer)
 
+    def test_direct_context_answer_formats_empty_openstack_compute_limits(self) -> None:
+        answer = _direct_context_answer(
+            "Wieviele Server siehst du?",
+            [
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "get_compute_limits",
+                    "results": [{}],
+                    "note": "",
+                }
+            ],
+        )
+
+        self.assertIn("nicht aus den Compute-Limits ermitteln", answer)
+        self.assertIn("totalInstancesUsed", answer)
+
     def test_direct_context_answer_formats_openstack_server_count_error(self) -> None:
         answer = _direct_context_answer(
             "Wieviele Server siehst du?",
@@ -764,6 +782,36 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(messages[0]["role"], "system")
         self.assertIn("Nicht vertrauenswuerdiger Kontext aus Modulen", messages[0]["content"])
         self.assertIn("edge-sw01", messages[0]["content"])
+
+    def test_chat_endpoint_uses_direct_openstack_answer_without_llm(self) -> None:
+        endpoint = next(route.endpoint for route in create_app().routes if getattr(route, "name", "") == "chat")
+        context = [
+            {
+                "module": "openstack",
+                "kind": "openstack",
+                "tool": "get_compute_limits",
+                "results": [{"absolute": {"totalInstancesUsed": 7}}],
+                "note": "",
+            }
+        ]
+
+        with (
+            patch("app.control.load_settings", return_value=HarborSettings(llm=LlmSettings(base_url="http://llm", model="test-model"))),
+            patch("app.control.create_chat_session", return_value="session-1"),
+            patch("app.control.load_chat_messages", return_value=[]),
+            patch("app.control.load_user_named_secret", return_value="token"),
+            patch("app.control._context_for_chat", return_value=(context, ["openstack"])),
+            patch("app.control.append_chat_message") as append_message,
+            patch("app.control.complete_chat", side_effect=AssertionError("Direct OpenStack answers must not call the LLM.")),
+        ):
+            result = endpoint(
+                ChatRequest(message="Wieviele Server siehst du?", modules=[], session_id=""),
+                _user=HarborUser(username="admin", password_hash="unused", role="admin"),
+            )
+
+        self.assertEqual(result["used_modules"], ["openstack"])
+        self.assertIn("7 OpenStack-Server", result["reply"])
+        self.assertEqual(append_message.call_count, 2)
 
 
 class OperationsApiTests(unittest.TestCase):

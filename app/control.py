@@ -1454,6 +1454,10 @@ def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
         note = str(item.get("note") or "").strip()
         if note:
             return f"Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. {note}"
+        return (
+            "Ich kann die OpenStack-Serverzahl aktuell nicht aus den Compute-Limits ermitteln. "
+            "Im OpenStack-Ergebnis fehlt totalInstancesUsed/instances_used."
+        )
     return ""
 
 
@@ -2254,16 +2258,20 @@ def create_app() -> FastAPI:
         history = load_chat_messages(session_id, _user.username)
         selected_modules, allowed_modules = _allowed_modules(_user, body.modules)
         openstack_token = load_user_named_secret(_user.username, "openstack_token")
-        messages, used_modules = _build_messages(
-            settings,
+        context, used_modules = _context_for_chat(
             body.message,
             selected_modules,
-            history,
             allowed_modules,
             _allowed_tools(_user),
             openstack_token,
             _user.username,
         )
+        direct_answer = _direct_context_answer(body.message, context)
+        if direct_answer:
+            append_chat_message(session_id, "user", body.message)
+            append_chat_message(session_id, "assistant", direct_answer, metadata={"used_modules": used_modules})
+            return {"ok": True, "reply": direct_answer, "used_modules": used_modules, "session_id": session_id}
+        messages = _messages_from_context(settings, body.message, history, context)
         try:
             response = complete_chat(settings, messages)
         except Exception as exc:
