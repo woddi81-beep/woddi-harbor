@@ -597,6 +597,29 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertIn("nicht aus den Compute-Limits ermitteln", answer)
         self.assertIn("totalInstancesUsed", answer)
 
+    def test_direct_context_answer_uses_first_answerable_openstack_context(self) -> None:
+        answer = _direct_context_answer(
+            "Wieviele Server siehst du?",
+            [
+                {
+                    "module": "old-openstack",
+                    "kind": "openstack",
+                    "tool": "list_servers",
+                    "results": [],
+                    "note": "",
+                },
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "get_compute_limits",
+                    "results": [{"absolute": {"totalInstancesUsed": 7}}],
+                    "note": "",
+                },
+            ],
+        )
+
+        self.assertIn("7 OpenStack-Server", answer)
+
     def test_direct_context_answer_formats_openstack_server_count_error(self) -> None:
         answer = _direct_context_answer(
             "Wieviele Server siehst du?",

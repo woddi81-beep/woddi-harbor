@@ -1387,11 +1387,9 @@ def _find_numeric_value(value: Any, candidates: set[str]) -> int | float | None:
     return None
 
 
-def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
-    openstack_context = [item for item in context if item.get("kind") == "openstack"]
-    if len(openstack_context) != 1:
+def _direct_openstack_context_answer(item: dict[str, Any]) -> str:
+    if item.get("kind") != "openstack":
         return ""
-    item = openstack_context[0]
     tool = str(item.get("tool") or "")
     results = item.get("results") if isinstance(item.get("results"), list) else []
     payload = results[0] if results and isinstance(results[0], dict) else {}
@@ -1458,6 +1456,14 @@ def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
             "Ich kann die OpenStack-Serverzahl aktuell nicht aus den Compute-Limits ermitteln. "
             "Im OpenStack-Ergebnis fehlt totalInstancesUsed/instances_used."
         )
+    return ""
+
+
+def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
+    for item in context:
+        answer = _direct_openstack_context_answer(item)
+        if answer:
+            return answer
     return ""
 
 
