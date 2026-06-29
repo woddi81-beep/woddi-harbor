@@ -509,6 +509,51 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertIn("7 OpenStack-Server", answer)
         self.assertIn("5 active", answer)
 
+    def test_direct_context_answer_formats_openstack_server_count_error(self) -> None:
+        answer = _direct_context_answer(
+            "Wieviele Server siehst du?",
+            [
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "get_project_statistics",
+                    "results": [
+                        {
+                            "inventory": {
+                                "server": {
+                                    "count": None,
+                                    "statuses": {},
+                                    "available": False,
+                                }
+                            },
+                            "errors": {"server": "'Image' object has no attribute 'owner_seen'"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        self.assertIn("nicht ermitteln", answer)
+        self.assertIn("server.list meldet", answer)
+        self.assertIn("owner_seen", answer)
+
+    def test_direct_context_answer_formats_openstack_server_count_note(self) -> None:
+        answer = _direct_context_answer(
+            "Wieviele Server siehst du?",
+            [
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "get_project_statistics",
+                    "results": [],
+                    "note": "OpenStack-Abfrage fehlgeschlagen: timeout",
+                }
+            ],
+        )
+
+        self.assertIn("nicht ermitteln", answer)
+        self.assertIn("timeout", answer)
+
     def test_context_for_chat_maps_openstack_field_questions_from_field_catalog(self) -> None:
         module = ModuleConfig(
             id="openstack",

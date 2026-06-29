@@ -1358,16 +1358,23 @@ def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
     if tool == "get_project_statistics" and isinstance(payload, dict):
         inventory = payload.get("inventory") if isinstance(payload.get("inventory"), dict) else {}
         server = inventory.get("server") if isinstance(inventory.get("server"), dict) else {}
+        errors = payload.get("errors") if isinstance(payload.get("errors"), dict) else {}
         count = server.get("count")
         if count is not None:
             status_text = _format_status_counts(server.get("statuses"))
             answer = f"Ich sehe {count} OpenStack-Server."
             if status_text:
                 answer += f" Status: {status_text}."
-            errors = payload.get("errors") if isinstance(payload.get("errors"), dict) else {}
             if errors.get("server"):
                 answer += f" Hinweis: server.list meldet {errors['server']}."
             return answer
+        if errors.get("server"):
+            return f"Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. server.list meldet: {errors['server']}"
+        note = str(item.get("note") or "").strip()
+        if note:
+            return f"Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. {note}"
+        if server.get("available") is False:
+            return "Ich kann die OpenStack-Serverzahl aktuell nicht ermitteln. get_project_statistics lieferte keinen server.count."
     return ""
 
 
