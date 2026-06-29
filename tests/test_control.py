@@ -15,6 +15,7 @@ from app.control import (
     OpenStackTokenRequest,
     _build_messages,
     _context_for_chat,
+    _direct_context_answer,
     create_app,
 )
 from app.modules import module_status
@@ -369,6 +370,144 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(payload["unavailable_resources"][0]["name"], "server")
         self.assertEqual(payload["resources"][0]["name"], "volume")
         self.assertEqual(payload["resources"][0]["fields"], ["id", "name", "status", "size"])
+
+    def test_context_for_chat_focuses_openstack_resource_overview_when_other_modules_exist(self) -> None:
+        docs = ModuleConfig(id="10", type="docs", transport="local", path="/tmp/docs")
+        netbox = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        openstack = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        catalog = {
+            "resource_count": 1,
+            "resources": {
+                "volume": {
+                    "tool": "list_volumes",
+                    "available": True,
+                    "has_objects": True,
+                    "fields": [{"path": "id"}, {"path": "name"}],
+                    "field_count": 2,
+                },
+            },
+        }
+
+        with (
+            patch("app.control.load_modules", return_value=[docs, netbox, openstack]),
+            patch("app.control.load_field_catalog", return_value=catalog),
+            patch("app.control.execute_module", side_effect=AssertionError("Only field catalog context should be used.")),
+        ):
+            snippets, used_modules = _context_for_chat("Welche Ressourcen siehst du?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "field_catalog")
+
+    def test_context_for_chat_focuses_openstack_inventory_when_other_modules_exist(self) -> None:
+        docs = ModuleConfig(id="10", type="docs", transport="local", path="/tmp/docs")
+        netbox = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        openstack = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        def fake_execute(
+            module_id: str,
+            action: str,
+            payload: dict[str, object],
+            **credentials: str,
+        ) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(action, "get_project_statistics")
+            self.assertEqual(payload, {})
+            return {
+                "ok": True,
+                "data": {"structuredContent": {"data": {"inventory": {"server": {"count": 7}}}}},
+            }
+
+        with (
+            patch("app.control.load_modules", return_value=[docs, netbox, openstack]),
+            patch("app.control.load_field_catalog", return_value={"resources": {}}),
+            patch("app.control.execute_module", side_effect=fake_execute),
+        ):
+            snippets, used_modules = _context_for_chat("Wieviele Server siehst du?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "get_project_statistics")
+
+    def test_direct_context_answer_formats_openstack_field_catalog(self) -> None:
+        answer = _direct_context_answer(
+            "Welche Ressourcen siehst du?",
+            [
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "field_catalog",
+                    "results": [
+                        {
+                            "resource_count": 2,
+                            "available_resource_count": 1,
+                            "resources": [
+                                {
+                                    "name": "volume",
+                                    "tool": "list_volumes",
+                                    "available": True,
+                                    "field_count": 3,
+                                    "fields": ["id", "name", "status"],
+                                }
+                            ],
+                            "unavailable_resources": [{"name": "server", "error": "owner_seen"}],
+                        }
+                    ],
+                }
+            ],
+        )
+
+        self.assertIn("1 von 2 OpenStack-Ressourcen", answer)
+        self.assertIn("volume", answer)
+        self.assertIn("server", answer)
+
+    def test_direct_context_answer_formats_openstack_server_count(self) -> None:
+        answer = _direct_context_answer(
+            "Wieviele Server siehst du?",
+            [
+                {
+                    "module": "openstack",
+                    "kind": "openstack",
+                    "tool": "get_project_statistics",
+                    "results": [
+                        {
+                            "inventory": {
+                                "server": {
+                                    "count": 7,
+                                    "statuses": {"active": 5, "shutoff": 2},
+                                }
+                            },
+                            "errors": {},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        self.assertIn("7 OpenStack-Server", answer)
+        self.assertIn("5 active", answer)
 
     def test_context_for_chat_maps_openstack_field_questions_from_field_catalog(self) -> None:
         module = ModuleConfig(
