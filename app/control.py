@@ -796,10 +796,52 @@ def _is_catalog_overview_question(message: str) -> bool:
     )
 
 
+def _is_count_question(message: str) -> bool:
+    return _contains_any(
+        message,
+        {
+            "anzahl",
+            "bestand",
+            "count",
+            "how many",
+            "inventar",
+            "wie viele",
+            "wieviele",
+            "wie viel",
+            "wieviel",
+        },
+    )
+
+
 def _catalog_resource_for_tool(module: ModuleConfig, tool_name: str) -> tuple[str, dict[str, Any]] | None:
     for name, raw in _field_catalog_resources(module).items():
         if isinstance(raw, dict) and str(raw.get("tool") or "") == tool_name:
             return str(name), raw
+    return None
+
+
+def _openstack_unavailable_count_context(
+    message: str,
+    resource_matches: list[tuple[str, dict[str, Any]]],
+) -> dict[str, Any] | None:
+    if not _is_count_question(message):
+        return None
+    for name, resource in resource_matches:
+        if name != "server" or bool(resource.get("available", True)):
+            continue
+        error = str(resource.get("error") or "").strip()
+        if not error:
+            continue
+        return {
+            "tool": "get_project_statistics",
+            "results": [
+                {
+                    "inventory": {"server": {"count": None, "statuses": {}, "available": False}},
+                    "errors": {"server": error},
+                }
+            ],
+            "note": f"OpenStack-Feldkatalog meldet fuer server: {error}",
+        }
     return None
 
 
@@ -1255,6 +1297,9 @@ def _query_openstack_context(
     tool_name = _guess_openstack_tool(message, module)
     field_matches = _matching_catalog_resources(message, module)
     resource_matches = _matching_catalog_resources(message, module, include_fields=False)
+    unavailable_count_context = _openstack_unavailable_count_context(message, resource_matches)
+    if unavailable_count_context:
+        return unavailable_count_context
     if tool_name == "discover_resources" or _is_catalog_overview_question(message) or (field_matches and not resource_matches):
         catalog_context = _openstack_field_catalog_context(module, message)
         if catalog_context:

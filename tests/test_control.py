@@ -451,6 +451,40 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(used_modules, ["openstack"])
         self.assertEqual(snippets[0]["tool"], "get_project_statistics")
 
+    def test_context_for_chat_uses_field_catalog_for_unavailable_server_count(self) -> None:
+        openstack = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        catalog = {
+            "resource_count": 1,
+            "resources": {
+                "server": {
+                    "tool": "list_servers",
+                    "available": False,
+                    "has_objects": False,
+                    "fields": [],
+                    "field_count": 0,
+                    "error": "OpenStack server.list failed: owner_seen",
+                },
+            },
+        }
+
+        with (
+            patch("app.control.load_modules", return_value=[openstack]),
+            patch("app.control.load_field_catalog", return_value=catalog),
+            patch("app.control.execute_module", side_effect=AssertionError("Known server.list failure should be answered from field catalog.")),
+        ):
+            snippets, used_modules = _context_for_chat("Wieviele Server siehst du?", None)
+
+        self.assertEqual(used_modules, ["openstack"])
+        self.assertEqual(snippets[0]["tool"], "get_project_statistics")
+        self.assertEqual(snippets[0]["results"][0]["inventory"]["server"]["count"], None)
+        self.assertIn("owner_seen", snippets[0]["results"][0]["errors"]["server"])
+
     def test_direct_context_answer_formats_openstack_field_catalog(self) -> None:
         answer = _direct_context_answer(
             "Welche Ressourcen siehst du?",
