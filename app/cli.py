@@ -25,6 +25,7 @@ from .config import (
     delete_module_named_secret,
     ensure_layout,
     find_module,
+    load_user_named_secret,
     load_modules,
     load_settings,
     load_users,
@@ -53,6 +54,7 @@ from .modules import (
     execute_module,
     health_check_module,
     module_diagnostics,
+    module_default_probes,
     module_field_catalog,
     module_log_path,
     module_status,
@@ -1100,6 +1102,26 @@ def module_diagnose(module_id: str, lines: int = 40) -> None:
     except Exception as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Diagnose"))
+
+
+@module_app.command("probe")
+def module_probe(
+    module_id: str,
+    user: str = typer.Option("", "--user", help="Harbor user whose OpenStack token should be used"),
+) -> None:
+    """Run source-specific default diagnostic questions without using the LLM."""
+    try:
+        token = load_user_named_secret(user, "openstack_token") if user.strip() else ""
+        result = module_default_probes(
+            module_id,
+            openstack_token=token,
+            openstack_user=user.strip(),
+        )
+    except Exception as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Probes"))
+    if result.get("probe_count") and not result.get("ok"):
+        raise typer.Exit(code=2)
 
 
 @module_app.command("fields")

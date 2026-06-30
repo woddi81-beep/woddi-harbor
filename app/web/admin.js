@@ -22,6 +22,14 @@ function severityBadge(severity) {
 function card(title, body, actions = "", className = "") { return `<article class="card ${className}"><div class="row between"><h3>${esc(title)}</h3>${actions}</div>${body}</article>`; }
 function buttons(items) { return `<div class="toolbar">${items.map(([label, action, danger]) => `<button ${danger ? 'class="danger"' : ""} data-action="${esc(action)}">${esc(label)}</button>`).join("")}</div>`; }
 function empty(text) { return `<div class="empty-state"><strong>Noch keine Einträge</strong><span>${esc(text)}</span></div>`; }
+async function copyText(text, okText = "Kopiert.") {
+  try {
+    await navigator.clipboard.writeText(text);
+    $("notice").textContent = okText;
+  } catch {
+    $("notice").textContent = "Kopieren nicht möglich.";
+  }
+}
 function formatUptime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -130,16 +138,20 @@ function renderConnectCard(item) {
   const severity = ["ok", "warning", "error"].includes(item.severity) ? item.severity : "warning";
   const checks = Array.isArray(item.checks) ? item.checks : [];
   const steps = Array.isArray(item.next_steps) ? item.next_steps : [];
+  const probes = Array.isArray(item.probes?.probes) ? item.probes.probes : [];
   const raw = {
     browse: item.browse || null,
     diagnostics: item.diagnostics || null,
     test: item.test || null,
+    probes: item.probes || null,
+    data_flow: item.data_flow || null,
     status: item.status || null,
   };
   const actionItems = [
     [item.ran_checks ? "Erneut testen" : "Connect testen", `connect:run:${item.module_id}`],
     ["Browse JSON", `module:discover:${item.module_id}`],
     ["Diagnose", `module:diagnose:${item.module_id}`],
+    ["JSON kopieren", `connect:copy:${item.module_id}`],
   ];
   return `<article class="connect-module ${severity}">
     <div class="connect-head">
@@ -157,6 +169,15 @@ function renderConnectCard(item) {
         <span>${esc(check.message || "")}</span>
       </div>`;
     }).join("") || `<div class="connect-check warning"><strong>Status</strong><span>Noch keine Checks vorhanden.</span></div>`}</div>
+    ${probes.length ? `<div class="probe-list">
+      <strong>Default-Probes ohne LLM</strong>
+      ${probes.map((probe) => `<div class="probe-item ${probe.ok ? "ok" : "error"}">
+        <div class="row between"><span>${esc(probe.label || probe.tool || "Probe")}</span>${badge(Boolean(probe.ok), "OK", "Fehler")}</div>
+        <p>${esc(probe.question || "")}</p>
+        <code>${esc(probe.tool || "")} ${esc(JSON.stringify(probe.payload || {}))}</code>
+        <small>${esc(probe.summary || probe.error || "")}</small>
+      </div>`).join("")}
+    </div>` : ""}
     <div class="connect-steps">
       <strong>Nächste Schritte</strong>
       <ol>${steps.map((step) => `<li>${esc(step)}</li>`).join("") || "<li>Connect-Test starten.</li>"}</ol>
@@ -433,6 +454,15 @@ async function action(raw) {
     await renderConnect();
     return;
   }
+  if (kind === "connect" && verb === "copy") {
+    const item = (window.harborConnectDiagnostics?.modules || []).find((entry) => entry.module_id === id);
+    if (!item) {
+      $("notice").textContent = "Keine Diagnose für dieses Modul geladen.";
+      return;
+    }
+    await copyText(JSON.stringify(item, null, 2), `Diagnose ${id} kopiert.`);
+    return;
+  }
   if (kind === "mcp" && verb === "install") {
     $("mcp-package-form").reset(); $("mcp-package-dialog").showModal(); return;
   }
@@ -464,17 +494,25 @@ async function action(raw) {
     $("diagnose-module-id").textContent = id;
     $("diagnose-status").textContent = "Lade...";
     $("diagnose-log").textContent = "";
+    $("diagnose-probes").textContent = "";
+    $("diagnose-flow").textContent = "";
     $("diagnose-health").textContent = "";
     $("diagnose-remote").textContent = "";
+    $("diagnose-raw").textContent = "";
     $("diagnose-hint").textContent = "";
     $("diagnose-dialog").showModal();
     api(`/api/modules/${encodeURIComponent(id)}/diagnose`).then((d) => {
       $("diagnose-status").textContent = d.ok ? "OK — keine Probleme erkannt" : "FEHLER — Probleme erkannt";
       $("diagnose-status").style.color = d.ok ? "green" : "red";
-      $("diagnose-log").textContent = d.log_tail?.join ? d.log_tail.join("\n") : JSON.stringify(d.log_tail, null, 2);
+      const logText = Array.isArray(d.log_tail) ? d.log_tail.join("\n") : String(d.log_tail || "");
+      $("diagnose-log").textContent = logText || "Keine Log-Einträge vorhanden.";
+      $("diagnose-probes").textContent = d.probes ? JSON.stringify(d.probes, null, 2) : "N/A";
+      $("diagnose-flow").textContent = d.data_flow ? JSON.stringify(d.data_flow, null, 2) : "N/A";
       $("diagnose-health").textContent = JSON.stringify(d.health, null, 2);
       $("diagnose-remote").textContent = d.remote ? JSON.stringify(d.remote, null, 2) : "N/A";
+      $("diagnose-raw").textContent = JSON.stringify(d, null, 2);
       $("diagnose-hint").textContent = d.hint || "";
+      $("diagnose-copy").onclick = () => copyText(JSON.stringify(d, null, 2), `Diagnose ${id} kopiert.`);
     }).catch((e) => { $("diagnose-status").textContent = "Error: " + e.message; });
     $("diagnose-restart").onclick = () => { $("diagnose-dialog").close(); action(`module:restart:${id}`); };
     return;

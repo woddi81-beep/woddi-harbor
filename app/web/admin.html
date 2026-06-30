@@ -135,16 +135,28 @@
   </dialog>
   <dialog id="diagnose-dialog" class="wide-dialog">
     <div id="diagnose-content" class="diagnose-content">
-      <h3>Module Diagnostics: <span id="diagnose-module-id"></span></h3>
+      <div class="dialog-head">
+        <div><span class="eyebrow">Diagnose</span><h2>Module: <span id="diagnose-module-id"></span></h2></div>
+        <div class="row"><button type="button" id="diagnose-copy">Kopieren</button><button type="button" class="icon-button" data-close="diagnose-dialog" aria-label="Schließen">×</button></div>
+      </div>
       <div id="diagnose-status" class="muted"></div>
       <details open><summary>Letzte Log-Einträge</summary>
         <pre id="diagnose-log" class="diagnose-pre diagnose-log-pre"></pre>
+      </details>
+      <details open><summary>Fachliche Probes</summary>
+        <pre id="diagnose-probes" class="diagnose-pre"></pre>
+      </details>
+      <details><summary>Data-Flow</summary>
+        <pre id="diagnose-flow" class="diagnose-pre"></pre>
       </details>
       <details><summary>Technical Status</summary>
         <pre id="diagnose-health" class="diagnose-pre"></pre>
       </details>
       <details><summary>Remote Discovery</summary>
         <pre id="diagnose-remote" class="diagnose-pre"></pre>
+      </details>
+      <details><summary>Raw JSON</summary>
+        <pre id="diagnose-raw" class="diagnose-pre diagnose-raw-pre"></pre>
       </details>
       <p id="diagnose-hint" class="muted diagnose-hint"></p>
       <div class="row"><button data-close="diagnose-dialog">Schliessen</button><button id="diagnose-restart" class="danger">Worker neustarten</button></div>

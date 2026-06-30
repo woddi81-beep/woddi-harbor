@@ -104,6 +104,7 @@ kbd { padding: .08rem .28rem; border: 1px solid var(--line); border-bottom-width
 .status-line { display: flex; align-items: center; gap: .45rem; margin-top: .38rem; }
 .status-dot { width: .48rem; height: .48rem; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .status-line.unavailable .status-dot { background: var(--warn); box-shadow: 0 0 0 4px rgba(239, 191, 105, .12); }
+.user-context { max-width: min(76vw, 920px); margin-top: .22rem; overflow-wrap: anywhere; line-height: 1.35; }
 .panel { border: 1px solid var(--line-soft); border-radius: 14px; background: rgba(15, 29, 41, .92); padding: 1rem; box-shadow: var(--shadow); }
 .chat-panel { padding: .7rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .9rem; }
@@ -196,6 +197,22 @@ kbd { padding: .08rem .28rem; border: 1px solid var(--line); border-bottom-width
 .connect-steps strong { font-size: .8rem; color: var(--muted); }
 .connect-steps ol { margin: 0; padding-left: 1.25rem; color: #d8ece8; font-size: .82rem; line-height: 1.45; }
 .connect-steps li + li { margin-top: .25rem; }
+.probe-list { display: grid; gap: .5rem; }
+.probe-list > strong { color: var(--muted); font-size: .8rem; }
+.probe-item {
+  display: grid;
+  gap: .35rem;
+  min-width: 0;
+  padding: .68rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: rgba(9, 20, 30, .66);
+}
+.probe-item.ok { border-color: rgba(82, 213, 173, .22); }
+.probe-item.error { border-color: rgba(255, 140, 134, .3); }
+.probe-item p { margin: 0; color: #d8ece8; font-size: .8rem; line-height: 1.4; }
+.probe-item code { overflow-wrap: anywhere; color: var(--muted); font-size: .72rem; }
+.probe-item small { color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
 .dashboard-grid { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(360px, 1.2fr); gap: .9rem; }
 .facts { display: grid; gap: 0; margin: .5rem 0 0; }
 .facts div { display: grid; grid-template-columns: minmax(100px, .65fr) minmax(0, 1.35fr); gap: .8rem; padding: .58rem 0; border-bottom: 1px solid var(--line-soft); }
@@ -259,6 +276,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #cce8e1; }
 .diagnose-content { overflow: auto; }
 .diagnose-pre { max-height: 200px; overflow: auto; padding: .6rem; border: 1px solid var(--line-soft); border-radius: 8px; background: #06101a; font-size: .75rem; }
 .diagnose-log-pre { max-height: 300px; }
+.diagnose-raw-pre { max-height: 420px; }
 .diagnose-hint { margin-top: .5rem; }
 .empty-state { display: grid; place-items: center; align-content: center; gap: .45rem; min-height: 150px; padding: 2rem; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; }
 .messages > .empty-state { flex: 1; border: 0; }

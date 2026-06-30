@@ -836,6 +836,35 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertIn("7 OpenStack-Server", result["reply"])
         self.assertEqual(append_message.call_count, 2)
 
+    def test_chat_endpoint_does_not_use_llm_when_selected_source_has_no_context(self) -> None:
+        endpoint = next(route.endpoint for route in create_app().routes if getattr(route, "name", "") == "chat")
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+
+        with (
+            patch("app.control.load_settings", return_value=HarborSettings(llm=LlmSettings(base_url="http://llm", model="test-model"))),
+            patch("app.control.create_chat_session", return_value="session-1"),
+            patch("app.control.load_chat_messages", return_value=[]),
+            patch("app.control.load_user_named_secret", return_value="token"),
+            patch("app.control._context_for_chat", return_value=([], [])),
+            patch("app.control.load_modules", return_value=[module]),
+            patch("app.control.append_chat_message") as append_message,
+            patch("app.control.complete_chat", side_effect=AssertionError("Ungrounded source answers must not call the LLM.")),
+        ):
+            result = endpoint(
+                ChatRequest(message="Welche Netze siehst du?", modules=["openstack"], session_id=""),
+                _user=HarborUser(username="admin", password_hash="unused", role="admin"),
+            )
+
+        self.assertIn("keine verwertbaren Quelldaten", result["reply"])
+        self.assertEqual(result["used_modules"], [])
+        self.assertEqual(append_message.call_count, 2)
+
 
 class OperationsApiTests(unittest.TestCase):
     @staticmethod

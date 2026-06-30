@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -14,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from hashlib import sha1
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -884,6 +885,35 @@ def module_diagnostics(
             payload["ok"] = False
             payload["source_diagnostics"] = {"ok": False, "tool": source_tool, "error": str(exc)}
             payload["errors"].append(f"Source discovery: {exc}")
+    if module.type in {"docs", "maildir", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"} or module.provider in {
+        "netbox-mcp-server",
+        "openstack-mcp-server",
+        "sap-docs-mcp-server",
+    }:
+        try:
+            payload["probes"] = module_default_probes(
+                module_id,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
+            if payload["probes"].get("probe_count"):
+                payload["ok"] = payload["ok"] and bool(payload["probes"].get("ok"))
+        except Exception as exc:
+            payload["probes"] = {"ok": False, "error": str(exc)}
+            payload["errors"].append(f"Default probes: {exc}")
+            payload["ok"] = False
+    payload["data_flow"] = {
+        "diagnostic_path": [
+            "module_diagnostics",
+            "health_check_module/discover_remote_module",
+            "source_diagnostics",
+            "module_default_probes",
+            "execute_module",
+            "Worker/MCP Upstream",
+        ],
+        "llm_used": False,
+        "note": "Dieser Diagnosepfad ruft keine LLM-Completion auf.",
+    }
     if not payload["ok"] and module.transport == "local":
         payload["hint"] = _module_diagnostics_hint(module, payload)
     return payload
@@ -996,6 +1026,438 @@ def _browse_summary(browse: dict[str, Any] | None) -> tuple[bool, str, dict[str,
         return True, "Browse erfolgreich, aber ohne Tool-/Action-Liste.", {}
     reason = _join_error_fragments(browse) or "Browse hat keine erfolgreiche Antwort geliefert."
     return False, f"Browse fehlgeschlagen: {reason}", browse
+
+
+def _structured_tool_payload(result: dict[str, Any]) -> Any:
+    data = result.get("data")
+    if isinstance(data, dict):
+        structured = data.get("structuredContent")
+        if isinstance(structured, dict) and "data" in structured:
+            return structured.get("data")
+        if "hits" in data or "document_count" in data or "messages" in data:
+            return data
+    return data if data is not None else result
+
+
+def _probe_numeric_value(value: Any, candidates: set[str]) -> int | float | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").lower()
+            if normalized in candidates and isinstance(item, (int, float)) and not isinstance(item, bool):
+                return item
+        for item in value.values():
+            found = _probe_numeric_value(item, candidates)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = _probe_numeric_value(item, candidates)
+            if found is not None:
+                return found
+    return None
+
+
+def _probe_collection_rows(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        rows = data.get("results")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    return []
+
+
+def _probe_collection_count(data: Any) -> int | None:
+    if isinstance(data, dict):
+        count = data.get("count")
+        if isinstance(count, int) and not isinstance(count, bool):
+            return count
+        if isinstance(count, str) and count.isdigit():
+            return int(count)
+        rows = data.get("results")
+        if isinstance(rows, list):
+            return len(rows)
+    if isinstance(data, list):
+        return len(data)
+    return None
+
+
+def _probe_name(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("name", "Name", "display", "label", "id", "ID"):
+            item = value.get(key)
+            if item not in {None, ""}:
+                if isinstance(item, dict):
+                    nested = _probe_name(item)
+                    if nested:
+                        return nested
+                return str(item)
+    return str(value) if value not in {None, ""} else ""
+
+
+def _probe_memory_mib(row: dict[str, Any]) -> int | float | None:
+    candidates: list[Any] = [
+        row.get("memory"),
+        row.get("memory_mb"),
+        row.get("ram"),
+        row.get("ram_mb"),
+    ]
+    custom_fields = row.get("custom_fields")
+    if isinstance(custom_fields, dict):
+        candidates.extend(
+            custom_fields.get(key)
+            for key in ("memory", "memory_mb", "ram", "ram_mb", "arbeitsspeicher")
+        )
+    for value in candidates:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            cleaned = value.strip().replace("GiB", "").replace("GB", "").replace("MiB", "").replace("MB", "").strip()
+            try:
+                parsed = float(cleaned.replace(",", "."))
+            except ValueError:
+                continue
+            if "gib" in value.lower() or re.search(r"\bgb\b", value.lower()):
+                return parsed * 1024
+            return parsed
+    return None
+
+
+def _summarize_openstack_server_count(data: Any) -> str:
+    used = _probe_numeric_value(data, {"totalinstancesused", "instancesused", "usedinstances"})
+    limit = _probe_numeric_value(data, {"maxtotalinstances", "instances", "maxinstances", "totalinstances"})
+    if used is None and isinstance(data, dict):
+        inventory = data.get("inventory")
+        if isinstance(inventory, dict):
+            server = inventory.get("server")
+            if isinstance(server, dict):
+                used = server.get("count")
+    if used is None:
+        return "Serverzahl konnte aus der OpenStack-Antwort nicht gelesen werden."
+    used_text = int(used) if isinstance(used, float) and used.is_integer() else used
+    if limit is None:
+        return f"OpenStack meldet {used_text} Server im Projekt."
+    limit_text = int(limit) if isinstance(limit, float) and limit.is_integer() else limit
+    return f"OpenStack meldet {used_text} Server im Projekt; Quota {used_text} von {limit_text}."
+
+
+def _summarize_named_rows(data: Any, resource_label: str) -> str:
+    rows = _probe_collection_rows(data)
+    count = _probe_collection_count(data)
+    names = [_probe_name(row) for row in rows[:10]]
+    names = [name for name in names if name]
+    prefix = f"{count} {resource_label}" if count is not None else f"{len(rows)} {resource_label}"
+    if names:
+        return f"{prefix}: {', '.join(names)}"
+    return f"{prefix}; keine Namen in der Antwort gefunden."
+
+
+def _summarize_netbox_count(data: Any) -> str:
+    count = _probe_collection_count(data)
+    if count is None:
+        return "NetBox-Zahl konnte aus der Antwort nicht gelesen werden."
+    return f"NetBox meldet {count} passende Systeme/Geraete fuer Hersteller NetApp in eu-de-1."
+
+
+def _summarize_memory_top10(data: Any) -> str:
+    rows = _probe_collection_rows(data)
+    ranked: list[tuple[float, str]] = []
+    for row in rows:
+        memory = _probe_memory_mib(row)
+        if memory is None:
+            continue
+        name = _probe_name(row) or str(row.get("id") or row.get("ID") or "unknown")
+        ranked.append((float(memory), name))
+    ranked.sort(reverse=True)
+    if not ranked:
+        return "Keine RAM-/Memory-Werte in den zurueckgegebenen NetBox-Objekten gefunden."
+    parts = [f"{name}: {int(memory) if memory.is_integer() else round(memory, 1)} MiB" for memory, name in ranked[:10]]
+    return "Top-10 nach Arbeitsspeicher: " + "; ".join(parts)
+
+
+def _summarize_docs_hits(data: Any) -> str:
+    hits = []
+    if isinstance(data, dict):
+        if isinstance(data.get("hits"), list):
+            hits = data["hits"]
+        elif isinstance(data.get("results"), list):
+            hits = data["results"]
+    if not hits:
+        return "Keine Dokumenttreffer gefunden."
+    parts: list[str] = []
+    for item in hits[:3]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("name") or item.get("location") or item.get("url") or "").strip()
+        location = str(item.get("location") or item.get("url") or "").strip()
+        if title and location and title != location:
+            parts.append(f"{title} ({location})")
+        elif title or location:
+            parts.append(title or location)
+    return f"{len(hits)} Dokumenttreffer: " + ("; ".join(parts) if parts else "Treffer ohne Titel/Link.")
+
+
+def _diagnostic_probe(
+    module_id: str,
+    label: str,
+    question: str,
+    tool: str,
+    payload: dict[str, Any],
+    summary_builder: Callable[[Any], str],
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
+    started_at = time.monotonic()
+    try:
+        result = execute_module(
+            module_id,
+            tool,
+            payload,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
+        data = _structured_tool_payload(result)
+        return {
+            "ok": True,
+            "label": label,
+            "question": question,
+            "tool": tool,
+            "payload": _redact_mapping(payload),
+            "duration_ms": round((time.monotonic() - started_at) * 1000.0, 2),
+            "summary": summary_builder(data),
+            "data": _redact_mapping(data),
+            "raw": _redact_mapping(result),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "label": label,
+            "question": question,
+            "tool": tool,
+            "payload": _redact_mapping(payload),
+            "duration_ms": round((time.monotonic() - started_at) * 1000.0, 2),
+            "summary": f"Probe fehlgeschlagen: {exc}",
+            "error": str(exc),
+        }
+
+
+def _first_successful_probe(
+    module_id: str,
+    label: str,
+    question: str,
+    candidates: list[tuple[str, dict[str, Any], Callable[[Any], str]]],
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    for tool, payload, summary_builder in candidates:
+        probe = _diagnostic_probe(
+            module_id,
+            label,
+            question,
+            tool,
+            payload,
+            summary_builder,
+            openstack_token=openstack_token,
+            openstack_user=openstack_user,
+        )
+        attempts.append(probe)
+        if probe["ok"]:
+            if len(attempts) > 1:
+                probe["attempts"] = attempts
+            return probe
+    failed = attempts[-1] if attempts else {
+        "ok": False,
+        "label": label,
+        "question": question,
+        "tool": "",
+        "payload": {},
+        "summary": "Keine Probe definiert.",
+    }
+    return {**failed, "attempts": attempts}
+
+
+def module_default_probes(
+    module_id: str,
+    *,
+    openstack_token: str = "",
+    openstack_user: str = "",
+) -> dict[str, Any]:
+    module = find_module(module_id)
+    if module is None:
+        raise ValueError(f"Unbekanntes Modul: {module_id}")
+    probes: list[dict[str, Any]] = []
+    if module.type == "openstack_mcp" or module.provider == "openstack-mcp-server" or module.id == "openstack":
+        effective_token = openstack_token.strip() or os.getenv("OS_TOKEN", "").strip()
+        probes.extend(
+            [
+                _first_successful_probe(
+                    module_id,
+                    "OpenStack Server im Projekt",
+                    "Wieviele Server sind in meinem Projekt?",
+                    [
+                        ("get_compute_limits", {}, _summarize_openstack_server_count),
+                        ("get_project_statistics", {}, _summarize_openstack_server_count),
+                    ],
+                    openstack_token=effective_token,
+                    openstack_user=openstack_user,
+                ),
+                _diagnostic_probe(
+                    module_id,
+                    "OpenStack Netze",
+                    "Welche Netze siehst Du?",
+                    "list_networks",
+                    {"limit": 20},
+                    lambda data: _summarize_named_rows(data, "Netz(e)"),
+                    openstack_token=effective_token,
+                    openstack_user=openstack_user,
+                ),
+                _diagnostic_probe(
+                    module_id,
+                    "OpenStack Flavor",
+                    "Welche Flavor gibt es?",
+                    "list_flavors",
+                    {"limit": 20},
+                    lambda data: _summarize_named_rows(data, "Flavor"),
+                    openstack_token=effective_token,
+                    openstack_user=openstack_user,
+                ),
+                _diagnostic_probe(
+                    module_id,
+                    "OpenStack Regionen/Zonen",
+                    "Welche Regionen oder Availability Zones gibt es?",
+                    "list_availability_zones",
+                    {"limit": 20},
+                    lambda data: _summarize_named_rows(data, "Zone(n)"),
+                    openstack_token=effective_token,
+                    openstack_user=openstack_user,
+                ),
+            ]
+        )
+    elif module.type == "netbox_mcp" or module.provider == "netbox-mcp-server" or module.id == "netbox":
+        probes.extend(
+            [
+                _first_successful_probe(
+                    module_id,
+                    "NetBox NetApp in eu-de-1",
+                    "Wieviele Systeme vom Hersteller NetApp stehen in eu-de-1?",
+                    [
+                        (
+                            "get_objects",
+                            {
+                                "object_type": "dcim.devices",
+                                "filters": {"device_type__manufacturer": "NetApp", "site": "eu-de-1"},
+                                "limit": 1,
+                                "fetch_all": False,
+                            },
+                            _summarize_netbox_count,
+                        ),
+                        (
+                            "get_objects",
+                            {
+                                "object_type": "dcim.devices",
+                                "filters": {"manufacturer": "NetApp", "site": "eu-de-1"},
+                                "limit": 1,
+                                "fetch_all": False,
+                            },
+                            _summarize_netbox_count,
+                        ),
+                        (
+                            "get_objects",
+                            {
+                                "object_type": "dcim.devices",
+                                "filters": {"q": "NetApp eu-de-1"},
+                                "limit": 10,
+                                "fetch_all": False,
+                            },
+                            _summarize_netbox_count,
+                        ),
+                    ],
+                ),
+                _first_successful_probe(
+                    module_id,
+                    "NetBox Arbeitsspeicher Top 10",
+                    "Welches ist der Server mit dem meisten Arbeitsspeicher? Bitte TOP10.",
+                    [
+                        (
+                            "get_objects",
+                            {
+                                "object_type": "virtualization.virtual-machines",
+                                "filters": {"ordering": "-memory"},
+                                "fields": ["id", "name", "memory", "site", "cluster", "status"],
+                                "limit": 10,
+                                "fetch_all": False,
+                            },
+                            _summarize_memory_top10,
+                        ),
+                        (
+                            "get_objects",
+                            {
+                                "object_type": "dcim.devices",
+                                "filters": {"ordering": "-custom_fields.memory"},
+                                "fields": ["id", "name", "site", "device_type", "custom_fields", "status"],
+                                "limit": 100,
+                                "fetch_all": False,
+                            },
+                            _summarize_memory_top10,
+                        ),
+                    ],
+                ),
+            ]
+        )
+    elif module.type in {"docs", "maildir"}:
+        for label, query in (
+            ("Doku Cinder vs Manila", "was ist der unterschied zwischen cinder und manila"),
+            ("Doku Regionen", "welche regionen gibt es"),
+            ("Doku Flavor", "welche flavor gibt es"),
+        ):
+            probes.append(
+                _diagnostic_probe(
+                    module_id,
+                    label,
+                    query,
+                    "search",
+                    {"query": query, "top_k": 3},
+                    _summarize_docs_hits,
+                )
+            )
+    elif module.type == "sap_docs_mcp":
+        for label, query in (
+            ("Doku Cinder vs Manila", "cinder manila difference"),
+            ("Doku Regionen", "available regions"),
+            ("Doku Flavor", "available flavors"),
+        ):
+            probes.append(
+                _diagnostic_probe(
+                    module_id,
+                    label,
+                    query,
+                    "search_sap_docs",
+                    {"query": query, "limit": 5},
+                    _summarize_docs_hits,
+                )
+            )
+    ok_probes = [probe for probe in probes if probe.get("ok")]
+    return {
+        "ok": bool(probes) and len(ok_probes) == len(probes),
+        "module_id": module.id,
+        "type": module.type,
+        "probe_count": len(probes),
+        "ok_probe_count": len(ok_probes),
+        "summary": (
+            f"{len(ok_probes)} von {len(probes)} Default-Probe(s) erfolgreich."
+            if probes
+            else f"Keine fachlichen Default-Probes fuer Modultyp {module.type} definiert."
+        ),
+        "data_flow": {
+            "path": "module_default_probes -> execute_module -> worker/MCP upstream",
+            "llm_used": False,
+            "note": "Diese Probes umgehen das LLM vollstaendig und pruefen die Quelle direkt.",
+        },
+        "probes": probes,
+    }
 
 
 def _connect_next_steps(module: ModuleConfig, checks: list[dict[str, Any]], error_text: str) -> list[str]:
@@ -1177,6 +1639,7 @@ def module_connect_diagnostics(
     diagnostics: dict[str, Any] | None = None
     test_result: dict[str, Any] | None = None
     browse: dict[str, Any] | None = None
+    probes: dict[str, Any] | None = None
 
     if run_checks:
         diagnostics = module_diagnostics(
@@ -1258,6 +1721,34 @@ def module_connect_diagnostics(
             )
         )
 
+        if module.type in {"docs", "maildir", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"} or module.provider in {
+            "netbox-mcp-server",
+            "openstack-mcp-server",
+            "sap-docs-mcp-server",
+        }:
+            diagnostics_probes = diagnostics.get("probes") if isinstance(diagnostics, dict) else None
+            probes = diagnostics_probes if isinstance(diagnostics_probes, dict) else module_default_probes(
+                module_id,
+                openstack_token=openstack_token,
+                openstack_user=openstack_user,
+            )
+            probe_count = int(probes.get("probe_count", 0) or 0)
+            ok_probe_count = int(probes.get("ok_probe_count", 0) or 0)
+            checks.append(
+                _diagnostic_check(
+                    "default_probes",
+                    "Fachliche Probes",
+                    bool(probes.get("ok")),
+                    str(probes.get("summary") or "Default-Probes ausgefuehrt."),
+                    severity="ok" if probes.get("ok") else "warning" if ok_probe_count else "error",
+                    detail={
+                        "probe_count": probe_count,
+                        "ok_probe_count": ok_probe_count,
+                        "data_flow": probes.get("data_flow", {}),
+                    },
+                )
+            )
+
     has_error = any(not check.get("ok") and check.get("severity") != "warning" for check in checks)
     has_warning = any(not check.get("ok") or check.get("severity") == "warning" for check in checks)
     severity = "error" if has_error else "warning" if has_warning else "ok"
@@ -1291,10 +1782,29 @@ def module_connect_diagnostics(
         "summary": summary,
         "checks": checks,
         "next_steps": next_steps,
+        "data_flow": {
+            "chat_path": [
+                "Browser/CLI",
+                "Harbor API /api/chat oder /api/chat/stream",
+                "_context_for_chat",
+                "execute_module",
+                "Worker/MCP Upstream",
+                "LLM nur zur Formulierung, wenn kein direkter deterministischer Antwortpfad greift",
+            ],
+            "diagnostic_path": [
+                "Connect Diagnose",
+                "module_connect_diagnostics",
+                "module_default_probes",
+                "execute_module",
+                "Worker/MCP Upstream",
+            ],
+            "diagnostic_llm_used": False,
+        },
         "status": status,
         "browse": browse,
         "diagnostics": diagnostics,
         "test": test_result,
+        "probes": probes,
     }
 
 

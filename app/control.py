@@ -1464,7 +1464,75 @@ def _direct_context_answer(message: str, context: list[dict[str, Any]]) -> str:
         answer = _direct_openstack_context_answer(item)
         if answer:
             return answer
+        kind = str(item.get("kind") or "")
+        results = item.get("results") if isinstance(item.get("results"), list) else []
+        note = str(item.get("note") or "").strip()
+        if kind in {"openstack", "netbox"} and note and not results:
+            prefix = "OpenStack" if kind == "openstack" else "NetBox"
+            return f"{prefix}: {note}"
     return ""
+
+
+def _should_use_docs(message: str) -> bool:
+    lower = message.lower()
+    return any(
+        term in lower
+        for term in (
+            "doku",
+            "dokumentation",
+            "documentation",
+            "docs",
+            "runbook",
+            "howto",
+            "cinder",
+            "manila",
+            "flavor",
+            "flavors",
+            "region",
+            "regionen",
+        )
+    )
+
+
+def _grounding_failure_answer(
+    message: str,
+    selected_modules: list[str] | None,
+    allowed_modules: set[str] | None,
+    context: list[dict[str, Any]],
+    used_modules: list[str],
+) -> str:
+    if context or used_modules:
+        return ""
+    modules = [
+        module
+        for module in load_modules()
+        if module.enabled and (allowed_modules is None or module.id in allowed_modules)
+    ]
+    if selected_modules:
+        requested = [module.id for module in modules if module.id in set(selected_modules)]
+        missing = sorted(set(selected_modules) - {module.id for module in modules})
+        target = ", ".join(requested + missing)
+        return (
+            f"Ich habe fuer die ausgewaehlten Module {target or '-'} keine verwertbaren Quelldaten erhalten. "
+            "Ich nutze deshalb nicht das LLM fuer eine ungestuetzte Antwort. "
+            "Bitte pruefe die Connect-Diagnose oder starte `./harbor.sh module probe <module-id>`."
+        )
+
+    requested: list[str] = []
+    for module in modules:
+        if _is_openstack_module(module) and _should_use_openstack(message, set(), module):
+            requested.append(module.id)
+        elif _is_netbox_module(module) and _should_use_netbox(message, set(), module):
+            requested.append(module.id)
+        elif module.type in {"docs", "maildir", "sap_docs_mcp"} and _should_use_docs(message):
+            requested.append(module.id)
+    if not requested:
+        return ""
+    return (
+        f"Ich habe fuer diese Frage keine verwertbaren Quelldaten aus {', '.join(requested)} erhalten. "
+        "Ich nutze deshalb nicht das LLM fuer eine ungestuetzte Infrastruktur- oder Doku-Antwort. "
+        "Bitte pruefe die Connect-Diagnose oder den Feld-/Suchindex."
+    )
 
 
 def _build_messages(
@@ -2273,10 +2341,23 @@ def create_app() -> FastAPI:
             _user.username,
         )
         direct_answer = _direct_context_answer(body.message, context)
-        if direct_answer:
+        grounding_answer = _grounding_failure_answer(
+            body.message,
+            selected_modules,
+            allowed_modules,
+            context,
+            used_modules,
+        )
+        if direct_answer or grounding_answer:
+            reply = direct_answer or grounding_answer
             append_chat_message(session_id, "user", body.message)
-            append_chat_message(session_id, "assistant", direct_answer, metadata={"used_modules": used_modules})
-            return {"ok": True, "reply": direct_answer, "used_modules": used_modules, "session_id": session_id}
+            append_chat_message(
+                session_id,
+                "assistant",
+                reply,
+                metadata={"used_modules": used_modules, "grounding_failure": bool(grounding_answer)},
+            )
+            return {"ok": True, "reply": reply, "used_modules": used_modules, "session_id": session_id}
         messages = _messages_from_context(settings, body.message, history, context)
         try:
             response = complete_chat(settings, messages)
@@ -2317,17 +2398,30 @@ def create_app() -> FastAPI:
             _user.username,
         )
         direct_answer = _direct_context_answer(body.message, context)
+        grounding_answer = _grounding_failure_answer(
+            body.message,
+            selected_modules,
+            allowed_modules,
+            context,
+            used_modules,
+        )
         messages = _messages_from_context(settings, body.message, history, context)
 
         def events():
             chunks: list[str] = []
             yield f"event: meta\ndata: {json.dumps({'session_id': session_id, 'used_modules': used_modules})}\n\n"
             try:
-                if direct_answer:
-                    chunks.append(direct_answer)
-                    yield f"event: token\ndata: {json.dumps({'text': direct_answer}, ensure_ascii=False)}\n\n"
+                if direct_answer or grounding_answer:
+                    reply = direct_answer or grounding_answer
+                    chunks.append(reply)
+                    yield f"event: token\ndata: {json.dumps({'text': reply}, ensure_ascii=False)}\n\n"
                     append_chat_message(session_id, "user", body.message)
-                    append_chat_message(session_id, "assistant", direct_answer, metadata={"used_modules": used_modules})
+                    append_chat_message(
+                        session_id,
+                        "assistant",
+                        reply,
+                        metadata={"used_modules": used_modules, "grounding_failure": bool(grounding_answer)},
+                    )
                     yield "event: done\ndata: {}\n\n"
                     return
                 for chunk in stream_chat(settings, messages):

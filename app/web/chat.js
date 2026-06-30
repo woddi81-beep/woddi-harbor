@@ -97,13 +97,20 @@ async function loadOpenStackCredential() {
   state.openstack = configuration;
   const configured = Boolean(configuration.token_configured);
   const ready = Boolean(configuration.configured);
+  const scope = configuration.token_scope || {};
+  const domain = scope.project_domain_name || scope.project_domain_id || scope.user_domain_name || scope.user_domain_id || "";
+  const project = scope.project_name || scope.project_id || "";
+  const user = scope.user_name || scope.user_id || configuration.token_owner || "";
   $("openstack-credential").classList.toggle("ready", configured && ready);
   $("openstack-credential").classList.toggle("warning", !configured || !ready);
   $("openstack-token-status").textContent = !ready
     ? "Integration noch nicht eingerichtet"
     : configured
-      ? `Token ffor ${configuration.token_owner} active`
-      : `Token ffor ${configuration.token_owner} missing`;
+      ? `Token für ${configuration.token_owner} aktiv`
+      : `Token für ${configuration.token_owner} fehlt`;
+  $("login-context").textContent = ready && configured
+    ? `Du bist eingeloggt in Domain ${domain || "n/a"} und Projekt ${project || "n/a"} als User ${user || "n/a"}.`
+    : `Du bist in Harbor als ${configuration.token_owner || "n/a"} eingeloggt; OpenStack-Projektkontext fehlt.`;
   $("openstack-token-open").textContent = configured ? "Renew Token" : "Add Token";
   $("openstack-token-remove").classList.toggle("hidden", !configured);
   $("openstack-token-owner").textContent =

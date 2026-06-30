@@ -22,6 +22,7 @@ from app.modules import (
     discover_standard_mcp_module,
     execute_module,
     module_connect_diagnostics,
+    module_default_probes,
     module_diagnostics,
     module_test,
     validation_errors_by_module,
@@ -909,6 +910,41 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(result["severity"], "ok")
         self.assertIn("Connect-Pfad ist sauber", result["summary"])
         self.assertTrue({check["key"]: check for check in result["checks"]}["browse"]["ok"])
+
+    def test_module_default_probes_call_openstack_tools_directly(self) -> None:
+        module = ModuleConfig(
+            id="openstack",
+            type="openstack_mcp",
+            provider="openstack-mcp-server",
+            transport="local",
+            remote_protocol="mcp",
+        )
+        calls: list[str] = []
+
+        def fake_execute(module_id: str, action: str, payload: dict[str, object], **credentials: str) -> dict[str, object]:
+            self.assertEqual(module_id, "openstack")
+            self.assertEqual(credentials["openstack_token"], "alice-token")
+            self.assertEqual(credentials["openstack_user"], "alice")
+            calls.append(action)
+            payloads = {
+                "get_compute_limits": {"absolute": {"totalInstancesUsed": 3, "maxTotalInstances": 10}},
+                "list_networks": [{"name": "private"}, {"name": "public"}],
+                "list_flavors": [{"name": "m1.small"}],
+                "list_availability_zones": [{"name": "nova"}],
+            }
+            return {"ok": True, "data": {"structuredContent": {"data": payloads[action]}}}
+
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.execute_module", side_effect=fake_execute),
+        ):
+            result = module_default_probes("openstack", openstack_token="alice-token", openstack_user="alice")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["data_flow"]["llm_used"])
+        self.assertIn("get_compute_limits", calls)
+        self.assertIn("list_networks", calls)
+        self.assertIn("3 Server", result["probes"][0]["summary"])
 
     def test_module_named_secret_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as secret_dir:
