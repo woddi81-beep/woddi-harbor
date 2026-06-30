@@ -252,6 +252,33 @@ class WrappedOwnerSeenDetailsConnection(Connection):
         self.compute = WrappedOwnerSeenDetailsCompute()
 
 
+class RawFallbackOwnerSeenCompute(OwnerSeenDetailsCompute):
+    def servers(self, *, details: bool = False):
+        self.server_calls += 1
+        self.detail_attempts.append(details)
+        raise AttributeError("'Image' object has no attribute 'owner_seen'")
+
+    def get(self, path: str):
+        self.raw_path = path
+        return {
+            "servers": [
+                {
+                    "id": "vm-1",
+                    "name": "prod",
+                    "status": "ACTIVE",
+                    "project_id": "project-1",
+                    "token": "secret-token",
+                }
+            ]
+        }
+
+
+class RawFallbackOwnerSeenConnection(Connection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.compute = RawFallbackOwnerSeenCompute()
+
+
 class BrokenIdentityProjects:
     def projects(self):
         raise AttributeError("'Project' object has no attribute 'owner_seen'")
@@ -684,6 +711,21 @@ class McpBackendTests(unittest.TestCase):
 
         self.assertEqual(result["structuredContent"]["data"][0]["name"], "prod")
         self.assertEqual(connection.compute.detail_attempts, [True, False])
+
+    def test_openstack_server_listing_uses_raw_api_when_both_sdk_paths_hit_owner_seen_bug(self) -> None:
+        connection = RawFallbackOwnerSeenConnection()
+        backend = OpenStackBackend(
+            credentials={"OS_AUTH_URL": "https://identity.example/v3", "OS_TOKEN": "token"},
+            connection_factory=lambda _credentials: connection,
+        )
+
+        result = backend.call_tool("list_servers", {"limit": 5})
+
+        row = result["structuredContent"]["data"][0]
+        self.assertEqual(row["name"], "prod")
+        self.assertEqual(row["token"], "[redacted]")
+        self.assertEqual(connection.compute.detail_attempts, [True, False])
+        self.assertEqual(connection.compute.raw_path, "/servers/detail")
 
     def test_openstack_project_discovery_uses_validated_scope_not_identity_list(self) -> None:
         backend = OpenStackBackend(

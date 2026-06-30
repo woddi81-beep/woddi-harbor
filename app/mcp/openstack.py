@@ -1010,6 +1010,28 @@ class OpenStackBackend:
     def _is_owner_seen_sdk_error(exc: Exception) -> bool:
         return "owner_seen" in str(exc)
 
+    @staticmethod
+    def _response_json(response: Any) -> Any:
+        if isinstance(response, Mapping):
+            return response
+        json_method = getattr(response, "json", None)
+        if callable(json_method):
+            return json_method()
+        return response
+
+    @classmethod
+    def _load_servers_raw(cls, connection: Any) -> list[dict[str, Any]]:
+        get = getattr(connection.compute, "get", None)
+        if not callable(get):
+            raise RuntimeError("OpenStack compute proxy does not support raw server listing.")
+        payload = cls._response_json(get("/servers/detail"))
+        if isinstance(payload, Mapping):
+            servers = payload.get("servers", [])
+            return [dict(item) for item in servers if isinstance(item, Mapping)]
+        if isinstance(payload, list):
+            return [dict(item) for item in payload if isinstance(item, Mapping)]
+        return []
+
     @classmethod
     def _load_servers(cls, connection: Any) -> list[Any]:
         try:
@@ -1017,7 +1039,12 @@ class OpenStackBackend:
         except Exception as exc:
             if not cls._is_owner_seen_sdk_error(exc):
                 raise
-            return list(connection.compute.servers(details=False))
+            try:
+                return list(connection.compute.servers(details=False))
+            except Exception as fallback_exc:
+                if not cls._is_owner_seen_sdk_error(fallback_exc):
+                    raise
+                return cls._load_servers_raw(connection)
 
     @staticmethod
     def _resource_loaders(connection: Any) -> dict[str, Callable[[], Any]]:
