@@ -16,14 +16,14 @@ from .worker_security import install_worker_auth
 def _netbox_url() -> str:
     netbox_url = os.getenv("NETBOX_URL", "").strip()
     if not netbox_url:
-        raise ValueError("NETBOX_URL fehlt.")
+        raise ValueError("NETBOX_URL is missing.")
     return netbox_url
 
 
 def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
 
     return install_worker_auth(create_app(netbox_url=_netbox_url()))
 
@@ -50,7 +50,7 @@ def _restore_signal_handlers(previous_handlers: dict[int, Any]) -> None:
 def run_worker(module_id: str, port: int) -> None:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
 
     api = create_worker_app(module_id)
     config = uvicorn.Config(api, host=module.host, port=port, log_level="warning")

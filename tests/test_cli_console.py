@@ -53,7 +53,7 @@ def test_no_command_is_explicit_without_terminal(monkeypatch) -> None:
     result = runner.invoke(app, [])
 
     assert result.exit_code == 2
-    assert "benötigt ein Terminal" in result.stdout
+    assert "requires a terminal" in result.stdout
 
 
 def test_server_set_persists_external_bind(monkeypatch) -> None:

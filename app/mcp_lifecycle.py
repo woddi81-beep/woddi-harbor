@@ -43,12 +43,12 @@ def validate_manifest(payload: dict[str, Any]) -> dict[str, Any]:
     version = _validate_identifier(str(payload.get("version", "")), "Version")
     driver = str(payload.get("driver", "")).strip()
     if driver not in ALLOWED_DRIVERS:
-        raise ValueError(f"Driver muss einer von {sorted(ALLOWED_DRIVERS)} sein.")
+        raise ValueError(f"Driver must be one of {sorted(ALLOWED_DRIVERS)}.")
     command = payload.get("command", [])
     if driver == "process" and (not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command)):
-        raise ValueError("Process-Packages brauchen ein nicht-leeres command-Array.")
+        raise ValueError("Process packages require a non-empty command array.")
     if driver == "process" and Path(str(command[0])).is_absolute():
-        raise ValueError("Process-Packages muessen ein relatives Executable im Paket verwenden.")
+        raise ValueError("Process packages must use a relative executable inside the package.")
     if driver == "http" and not str(payload.get("endpoint", "")).strip():
         raise ValueError("HTTP-Packages brauchen einen endpoint.")
     if driver == "systemd" and not str(payload.get("unit_name", "")).strip():
@@ -57,7 +57,7 @@ def validate_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Container-Packages brauchen image.")
     tools = payload.get("tools", [])
     if not isinstance(tools, list):
-        raise ValueError("tools muss eine Liste sein.")
+        raise ValueError("tools must be a list.")
     return {
         **payload,
         "id": package_id,
@@ -71,7 +71,7 @@ def install_package(source: str, *, actor: str = "system") -> dict[str, Any]:
     source_path = Path(source).expanduser().resolve()
     manifest_path = source_path / "mcp-package.json" if source_path.is_dir() else source_path
     if not manifest_path.is_file():
-        raise ValueError("mcp-package.json wurde nicht gefunden.")
+        raise ValueError("mcp-package.json was not found.")
     manifest = validate_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
     target = MCP_PACKAGE_DIR / manifest["id"] / manifest["version"]
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ def create_instance(
     normalized_id = _validate_identifier(instance_id, "Instanz-ID")
     manifest = find_mcp_package(package_id, version)
     if manifest is None:
-        raise ValueError(f"MCP-Paket nicht installiert: {package_id}@{version}")
+        raise ValueError(f"MCP package not installed: {package_id}@{version}")
     upsert_mcp_instance(normalized_id, package_id, version, manifest["driver"], config or {})
     record_audit("mcp.instance.create", normalized_id, actor=actor)
     return instance_status(normalized_id)
@@ -147,7 +147,7 @@ def _systemd_command(instance: dict[str, Any], manifest: dict[str, Any], action:
     if scope == "user":
         command.append("--user")
     elif scope != "system":
-        raise ValueError("systemd scope muss user oder system sein.")
+        raise ValueError("systemd scope must be user or system.")
     command.extend([action, str(manifest["unit_name"])])
     return subprocess.run(command, check=False, text=True, capture_output=True)
 
@@ -171,7 +171,7 @@ def _container_running(instance_id: str) -> bool:
 def instance_status(instance_id: str) -> dict[str, Any]:
     instance = find_mcp_instance(instance_id)
     if instance is None:
-        raise ValueError(f"MCP-Instanz nicht gefunden: {instance_id}")
+        raise ValueError(f"MCP instance not found: {instance_id}")
     manifest = find_mcp_package(instance["package_id"], instance["package_version"]) or {}
     driver = instance["driver"]
     health: dict[str, Any] = {}
@@ -204,7 +204,7 @@ def instance_status(instance_id: str) -> dict[str, Any]:
 def start_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
     instance = find_mcp_instance(instance_id)
     if instance is None:
-        raise ValueError(f"MCP-Instanz nicht gefunden: {instance_id}")
+        raise ValueError(f"MCP instance not found: {instance_id}")
     manifest = find_mcp_package(instance["package_id"], instance["package_version"]) or {}
     driver = instance["driver"]
     if driver == "http":
@@ -235,11 +235,11 @@ def start_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]
     elif driver == "systemd":
         completed = _systemd_command(instance, manifest, "start")
         if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or "systemd start fehlgeschlagen.")
+            raise RuntimeError(completed.stderr.strip() or "systemd start failed.")
         set_mcp_instance_state(instance_id, "running")
     elif driver == "container":
         if shutil.which("podman") is None:
-            raise RuntimeError("podman ist nicht installiert.")
+            raise RuntimeError("podman is not installed.")
         if not _container_running(instance_id):
             subprocess.run(["podman", "rm", "-f", _container_name(instance_id)], check=False, capture_output=True)
             command = ["podman", "run", "--detach", "--name", _container_name(instance_id)]
@@ -251,10 +251,10 @@ def start_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]
             command.extend(str(item) for item in manifest.get("command", []))
             completed = subprocess.run(command, check=False, text=True, capture_output=True)
             if completed.returncode != 0:
-                raise RuntimeError(completed.stderr.strip() or "Container-Start fehlgeschlagen.")
+                raise RuntimeError(completed.stderr.strip() or "Container start failed.")
         set_mcp_instance_state(instance_id, "running")
     else:
-        raise ValueError(f"Unbekannter Driver: {driver}")
+        raise ValueError(f"Unknown driver: {driver}")
     record_audit("mcp.instance.start", instance_id, actor=actor)
     return instance_status(instance_id)
 
@@ -262,7 +262,7 @@ def start_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]
 def stop_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
     instance = find_mcp_instance(instance_id)
     if instance is None:
-        raise ValueError(f"MCP-Instanz nicht gefunden: {instance_id}")
+        raise ValueError(f"MCP instance not found: {instance_id}")
     if instance["driver"] == "process" and _process_alive(instance_id):
         pid = int(_pid_path(instance_id).read_text(encoding="utf-8"))
         os.killpg(pid, signal.SIGTERM)
@@ -276,7 +276,7 @@ def stop_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
         manifest = find_mcp_package(instance["package_id"], instance["package_version"]) or {}
         completed = _systemd_command(instance, manifest, "stop")
         if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or "systemd stop fehlgeschlagen.")
+            raise RuntimeError(completed.stderr.strip() or "systemd stop failed.")
     elif instance["driver"] == "container" and shutil.which("podman"):
         completed = subprocess.run(
             ["podman", "stop", "--time", "10", _container_name(instance_id)],
@@ -285,7 +285,7 @@ def stop_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
             capture_output=True,
         )
         if completed.returncode != 0 and "no such container" not in completed.stderr.lower():
-            raise RuntimeError(completed.stderr.strip() or "Container-Stop fehlgeschlagen.")
+            raise RuntimeError(completed.stderr.strip() or "Container stop failed.")
     set_mcp_instance_state(instance_id, "stopped")
     record_audit("mcp.instance.stop", instance_id, actor=actor)
     return instance_status(instance_id)
@@ -334,7 +334,7 @@ def reconcile_desired_instances(*, actor: str = "startup") -> dict[str, Any]:
 def upgrade_instance(instance_id: str, version: str, *, actor: str = "system") -> dict[str, Any]:
     instance = find_mcp_instance(instance_id)
     if instance is None:
-        raise ValueError(f"MCP-Instanz nicht gefunden: {instance_id}")
+        raise ValueError(f"MCP instance not found: {instance_id}")
     was_running = instance_status(instance_id)["running"]
     if was_running:
         stop_instance(instance_id, actor=actor)
@@ -346,7 +346,7 @@ def upgrade_instance(instance_id: str, version: str, *, actor: str = "system") -
 def rollback_instance(instance_id: str, *, actor: str = "system") -> dict[str, Any]:
     version = previous_mcp_instance_version(instance_id)
     if not version:
-        raise ValueError("Keine vorherige MCP-Version fuer Rollback vorhanden.")
+        raise ValueError("No previous MCP version is available for rollback.")
     return upgrade_instance(instance_id, version, actor=actor)
 
 

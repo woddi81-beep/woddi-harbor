@@ -24,7 +24,7 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     if kind == "backup.create":
         path = create_backup(str(job["payload"].get("label", "scheduled")))
         return {"ok": True, "path": str(path)}
-    raise ValueError(f"Unbekannter Job-Typ: {kind}")
+    raise ValueError(f"Unknown job type: {kind}")
 
 
 def run_job_worker(*, once: bool = False, poll_seconds: float = 1.0) -> None:

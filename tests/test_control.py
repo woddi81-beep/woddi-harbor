@@ -134,7 +134,7 @@ class ControlChatContextTests(unittest.TestCase):
         self.assertEqual(used_modules, ["netbox"])
         self.assertEqual(snippets[0]["kind"], "netbox")
         self.assertEqual(snippets[0]["results"], [])
-        self.assertIn("keine passenden Objekte", snippets[0]["note"])
+        self.assertIn("no matching objects", snippets[0]["note"])
 
     def test_context_for_chat_honors_explicit_module_selection(self) -> None:
         module = ModuleConfig(
@@ -527,7 +527,7 @@ class ControlChatContextTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("1 von 2 OpenStack-Ressourcen", answer)
+        self.assertIn("1 of 2 OpenStack resources", answer)
         self.assertIn("volume", answer)
         self.assertIn("server", answer)
 
@@ -554,7 +554,7 @@ class ControlChatContextTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("7 OpenStack-Server", answer)
+        self.assertIn("7 OpenStack servers", answer)
         self.assertIn("5 active", answer)
 
     def test_direct_context_answer_formats_openstack_server_count_from_compute_limits(self) -> None:
@@ -577,8 +577,8 @@ class ControlChatContextTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("7 OpenStack-Server", answer)
-        self.assertIn("7 von 20", answer)
+        self.assertIn("7 OpenStack servers", answer)
+        self.assertIn("7 of 20", answer)
 
     def test_direct_context_answer_formats_empty_openstack_compute_limits(self) -> None:
         answer = _direct_context_answer(
@@ -594,7 +594,7 @@ class ControlChatContextTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("nicht aus den Compute-Limits ermitteln", answer)
+        self.assertIn("cannot determine the OpenStack server count from compute limits", answer)
         self.assertIn("totalInstancesUsed", answer)
 
     def test_direct_context_answer_uses_first_answerable_openstack_context(self) -> None:
@@ -618,7 +618,7 @@ class ControlChatContextTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("7 OpenStack-Server", answer)
+        self.assertIn("7 OpenStack servers", answer)
 
     def test_direct_context_answer_formats_openstack_server_count_error(self) -> None:
         answer = _direct_context_answer(
@@ -644,8 +644,8 @@ class ControlChatContextTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("nicht ermitteln", answer)
-        self.assertIn("server.list meldet", answer)
+        self.assertIn("cannot determine", answer)
+        self.assertIn("server.list reports", answer)
         self.assertIn("owner_seen", answer)
 
     def test_direct_context_answer_formats_openstack_server_count_note(self) -> None:
@@ -657,12 +657,12 @@ class ControlChatContextTests(unittest.TestCase):
                     "kind": "openstack",
                     "tool": "get_project_statistics",
                     "results": [],
-                    "note": "OpenStack-Abfrage fehlgeschlagen: timeout",
+                    "note": "OpenStack query failed: timeout",
                 }
             ],
         )
 
-        self.assertIn("nicht ermitteln", answer)
+        self.assertIn("cannot determine", answer)
         self.assertIn("timeout", answer)
 
     def test_context_for_chat_maps_openstack_field_questions_from_field_catalog(self) -> None:
@@ -803,7 +803,7 @@ class ControlChatContextTests(unittest.TestCase):
             messages, used_modules = _build_messages(settings, "Zeige edge-sw01", None)
         self.assertEqual(used_modules, ["netbox"])
         self.assertEqual(messages[0]["role"], "system")
-        self.assertIn("Nicht vertrauenswuerdiger Kontext aus Modulen", messages[0]["content"])
+        self.assertIn("Untrusted context from modules", messages[0]["content"])
         self.assertIn("edge-sw01", messages[0]["content"])
 
     def test_chat_endpoint_uses_direct_openstack_answer_without_llm(self) -> None:
@@ -833,7 +833,7 @@ class ControlChatContextTests(unittest.TestCase):
             )
 
         self.assertEqual(result["used_modules"], ["openstack"])
-        self.assertIn("7 OpenStack-Server", result["reply"])
+        self.assertIn("7 OpenStack servers", result["reply"])
         self.assertEqual(append_message.call_count, 2)
 
     def test_chat_endpoint_does_not_use_llm_when_selected_source_has_no_context(self) -> None:
@@ -861,7 +861,7 @@ class ControlChatContextTests(unittest.TestCase):
                 _user=HarborUser(username="admin", password_hash="unused", role="admin"),
             )
 
-        self.assertIn("keine verwertbaren Quelldaten", result["reply"])
+        self.assertIn("no usable source data", result["reply"])
         self.assertEqual(result["used_modules"], [])
         self.assertEqual(append_message.call_count, 2)
 

@@ -22,14 +22,14 @@ def production_check() -> dict[str, Any]:
     def add(name: str, ok: bool, detail: str, severity: str = "error") -> None:
         checks.append({"name": name, "ok": ok, "detail": detail, "severity": severity})
 
-    add("users", bool(users), f"{len(users)} Benutzer konfiguriert")
-    add("admin", any(user.enabled and user.role == "admin" for user in users), "Mindestens ein aktiver Admin")
+    add("users", bool(users), f"{len(users)} users configured")
+    add("admin", any(user.enabled and user.role == "admin" for user in users), "At least one active admin")
     llm = llm_health(settings)
-    add("llm", bool(llm["ok"]), str(llm.get("detail", "LLM-Status unbekannt")))
+    add("llm", bool(llm["ok"]), str(llm.get("detail", "LLM status unknown")))
     add(
         "llm_secret",
         not bool(settings.llm.api_key),
-        "LLM-Key wird per ENV referenziert" if not settings.llm.api_key else "Inline LLM-Key gefunden",
+        "LLM key is referenced via ENV" if not settings.llm.api_key else "Inline LLM key found",
     )
     add("api_workers", settings.api_workers >= 2, f"{settings.api_workers} API-Worker", severity="warning")
     add("database", DATABASE_PATH.exists(), str(DATABASE_PATH))
@@ -39,7 +39,7 @@ def production_check() -> dict[str, Any]:
     add("worker_token_permissions", token_mode & 0o077 == 0, oct(token_mode))
     validation = validation_errors_by_module(modules)
     invalid = {module_id: errors for module_id, errors in validation.items() if errors}
-    add("modules", not invalid, f"{len(modules)} Module, {len(invalid)} ungueltig: {invalid}")
+    add("modules", not invalid, f"{len(modules)} modules, {len(invalid)} invalid: {invalid}")
     integration_health: dict[str, str] = {}
     for module in modules:
         if not module.enabled or module.type not in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
@@ -51,27 +51,27 @@ def production_check() -> dict[str, Any]:
                     result.get("validation_errors")
                     or result.get("remote")
                     or result.get("local")
-                    or "nicht erreichbar"
+                    or "unreachable"
                 )
             elif module.type == "netbox_mcp":
                 discovery = discover_remote_module(module)
                 if not discovery.get("ok"):
                     integration_health[module.id] = str(
-                        discovery.get("attempts") or "NetBox Upstream Discovery fehlgeschlagen"
+                        discovery.get("attempts") or "NetBox upstream discovery failed"
                     )
         except Exception as exc:
             integration_health[module.id] = str(exc)
     add(
         "integrations",
         not integration_health,
-        f"Nicht betriebsbereit: {integration_health}" if integration_health else "Alle aktivierten Integrationen betriebsbereit",
+        f"Not operational: {integration_health}" if integration_health else "All enabled integrations are operational",
     )
     openstack_modules = [module.id for module in modules if module.type == "openstack_mcp" and module.enabled]
     sdk_available = openstack_sdk_available()
     add(
         "openstack_sdk",
         not openstack_modules or sdk_available,
-        f"OpenStack-Module {openstack_modules}; openstacksdk {'installiert' if sdk_available else 'fehlt'}",
+        f"OpenStack modules {openstack_modules}; openstacksdk {'installed' if sdk_available else 'missing'}",
     )
     sources = source_overview()
     unhealthy_sources = [
@@ -82,12 +82,12 @@ def production_check() -> dict[str, Any]:
     add(
         "sources",
         not unhealthy_sources,
-        f"{len(sources)} Quellen, ungesund: {unhealthy_sources}",
+        f"{len(sources)} sources, unhealthy: {unhealthy_sources}",
     )
     add(
         "public_bind",
         settings.host in {"127.0.0.1", "::1", "localhost"},
-        f"Bind-Adresse {settings.host}; extern nur hinter TLS-Reverse-Proxy",
+        f"Bind address {settings.host}; expose externally only behind a TLS reverse proxy",
         severity="warning",
     )
     config_world_writable = [

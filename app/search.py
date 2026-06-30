@@ -209,7 +209,7 @@ def _check_deadline(deadline: float | None, kind: IndexKind, phase: str) -> None
     if deadline is None:
         return
     if time.monotonic() > deadline:
-        raise TimeoutError(f"Indexing fuer {kind} hat das Timeout waehrend {phase} ueberschritten.")
+        raise TimeoutError(f"Indexing for {kind} exceeded the timeout during {phase}.")
 
 
 def _deadline_from_timeout(timeout_seconds: float | None) -> float | None:
@@ -231,7 +231,7 @@ def _log_progress(
     should_log = processed == total or processed == 1 or processed % PROGRESS_LOG_EVERY == 0
     if not should_log and now - last_logged_at < PROGRESS_LOG_INTERVAL_SECONDS:
         return last_logged_at
-    logger.info("Indexing %s: %s %s/%s fuer %s", kind, phase, processed, total, root)
+    logger.info("Indexing %s: %s %s/%s for %s", kind, phase, processed, total, root)
     return now
 
 
@@ -259,7 +259,7 @@ def _inventory_for_roots(
     root_strings: list[str] = []
     effective_deadline = deadline if deadline is not None else _deadline_from_timeout(timeout_seconds)
     for source_id, _source_label, root in normalized_roots:
-        logger.info("Indexing %s: starte Dateiscan fuer %s", kind, root)
+        logger.info("Indexing %s: starting file scan for %s", kind, root)
         paths = (
             _iter_text_paths(root, deadline=effective_deadline, kind=kind)
             if kind == "docs"
@@ -267,7 +267,7 @@ def _inventory_for_roots(
         )
         inventory_items.extend((source_id, path) for path in paths)
         root_strings.append(f"{source_id}:{root}")
-        logger.info("Indexing %s: Dateiscan fuer %s abgeschlossen, %s Dateien gefunden", kind, root, len(paths))
+        logger.info("Indexing %s: file scan for %s completed, %s files found", kind, root, len(paths))
     signature_parts: list[str] = []
     inventory_count = 0
     for source_id, _source_label, root in normalized_roots:

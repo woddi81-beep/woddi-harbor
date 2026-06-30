@@ -1,5 +1,5 @@
 const views = ["overview", "modules", "connect", "sources", "users", "mcp", "jobs", "audit", "backups", "services", "stellen"];
-const labels = { overview: "Overview", modules: "Modules", connect: "Connect", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Betrieb", stellen: "Positions" };
+const labels = { overview: "Overview", modules: "Modules", connect: "Connect", sources: "Sources", users: "Users", mcp: "MCP", jobs: "Jobs", audit: "Audit", backups: "Backups", services: "Operations", stellen: "Positions" };
 let current = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 const $ = (id) => document.getElementById(id);
 
@@ -12,22 +12,22 @@ async function api(path, options = {}) {
   return response.status === 204 ? {} : response.json();
 }
 function esc(value) { const node = document.createElement("span"); node.textContent = String(value ?? ""); return node.innerHTML; }
-function badge(ok, yes = "OK", no = "Fehler") { return `<span class="badge ${ok ? "ok" : "bad"}"><span class="badge-dot"></span>${ok ? yes : no}</span>`; }
+function badge(ok, yes = "OK", no = "Error") { return `<span class="badge ${ok ? "ok" : "bad"}"><span class="badge-dot"></span>${ok ? yes : no}</span>`; }
 function severityBadge(severity) {
-  const labels = { ok: "OK", warning: "Warnung", error: "Fehler" };
+  const labels = { ok: "OK", warning: "Warning", error: "Error" };
   const classes = { ok: "ok", warning: "warn", error: "bad" };
   const key = ["ok", "warning", "error"].includes(severity) ? severity : "warning";
   return `<span class="badge ${classes[key]}"><span class="badge-dot"></span>${labels[key]}</span>`;
 }
 function card(title, body, actions = "", className = "") { return `<article class="card ${className}"><div class="row between"><h3>${esc(title)}</h3>${actions}</div>${body}</article>`; }
 function buttons(items) { return `<div class="toolbar">${items.map(([label, action, danger]) => `<button ${danger ? 'class="danger"' : ""} data-action="${esc(action)}">${esc(label)}</button>`).join("")}</div>`; }
-function empty(text) { return `<div class="empty-state"><strong>Noch keine Einträge</strong><span>${esc(text)}</span></div>`; }
+function empty(text) { return `<div class="empty-state"><strong>No entries yet</strong><span>${esc(text)}</span></div>`; }
 async function copyText(text, okText = "Kopiert.") {
   try {
     await navigator.clipboard.writeText(text);
     $("notice").textContent = okText;
   } catch {
-    $("notice").textContent = "Kopieren nicht möglich.";
+    $("notice").textContent = "Copy is not possible.";
   }
 }
 function formatUptime(seconds) {
@@ -50,14 +50,14 @@ function renderOpenStackContext(openstack) {
   const validationError = scope.source === "validation_error";
   const severity = ready && token && scoped ? "ok" : validationError || !token ? "error" : "warning";
   const summary = !ready
-    ? "Integration nicht eingerichtet"
+    ? "Integration is not configured"
     : !token
-      ? `Token für ${openstack?.token_owner || "diesen Benutzer"} fehlt`
+      ? `Token missing for ${openstack?.token_owner || "this user"}`
       : validationError
-        ? "Token-Validierung fehlgeschlagen"
+        ? "Token validation failed"
       : scoped
-        ? scope.source === "keystone_validation" ? "Projektkontext aus Keystone" : "Projektkontext aus Token-Metadaten"
-        : "Token vorhanden, Projektkontext noch nicht gespeichert";
+        ? scope.source === "keystone_validation" ? "Project context from Keystone" : "Project context from token metadata"
+        : "Token present, project context not saved yet";
   const project = scope.project_name || scope.project_id || "";
   const projectDetail = scope.project_name && scope.project_id ? scope.project_id : "";
   const domain = scope.project_domain_name || scope.project_domain_id || scope.user_domain_name || scope.user_domain_id || "";
@@ -67,7 +67,7 @@ function renderOpenStackContext(openstack) {
   return `<section class="context-panel openstack-context">
     <div class="context-head">
       <div>
-        <span class="eyebrow">OpenStack Kontext</span>
+        <span class="eyebrow">OpenStack Context</span>
         <h3>${esc(summary)}</h3>
       </div>
       <div class="row">${severityBadge(severity)}<button data-action="module:openstack">OpenStack</button></div>
@@ -75,9 +75,9 @@ function renderOpenStackContext(openstack) {
     ${scope.error ? `<p class="context-error">${esc(scope.error)}</p>` : ""}
     <div class="context-grid">
       <div><span>Domain</span>${contextValue(domain, domainDetail)}</div>
-      <div><span>Projekt</span>${contextValue(project, projectDetail)}</div>
-      <div><span>Benutzer</span>${contextValue(user, userDetail)}</div>
-      <div><span>Ablauf</span>${contextValue(scope.expires_at || "")}</div>
+      <div><span>Project</span>${contextValue(project, projectDetail)}</div>
+      <div><span>User</span>${contextValue(user, userDetail)}</div>
+      <div><span>Expires</span>${contextValue(scope.expires_at || "")}</div>
       <div><span>Auth URL</span>${contextValue(openstack?.auth_url || "")}</div>
       <div><span>Region</span>${contextValue(openstack?.region_name || "")}</div>
     </div>
@@ -91,19 +91,19 @@ async function renderOverview() {
   $("content").innerHTML = `
     ${renderOpenStackContext(data.openstack)}
     <div class="metric-grid">
-      ${metric("LLM", data.llm.connected ? "Verbunden" : "Nicht bereit", data.llm.model || data.llm.detail, data.llm.connected ? "good" : "bad")}
-      ${metric("Module", `${data.modules.active}/${data.modules.total}`, "aktiv / konfiguriert", data.modules.invalid ? "bad" : "good")}
-      ${metric("Query Cache", hitRate, `${cache.query_cache_hits} Treffer · ${cache.query_cache_misses} Misses`)}
+      ${metric("LLM", data.llm.connected ? "Connected" : "Not ready", data.llm.model || data.llm.detail, data.llm.connected ? "good" : "bad")}
+      ${metric("Module", `${data.modules.active}/${data.modules.total}`, "active / configured", data.modules.invalid ? "bad" : "good")}
+      ${metric("Query Cache", hitRate, `${cache.query_cache_hits} hits · ${cache.query_cache_misses} misses`)}
       ${metric("Harbor", formatUptime(data.stats.uptime_seconds), `${data.stats.memory_mb} MiB RAM`)}
     </div>
     <div class="dashboard-grid">
-      ${card("Systemzustand", `
+      ${card("System State", `
         <dl class="facts">
           <div><dt>API</dt><dd>${esc(`${data.app.host}:${data.app.port}`)}</dd></div>
           <div><dt>Version</dt><dd>${esc(data.app.version || "n/a")} <span class="muted">(${esc(data.app.git_rev || "unknown")})</span></dd></div>
           <div><dt>CPU Load 1m</dt><dd>${esc(data.stats.cpu_load_1m ?? "n/a")}</dd></div>
-          <div><dt>Health Cache</dt><dd>${Math.round(cache.health_cache_hit_rate * 100)} % Treffer</dd></div>
-          <div><dt>Ungültige Module</dt><dd>${data.modules.invalid}</dd></div>
+          <div><dt>Health Cache</dt><dd>${Math.round(cache.health_cache_hit_rate * 100)} % hits</dd></div>
+          <div><dt>Invalid Modules</dt><dd>${data.modules.invalid}</dd></div>
         </dl>`)}
       ${card("Recent Activity", data.activity.length ? `<div class="activity-list">${data.activity.slice(0, 8).map((item) => `
         <div><span class="badge">${esc(item.kind)}</span><strong>${esc(item.label)}</strong><time>${esc(item.timestamp)}</time></div>`).join("")}</div>` : empty("Activities appear after operations."))}
@@ -111,20 +111,20 @@ async function renderOverview() {
 }
 async function renderModules() {
   const data = await api("/api/modules/overview");
-  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.modules.length} Module</strong><span class="muted">Lokale Worker und externe MCP-Dienste</span></div><div class="row"><button class="primary" data-action="module:new">Modul anlegen</button><button data-action="module:netbox">NetBox einbinden</button><button data-action="module:openstack">OpenStack einbinden</button></div></div>
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.modules.length} modules</strong><span class="muted">Local workers and external MCP services</span></div><div class="row"><button class="primary" data-action="module:new">Create Module</button><button data-action="module:netbox">Connect NetBox</button><button data-action="module:openstack">Connect OpenStack</button></div></div>
     <div class="grid">${data.modules.map((item) => {
       const fieldCatalog = item.status?.field_catalog;
       const actions = [["Start", `module:start:${item.id}`], ["Stop", `module:stop:${item.id}`, true], ["Discovery", `module:discover:${item.id}`], ["Test", `module:test:${item.id}`]];
-      if (["netbox_mcp", "openstack_mcp"].includes(item.type)) actions.push(["Felder", `module:fields:${item.id}`]);
-      actions.push(["Reindex", `module:reindex:${item.id}`], ["Diagnose", `module:diagnose:${item.id}`], ["Edit", `module:edit:${item.id}`], ["Löschen", `module:delete:${item.id}`, true]);
+      if (["netbox_mcp", "openstack_mcp"].includes(item.type)) actions.push(["Fields", `module:fields:${item.id}`]);
+      actions.push(["Reindex", `module:reindex:${item.id}`], ["Diagnostics", `module:diagnose:${item.id}`], ["Edit", `module:edit:${item.id}`], ["Delete", `module:delete:${item.id}`, true]);
       return card(item.name || item.id,
-      `<div class="card-status">${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.type)}</span>${fieldCatalog ? ` <span class="badge ${fieldCatalog.ok ? "ok" : "bad"}">Felder: ${esc(fieldCatalog.resource_count || 0)}</span>` : ""}</div>
+      `<div class="card-status">${badge(item.running, "running", "stopped")} <span class="badge">${esc(item.type)}</span>${fieldCatalog ? ` <span class="badge ${fieldCatalog.ok ? "ok" : "bad"}">Fields: ${esc(fieldCatalog.resource_count || 0)}</span>` : ""}</div>
       <p class="endpoint">${esc(item.base_url || item.path || `${item.host}:${item.port}`)}</p>
-      ${fieldCatalog ? `<dl class="facts compact"><div><dt>Feldkatalog</dt><dd>${esc(fieldCatalog.updated_at || "noch nicht aktualisiert")}</dd></div></dl>` : ""}
+      ${fieldCatalog ? `<dl class="facts compact"><div><dt>Field Catalog</dt><dd>${esc(fieldCatalog.updated_at || "not refreshed yet")}</dd></div></dl>` : ""}
       ${item.validation_errors?.length ? `<p class="error-text">${esc(item.validation_errors.join(" · "))}</p>` : ""}
-      <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
+      <details><summary>Technical Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
       buttons(actions)
-    );}).join("") || empty("Lege ein Modul an oder binde OpenStack ein.")}</div>`;
+    );}).join("") || empty("Create a module or connect OpenStack.")}</div>`;
 }
 function connectCounts(modules) {
   return {
@@ -148,10 +148,10 @@ function renderConnectCard(item) {
     status: item.status || null,
   };
   const actionItems = [
-    [item.ran_checks ? "Erneut testen" : "Connect testen", `connect:run:${item.module_id}`],
+    [item.ran_checks ? "Test Again" : "Test Connect", `connect:run:${item.module_id}`],
     ["Browse JSON", `module:discover:${item.module_id}`],
-    ["Diagnose", `module:diagnose:${item.module_id}`],
-    ["JSON kopieren", `connect:copy:${item.module_id}`],
+    ["Diagnostics", `module:diagnose:${item.module_id}`],
+    ["Copy JSON", `connect:copy:${item.module_id}`],
   ];
   return `<article class="connect-module ${severity}">
     <div class="connect-head">
@@ -161,26 +161,26 @@ function renderConnectCard(item) {
       </div>
       <div class="row">${severityBadge(severity)}<span class="badge">${esc(item.type)}</span><span class="badge">${esc(item.transport)}</span></div>
     </div>
-    <p class="connect-summary-text">${esc(item.summary || "Noch keine Diagnose ausgefuehrt.")}</p>
+    <p class="connect-summary-text">${esc(item.summary || "No diagnostics have run yet.")}</p>
     <div class="connect-checks">${checks.map((check) => {
       const checkSeverity = check.ok ? "ok" : check.severity === "warning" ? "warning" : "error";
       return `<div class="connect-check ${checkSeverity}">
         <strong>${esc(check.label || check.key)}</strong>
         <span>${esc(check.message || "")}</span>
       </div>`;
-    }).join("") || `<div class="connect-check warning"><strong>Status</strong><span>Noch keine Checks vorhanden.</span></div>`}</div>
+    }).join("") || `<div class="connect-check warning"><strong>Status</strong><span>No checks available yet.</span></div>`}</div>
     ${probes.length ? `<div class="probe-list">
-      <strong>Default-Probes ohne LLM</strong>
+      <strong>Default Probes Without LLM</strong>
       ${probes.map((probe) => `<div class="probe-item ${probe.ok ? "ok" : "error"}">
-        <div class="row between"><span>${esc(probe.label || probe.tool || "Probe")}</span>${badge(Boolean(probe.ok), "OK", "Fehler")}</div>
+        <div class="row between"><span>${esc(probe.label || probe.tool || "Probe")}</span>${badge(Boolean(probe.ok), "OK", "Error")}</div>
         <p>${esc(probe.question || "")}</p>
         <code>${esc(probe.tool || "")} ${esc(JSON.stringify(probe.payload || {}))}</code>
         <small>${esc(probe.summary || probe.error || "")}</small>
       </div>`).join("")}
     </div>` : ""}
     <div class="connect-steps">
-      <strong>Nächste Schritte</strong>
-      <ol>${steps.map((step) => `<li>${esc(step)}</li>`).join("") || "<li>Connect-Test starten.</li>"}</ol>
+      <strong>Next Steps</strong>
+      <ol>${steps.map((step) => `<li>${esc(step)}</li>`).join("") || "<li>Start Connect test.</li>"}</ol>
     </div>
     <details><summary>Raw JSON</summary><pre>${esc(JSON.stringify(raw, null, 2))}</pre></details>
     ${buttons(actionItems)}
@@ -191,23 +191,23 @@ function renderConnectPage(data) {
   const counts = connectCounts(modules);
   window.harborConnectDiagnostics = data;
   $("content").innerHTML = `<div class="page-actions">
-    <div><strong>${modules.length} Modul-Connects</strong><span class="muted">Admin-only Diagnose fuer Browse, Worker, Test und Logs</span></div>
-    <div class="row"><button class="primary" data-action="connect:run-all">Alle testen</button><button data-action="connect:refresh">Basisstatus laden</button></div>
+    <div><strong>${modules.length} module connects</strong><span class="muted">Admin-only diagnostics for Browse, worker, test, and logs</span></div>
+    <div class="row"><button class="primary" data-action="connect:run-all">Test All</button><button data-action="connect:refresh">Load Base Status</button></div>
   </div>
   <div class="connect-summary">
-    ${metric("OK", counts.ok, "ohne blockierende Fehler", "good")}
-    ${metric("Warnungen", counts.warning, "erreichbar, aber unvollstaendig")}
-    ${metric("Fehler", counts.error, "blockierende Connect-Probleme", counts.error ? "bad" : "")}
-    ${metric("Nicht getestet", counts.pending, "nur Basisstatus geladen")}
+    ${metric("OK", counts.ok, "no blocking errors", "good")}
+    ${metric("Warnings", counts.warning, "reachable, but incomplete")}
+    ${metric("Errors", counts.error, "blocking Connect problems", counts.error ? "bad" : "")}
+    ${metric("Not Tested", counts.pending, "base status only")}
   </div>
-  <div class="connect-grid">${modules.map(renderConnectCard).join("") || empty("Es sind keine Module konfiguriert.")}</div>`;
+  <div class="connect-grid">${modules.map(renderConnectCard).join("") || empty("No modules are configured.")}</div>`;
 }
 async function renderConnect() {
   const data = await api("/api/connect-diagnostics/modules");
   renderConnectPage(data);
 }
 async function runConnectDiagnostic(moduleId, silent = false) {
-  if (!silent) $("notice").textContent = `Teste ${moduleId}...`;
+  if (!silent) $("notice").textContent = `Testing ${moduleId}...`;
   const result = await api(`/api/connect-diagnostics/modules/${encodeURIComponent(moduleId)}`, { method: "POST" });
   const currentData = window.harborConnectDiagnostics || { modules: [] };
   const modules = currentData.modules || [];
@@ -215,36 +215,36 @@ async function runConnectDiagnostic(moduleId, silent = false) {
   if (existing >= 0) modules[existing] = result;
   else modules.push(result);
   renderConnectPage({ modules });
-  if (!silent) $("notice").textContent = result.summary || "Connect-Test abgeschlossen.";
+  if (!silent) $("notice").textContent = result.summary || "Connect test finished.";
   return result;
 }
 async function runAllConnectDiagnostics() {
   const modules = (window.harborConnectDiagnostics?.modules || []).slice();
   if (!modules.length) return renderConnect();
   for (const item of modules) {
-    $("notice").textContent = `Teste ${item.module_id}...`;
+    $("notice").textContent = `Testing ${item.module_id}...`;
     try {
       await runConnectDiagnostic(item.module_id, true);
     } catch (error) {
       $("notice").textContent = `${item.module_id}: ${error.message}`;
     }
   }
-  $("notice").textContent = "Connect-Tests abgeschlossen.";
+  $("notice").textContent = "Connect tests finished.";
 }
 async function renderSources() {
   const data = await api("/api/sources");
   $("content").innerHTML = `<div class="grid">${data.sources.map((item) => card(item.id,
-    `${badge(item.quality?.healthy, "gesund", "nicht produktiv")}<p class="endpoint">${esc(item.target)}</p>
-    <dl class="facts compact"><div><dt>Dokumente</dt><dd>${esc(item.quality?.document_count ?? "n/a")}</dd></div><div><dt>Status</dt><dd>${esc(item.quality?.reason || "bereit")}</dd></div></dl>`,
-    buttons([["Synchronisieren", `source:sync:${item.id}`]])
-  )).join("") || empty("Konfigurierte Dokumentquellen erscheinen hier.")}</div>`;
+    `${badge(item.quality?.healthy, "healthy", "not production-ready")}<p class="endpoint">${esc(item.target)}</p>
+    <dl class="facts compact"><div><dt>Documents</dt><dd>${esc(item.quality?.document_count ?? "n/a")}</dd></div><div><dt>Status</dt><dd>${esc(item.quality?.reason || "ready")}</dd></div></dl>`,
+    buttons([["Synchronize", `source:sync:${item.id}`]])
+  )).join("") || empty("Configured document sources appear here.")}</div>`;
 }
 async function renderUsers() {
   const data = await api("/api/users");
   window.harborUsers = data.users;
-  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.users.length} Benutzer</strong><span class="muted">Rollen und Tool-Berechtigungen</span></div><button class="primary" data-action="user:new">Benutzer anlegen</button></div>
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.users.length} users</strong><span class="muted">Roles and tool permissions</span></div><button class="primary" data-action="user:new">Create User</button></div>
     <div class="grid">${data.users.map((item) => card(item.username,
-      `<div class="card-status">${badge(item.enabled, "aktiv", "deaktiviert")} <span class="badge">${esc(item.role)}</span></div>
+      `<div class="card-status">${badge(item.enabled, "active", "disabled")} <span class="badge">${esc(item.role)}</span></div>
       <dl class="facts compact"><div><dt>Module</dt><dd>${esc(item.allowed_modules.join(", ") || "-")}</dd></div><div><dt>Tools</dt><dd>${esc(item.allowed_tools.join(", ") || "-")}</dd></div></dl>`,
       buttons([["Edit", `user:edit:${item.username}`]])
     )).join("")}</div>`;
@@ -252,16 +252,16 @@ async function renderUsers() {
 async function renderMcp() {
   const data = await api("/api/mcp");
   window.harborMcpPackages = data.packages;
-  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.instances.length} Instanzen</strong><span class="muted">${data.packages.length} installierte Pakete</span></div><div class="row"><button class="primary" data-action="mcp:install">Paket installieren</button><button data-action="mcp:create">Instanz anlegen</button></div></div>
-    <h3 class="section-title">Pakete</h3><div class="grid">${data.packages.map((item) => card(`${item.id} ${item.version}`, `<p class="muted">${esc(item.manifest?.driver || "-")} · ${esc((item.manifest?.tools || []).join(", ") || "keine Tools")}</p>`)).join("") || empty("Noch keine Pakete installiert.")}</div>
-    <h3 class="section-title">Instanzen</h3><div class="grid">${data.instances.map((item) => card(item.id,
-      `<div class="card-status">${badge(item.running, "läuft", "gestoppt")} <span class="badge">${esc(item.package_id)}@${esc(item.package_version)}</span></div>
-      <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.instances.length} instances</strong><span class="muted">${data.packages.length} installed packages</span></div><div class="row"><button class="primary" data-action="mcp:install">Install Package</button><button data-action="mcp:create">Create Instance</button></div></div>
+    <h3 class="section-title">Packages</h3><div class="grid">${data.packages.map((item) => card(`${item.id} ${item.version}`, `<p class="muted">${esc(item.manifest?.driver || "-")} · ${esc((item.manifest?.tools || []).join(", ") || "no tools")}</p>`)).join("") || empty("No packages installed yet.")}</div>
+    <h3 class="section-title">Instances</h3><div class="grid">${data.instances.map((item) => card(item.id,
+      `<div class="card-status">${badge(item.running, "running", "stopped")} <span class="badge">${esc(item.package_id)}@${esc(item.package_version)}</span></div>
+      <details><summary>Technical Details</summary><pre>${esc(JSON.stringify(item, null, 2))}</pre></details>`,
       buttons([["Start", `mcp:start:${item.id}`], ["Stop", `mcp:stop:${item.id}`, true], ["Restart", `mcp:restart:${item.id}`], ["Rollback", `mcp:rollback:${item.id}`]])
-    )).join("") || empty("Lege aus einem installierten Paket eine Instanz an.")}</div>`;
+    )).join("") || empty("Create an instance from an installed package.")}</div>`;
 }
 function dataTable(rows) {
-  if (!rows.length) return empty("Für diese Ansicht liegen keine Daten vor.");
+  if (!rows.length) return empty("No data is available for this view.");
   const preferred = ["id", "timestamp", "created_at", "status", "kind", "action", "target", "actor", "outcome", "message"];
   const available = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   const columns = [...preferred.filter((key) => available.includes(key)), ...available.filter((key) => !preferred.includes(key))].slice(0, 7);
@@ -270,12 +270,12 @@ function dataTable(rows) {
 }
 function renderFieldCatalog(catalog) {
   const resources = Object.values(catalog.resources || {});
-  $("fields-status").textContent = catalog.ok ? "OK" : "Fehler im Cache oder Refresh";
+  $("fields-status").textContent = catalog.ok ? "OK" : "Cache or refresh error";
   $("fields-status").style.color = catalog.ok ? "var(--accent)" : "var(--danger)";
   $("fields-summary").innerHTML = `<dl class="facts compact">
     <div><dt>Service</dt><dd>${esc(catalog.service || "-")}</dd></div>
-    <div><dt>Aktualisiert</dt><dd>${esc(catalog.updated_at || "-")}</dd></div>
-    <div><dt>Ressourcen</dt><dd>${esc(catalog.resource_count || 0)}</dd></div>
+    <div><dt>Updated</dt><dd>${esc(catalog.updated_at || "-")}</dd></div>
+    <div><dt>Resources</dt><dd>${esc(catalog.resource_count || 0)}</dd></div>
     <div><dt>Cache</dt><dd>${esc(catalog.cache_path || "-")}</dd></div>
   </dl>${catalog.errors?.length ? `<p class="error-text">${esc(catalog.errors.join(" · "))}</p>` : ""}`;
   $("fields-list").innerHTML = resources.length ? resources.map((resource) => {
@@ -284,19 +284,19 @@ function renderFieldCatalog(catalog) {
     return `<article class="field-resource">
       <div class="field-resource-head">
         <div><h4>${esc(resource.name)}</h4><span>${esc(resource.endpoint || resource.tool || "-")}</span></div>
-        <div class="row">${badge(resource.available !== false, "verfügbar", "nicht verfügbar")}<span class="badge">${esc(resource.field_count || fields.length)} Felder</span></div>
+        <div class="row">${badge(resource.available !== false, "available", "unavailable")}<span class="badge">${esc(resource.field_count || fields.length)} fields</span></div>
       </div>
       ${resource.error ? `<p class="error-text">${esc(resource.error)}</p>` : ""}
-      <div class="field-chip-list">${fields.slice(0, 120).map((field) => `<span title="${esc(field.description || "")}">${esc(field.path)}${field.type ? `<small>${esc(field.type)}</small>` : ""}</span>`).join("") || `<span>Keine Felder beobachtet</span>`}</div>
-      ${fields.length > 120 ? `<p class="muted">${fields.length - 120} weitere Felder im Raw-JSON.</p>` : ""}
+      <div class="field-chip-list">${fields.slice(0, 120).map((field) => `<span title="${esc(field.description || "")}">${esc(field.path)}${field.type ? `<small>${esc(field.type)}</small>` : ""}</span>`).join("") || `<span>No fields observed</span>`}</div>
+      ${fields.length > 120 ? `<p class="muted">${fields.length - 120} more fields in raw JSON.</p>` : ""}
       ${filters.length ? `<details><summary>Filter</summary><pre>${esc(JSON.stringify(filters, null, 2))}</pre></details>` : ""}
     </article>`;
-  }).join("") : empty("Noch kein Feldkatalog vorhanden. Klicke auf Aktualisieren.");
+  }).join("") : empty("No field catalog exists yet. Click Refresh.");
   $("fields-raw").textContent = JSON.stringify(catalog, null, 2);
 }
 async function openFieldCatalog(moduleId, refresh = false) {
   $("fields-module-id").textContent = moduleId;
-  $("fields-status").textContent = refresh ? "Aktualisiere..." : "Lade...";
+  $("fields-status").textContent = refresh ? "Refreshing..." : "Loading...";
   $("fields-summary").textContent = "";
   $("fields-list").innerHTML = '<div class="loading compact"><span></span><span></span><span></span></div>';
   $("fields-raw").textContent = "";
@@ -323,53 +323,53 @@ async function renderTable(endpoint, key) {
 }
 async function renderBackups() {
   const data = await api("/api/backups");
-  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.backups.length} Backups</strong><span class="muted">Online-Sicherungen des Control-State</span></div><button class="primary" data-action="backup:create">Backup erstellen</button></div>${dataTable(data.backups)}`;
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.backups.length} backups</strong><span class="muted">Online backups of control state</span></div><button class="primary" data-action="backup:create">Create Backup</button></div>${dataTable(data.backups)}`;
 }
 async function renderServices() {
   const data = await api("/api/services");
   const services = data.services || [];
   const version = data.version || {};
   const running = services.filter((item) => item.running).length;
-  const updateState = version.dirty ? "Lokale Änderungen" : version.update_available ? "Update verfügbar" : version.update_supported ? "Aktuell" : "Kein Upstream";
+  const updateState = version.dirty ? "Local changes" : version.update_available ? "Update available" : version.update_supported ? "Current" : "No upstream";
   $("content").innerHTML = `<div class="page-actions">
-    <div><strong>Betrieb</strong><span class="muted">Harbor Runtime, Module und installierte Units</span></div>
-    <div class="row"><button class="primary" data-action="system:update">Auf aktuelle Version</button><button class="danger" data-action="system:restart">Harbor neu starten</button></div>
+    <div><strong>Operations</strong><span class="muted">Harbor runtime, modules, and installed units</span></div>
+    <div class="row"><button class="primary" data-action="system:update">Update to Latest</button><button class="danger" data-action="system:restart">Restart Harbor</button></div>
   </div>
   <div class="metric-grid">
     ${metric("Version", version.version || "n/a", `${version.branch || "-"} · ${version.git_rev || "unknown"}`)}
-    ${metric("Update", updateState, version.upstream || "kein Git-Upstream", version.update_available ? "bad" : version.dirty ? "bad" : "good")}
-    ${metric("Dienste", `${running}/${services.length}`, "laufen / bekannt", running === services.length ? "good" : "")}
-    ${metric("Runtime", "Restart", "vollständige Harbor-Runtime")}
+    ${metric("Update", updateState, version.upstream || "no Git upstream", version.update_available ? "bad" : version.dirty ? "bad" : "good")}
+    ${metric("Services", `${running}/${services.length}`, "running / known", running === services.length ? "good" : "")}
+    ${metric("Runtime", "Restart", "full Harbor runtime")}
   </div>
   <div class="grid">${services.map((item) => {
     const health = item.health || {};
     const systemd = health.systemd || {};
     const runtime = health.runtime || {};
     const actions = item.kind === "harbor"
-      ? [["Prüfen", `service:check:${item.id}`], ["Restart", `service:restart:${item.id}`, true]]
-      : [["Prüfen", `service:check:${item.id}`], ["Start", `service:start:${item.id}`], ["Stop", `service:stop:${item.id}`, true], ["Restart", `service:restart:${item.id}`]];
+      ? [["Check", `service:check:${item.id}`], ["Restart", `service:restart:${item.id}`, true]]
+      : [["Check", `service:check:${item.id}`], ["Start", `service:start:${item.id}`], ["Stop", `service:stop:${item.id}`, true], ["Restart", `service:restart:${item.id}`]];
     return card(item.display_name || item.id,
-      `<div class="card-status">${badge(item.running, "läuft", "gestoppt")} ${badge(item.ok, "gesund", "prüfen")} <span class="badge">${esc(item.kind)}</span></div>
+      `<div class="card-status">${badge(item.running, "running", "stopped")} ${badge(item.ok, "healthy", "check")} <span class="badge">${esc(item.kind)}</span></div>
       <dl class="facts compact">
-        <div><dt>Profil</dt><dd>${esc(item.id)}</dd></div>
-        <div><dt>Unit</dt><dd>${esc(item.systemd_mode === "none" ? "nicht installiert" : item.unit)}</dd></div>
-        <div><dt>Modus</dt><dd>${esc(item.systemd_mode || "none")}</dd></div>
-        <div><dt>Runtime</dt><dd>${esc(runtime.url || runtime.message || runtime.error || (item.running ? "aktiv" : "inaktiv"))}</dd></div>
+        <div><dt>Profile</dt><dd>${esc(item.id)}</dd></div>
+        <div><dt>Unit</dt><dd>${esc(item.systemd_mode === "none" ? "not installed" : item.unit)}</dd></div>
+        <div><dt>Mode</dt><dd>${esc(item.systemd_mode || "none")}</dd></div>
+        <div><dt>Runtime</dt><dd>${esc(runtime.url || runtime.message || runtime.error || (item.running ? "active" : "inactive"))}</dd></div>
         <div><dt>Systemd</dt><dd>${esc(systemd.returncode === undefined ? (systemd.message || "-") : `rc ${systemd.returncode}`)}</dd></div>
       </dl>
-      <details><summary>Technische Details</summary><pre>${esc(JSON.stringify(health, null, 2))}</pre></details>`,
+      <details><summary>Technical Details</summary><pre>${esc(JSON.stringify(health, null, 2))}</pre></details>`,
       buttons(actions)
     );
-  }).join("") || empty("Keine Service-Profile gefunden.")}</div>`;
+  }).join("") || empty("No service profiles found.")}</div>`;
 }
 async function renderStellen() {
   const data = await api("/api/stellen");
-  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.stellen.length} Stellen</strong><span class="muted">Open positions and job listings</span></div><button class="primary" data-action="stellen:new">Add Position</button></div>
+  $("content").innerHTML = `<div class="page-actions"><div><strong>${data.stellen.length} positions</strong><span class="muted">Open positions and job listings</span></div><button class="primary" data-action="stellen:new">Add Position</button></div>
     <div class="grid">${data.stellen.map((item) => card(item.title,
-      `<div class="card-status">${badge(item.status === "offen", "Offen", item.status === "besetzt" ? "Besetzt" : "Geschlossen")} <span class="badge">${esc(item.department || "-")}</span></div>
+      `<div class="card-status">${badge(item.status === "open" || item.status === "offen", "Open", item.status === "filled" || item.status === "besetzt" ? "Filled" : "Closed")} <span class="badge">${esc(item.department || "-")}</span></div>
       <p>${esc(item.description || "")}</p>`,
-      buttons([["Edit", `stellen:edit:${item.id}`], ["Löschen", `stellen:delete:${item.id}`, true]])
-    )).join("") || empty("Lege eine Stelle an.")}</div>`;
+      buttons([["Edit", `stellen:edit:${item.id}`], ["Delete", `stellen:delete:${item.id}`, true]])
+    )).join("") || empty("Create a position.")}</div>`;
 }
 const renderers = {
   overview: renderOverview, modules: renderModules, connect: renderConnect, sources: renderSources, users: renderUsers, mcp: renderMcp,
@@ -411,10 +411,10 @@ async function action(raw) {
         form[key].value = configuration[key] ?? "";
       }
       form.token.required = !configuration.token_configured;
-      form.token.placeholder = configuration.token_configured ? "Gesetzt; leer lassen zum Beibehalten" : "Token eingeben";
+      form.token.placeholder = configuration.token_configured ? "Set; leave empty to keep" : "Enter token";
       $("openstack-token-state").textContent = configuration.token_configured
-        ? `Ein persönliches Token für ${configuration.token_owner} ist hinterlegt.`
-        : `Für ${configuration.token_owner} ist noch kein Token hinterlegt.`;
+        ? `A personal token is stored for ${configuration.token_owner}.`
+        : `No token is stored for ${configuration.token_owner} yet.`;
       $("openstack-dialog").showModal();
     } catch (error) { $("notice").textContent = error.message; }
     return;
@@ -424,7 +424,7 @@ async function action(raw) {
     catch (error) { $("notice").textContent = error.message; return; }
   }
   if (kind === "module" && verb === "delete") {
-    if (!confirm(`Modul ${id} wirklich löschen?`)) return;
+    if (!confirm(`Delete module ${id}?`)) return;
     return requestAndRender(`/api/modules/${encodeURIComponent(id)}`, "DELETE");
   }
   if (kind === "module" && verb === "discover") {
@@ -457,10 +457,10 @@ async function action(raw) {
   if (kind === "connect" && verb === "copy") {
     const item = (window.harborConnectDiagnostics?.modules || []).find((entry) => entry.module_id === id);
     if (!item) {
-      $("notice").textContent = "Keine Diagnose für dieses Modul geladen.";
+      $("notice").textContent = "No diagnostics loaded for this module.";
       return;
     }
-    await copyText(JSON.stringify(item, null, 2), `Diagnose ${id} kopiert.`);
+    await copyText(JSON.stringify(item, null, 2), `Diagnostics ${id} copied.`);
     return;
   }
   if (kind === "mcp" && verb === "install") {
@@ -480,7 +480,7 @@ async function action(raw) {
     return;
   }
   if (kind === "system" && verb === "restart") {
-    if (!confirm("Harbor komplett neu starten?")) return;
+    if (!confirm("Restart all of Harbor?")) return;
     await requestAndRender("/api/system/restart", "POST");
     return;
   }
@@ -492,7 +492,7 @@ async function action(raw) {
   if (kind === "user") return openUser(verb === "edit" ? id : "");
   if (kind === "module" && verb === "diagnose") {
     $("diagnose-module-id").textContent = id;
-    $("diagnose-status").textContent = "Lade...";
+    $("diagnose-status").textContent = "Loading...";
     $("diagnose-log").textContent = "";
     $("diagnose-probes").textContent = "";
     $("diagnose-flow").textContent = "";
@@ -502,17 +502,17 @@ async function action(raw) {
     $("diagnose-hint").textContent = "";
     $("diagnose-dialog").showModal();
     api(`/api/modules/${encodeURIComponent(id)}/diagnose`).then((d) => {
-      $("diagnose-status").textContent = d.ok ? "OK — keine Probleme erkannt" : "FEHLER — Probleme erkannt";
+      $("diagnose-status").textContent = d.ok ? "OK - no problems detected" : "ERROR - problems detected";
       $("diagnose-status").style.color = d.ok ? "green" : "red";
       const logText = Array.isArray(d.log_tail) ? d.log_tail.join("\n") : String(d.log_tail || "");
-      $("diagnose-log").textContent = logText || "Keine Log-Einträge vorhanden.";
+      $("diagnose-log").textContent = logText || "No log entries available.";
       $("diagnose-probes").textContent = d.probes ? JSON.stringify(d.probes, null, 2) : "N/A";
       $("diagnose-flow").textContent = d.data_flow ? JSON.stringify(d.data_flow, null, 2) : "N/A";
       $("diagnose-health").textContent = JSON.stringify(d.health, null, 2);
       $("diagnose-remote").textContent = d.remote ? JSON.stringify(d.remote, null, 2) : "N/A";
       $("diagnose-raw").textContent = JSON.stringify(d, null, 2);
       $("diagnose-hint").textContent = d.hint || "";
-      $("diagnose-copy").onclick = () => copyText(JSON.stringify(d, null, 2), `Diagnose ${id} kopiert.`);
+      $("diagnose-copy").onclick = () => copyText(JSON.stringify(d, null, 2), `Diagnostics ${id} copied.`);
     }).catch((e) => { $("diagnose-status").textContent = "Error: " + e.message; });
     $("diagnose-restart").onclick = () => { $("diagnose-dialog").close(); action(`module:restart:${id}`); };
     return;
@@ -520,7 +520,7 @@ async function action(raw) {
   if (kind === "stellen" && verb === "new") { openStellen(); return; }
   if (kind === "stellen" && verb === "edit") { openStellen((await api(`/api/stellen/${encodeURIComponent(id)}`))); return; }
   if (kind === "stellen" && verb === "delete") {
-    if (!confirm(`Stelle ${id} wirklich loeschen?`)) return;
+    if (!confirm(`Delete position ${id}?`)) return;
     return requestAndRender(`/api/stellen/${encodeURIComponent(id)}`, "DELETE");
   }
   await requestAndRender(path, "POST", body);
@@ -528,7 +528,7 @@ async function action(raw) {
 async function requestAndRender(path, method, body) {
   try {
     const result = await api(path, { method, headers: { "Content-Type": "application/json" }, body });
-    $("notice").textContent = result.message || "Aktion abgeschlossen.";
+    $("notice").textContent = result.message || "Action completed.";
     await render();
     return true;
   } catch (error) { $("notice").textContent = error.message; return false; }
@@ -624,11 +624,12 @@ $("user-form").addEventListener("submit", async (event) => {
 $("user-cancel").onclick = () => $("user-dialog").close();
 function openStellen(item = null) {
   const form = $("stellen-form");
+  const status = { offen: "open", besetzt: "filled", geschlossen: "closed" }[item?.status] || item?.status || "open";
   form.reset();
   form.title.value = item?.title || "";
   form.department.value = item?.department || "";
   form.description.value = item?.description || "";
-  form.status.value = item?.status || "offen";
+  form.status.value = status;
   form.dataset.edit = item?.id || "";
   $("stellen-dialog").showModal();
 }

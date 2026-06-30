@@ -28,7 +28,7 @@ def _systemctl_scope(mode: str) -> list[str]:
         return ["systemctl", "--user"]
     if mode == "system":
         return ["systemctl"]
-    raise ValueError(f"Unbekannter systemd mode: {mode}")
+    raise ValueError(f"Unknown systemd mode: {mode}")
 
 
 def _unit_dir(mode: str) -> Path:
@@ -36,7 +36,7 @@ def _unit_dir(mode: str) -> Path:
         return Path.home() / ".config/systemd/user"
     if mode == "system":
         return Path("/etc/systemd/system")
-    raise ValueError(f"Unbekannter systemd mode: {mode}")
+    raise ValueError(f"Unknown systemd mode: {mode}")
 
 
 def _render_template(template_path: Path, replacements: dict[str, str]) -> str:
@@ -49,9 +49,9 @@ def _render_template(template_path: Path, replacements: dict[str, str]) -> str:
 def install_service(profile_id: str, mode: str) -> dict:
     profile = find_service_profile(profile_id)
     if profile is None:
-        raise ValueError(f"Service-Profil nicht gefunden: {profile_id}")
+        raise ValueError(f"Service profile not found: {profile_id}")
     if mode not in {"user", "system"}:
-        raise ValueError("mode muss 'user' oder 'system' sein.")
+        raise ValueError("mode must be 'user' or 'system'.")
 
     unit_dir = _unit_dir(mode)
     unit_dir.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,7 @@ def install_service(profile_id: str, mode: str) -> dict:
     else:
         module = find_module(profile.module_id)
         if module is None:
-            raise ValueError(f"Modul fuer Profil nicht gefunden: {profile.module_id}")
+            raise ValueError(f"Module for profile not found: {profile.module_id}")
         rendered = _render_template(
             MODULE_TEMPLATE,
             {
@@ -110,11 +110,11 @@ def install_and_optionally_enable_service(profile_id: str, mode: str, *, enable:
 def service_action(profile_id: str, action: str) -> dict:
     profile = find_service_profile(profile_id)
     if profile is None:
-        raise ValueError(f"Service-Profil nicht gefunden: {profile_id}")
+        raise ValueError(f"Service profile not found: {profile_id}")
     if profile.systemd_mode not in {"user", "system"}:
-        raise ValueError("Fuer dieses Profil ist noch keine systemd-Unit installiert.")
+        raise ValueError("No systemd unit is installed for this profile yet.")
     if action not in {"start", "stop", "restart", "enable", "disable", "status"}:
-        raise ValueError(f"Unbekannte Service-Aktion: {action}")
+        raise ValueError(f"Unknown service action: {action}")
     cmd = _systemctl_scope(profile.systemd_mode) + [action, profile.resolved_unit_name() + ".service"]
     completed = subprocess.run(cmd, check=False, text=True, capture_output=True)
     return {
@@ -136,7 +136,7 @@ def list_service_profiles() -> list[ServiceProfile]:
 def health_check_service(profile_id: str) -> dict:
     profile = find_service_profile(profile_id)
     if profile is None:
-        raise ValueError(f"Service-Profil nicht gefunden: {profile_id}")
+        raise ValueError(f"Service profile not found: {profile_id}")
     payload = {
         "ok": True,
         "profile_id": profile_id,
@@ -151,7 +151,7 @@ def health_check_service(profile_id: str) -> dict:
     else:
         payload["systemd"] = {
             "ok": False,
-            "message": "Keine systemd-Unit installiert.",
+            "message": "No systemd unit installed.",
         }
     if profile.kind == "harbor":
         settings = load_settings()

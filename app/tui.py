@@ -233,7 +233,7 @@ class HarborTui(App[None]):
         self.title = "woddi-harbor"
         self.sub_title = "Local AI control console"
         self.refresh_dashboard()
-        self._write_event("Konsole bereit. Module ueber [b]a[/b] anlegen oder LLM mit [b]l[/b] konfigurieren.")
+        self._write_event("Console ready. Create modules with [b]a[/b] or configure the LLM with [b]l[/b].")
         settings = load_settings()
         configured_installation = bool(settings.llm.base_url and settings.llm.model) or bool(load_modules())
         if not settings.onboarding_complete and not configured_installation:
@@ -273,11 +273,11 @@ class HarborTui(App[None]):
     def _render_detail(self) -> None:
         detail = self.query_one("#detail", Static)
         if not self.selected_module_id:
-            detail.update("Noch kein Modul ausgewaehlt.")
+            detail.update("No module selected yet.")
             return
         module = next((item for item in load_modules() if item.id == self.selected_module_id), None)
         if not module:
-            detail.update("Ausgewaehltes Modul nicht gefunden.")
+            detail.update("Selected module not found.")
             return
         payload = module_status(module)
         syntax = Syntax(json.dumps(payload, ensure_ascii=False, indent=2), "json", theme="github-dark", word_wrap=True)
@@ -292,37 +292,37 @@ class HarborTui(App[None]):
 
     def action_refresh(self) -> None:
         self.refresh_dashboard()
-        self._write_event("Dashboard aktualisiert.")
+        self._write_event("Dashboard refreshed.")
 
     def action_show_module(self) -> None:
         self._render_detail()
 
     def action_start_selected(self) -> None:
-        self._run_selected_action(start_module, "gestartet")
+        self._run_selected_action(start_module, "started")
 
     def action_stop_selected(self) -> None:
-        self._run_selected_action(stop_module, "gestoppt")
+        self._run_selected_action(stop_module, "stopped")
 
     def action_restart_selected(self) -> None:
-        self._run_selected_action(restart_module, "neu gestartet")
+        self._run_selected_action(restart_module, "restarted")
 
     def action_show_logs(self) -> None:
         module_id = self.selected_module_id
         if not module_id:
-            self._write_event("[red]Kein Modul ausgewaehlt.[/red]")
+            self._write_event("[red]No module selected.[/red]")
             return
         path = module_log_path(module_id)
         if not path.exists():
-            self._write_event(f"[yellow]Kein Log fuer {module_id} vorhanden.[/yellow]")
+            self._write_event(f"[yellow]No log available for {module_id}.[/yellow]")
             return
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        snippet = "\n".join(lines[-30:]) if lines else "(leer)"
+        snippet = "\n".join(lines[-30:]) if lines else "(empty)"
         self._write_event(f"[b]Logs {module_id}[/b]\n{snippet}")
 
     def action_remove_selected(self) -> None:
         module_id = self.selected_module_id
         if not module_id:
-            self._write_event("[red]Kein Modul ausgewaehlt.[/red]")
+            self._write_event("[red]No module selected.[/red]")
             return
         try:
             stop_module(module_id)
@@ -331,20 +331,20 @@ class HarborTui(App[None]):
         if remove_module(module_id):
             self.selected_module_id = None
             self.refresh_dashboard()
-            self._write_event(f"[yellow]Modul entfernt:[/yellow] {module_id}")
+            self._write_event(f"[yellow]Module removed:[/yellow] {module_id}")
         else:
-            self._write_event(f"[red]Modul konnte nicht entfernt werden:[/red] {module_id}")
+            self._write_event(f"[red]Module could not be removed:[/red] {module_id}")
 
     def action_configure_llm(self) -> None:
         settings = load_settings()
         self.push_screen(
             DictFormScreen(
-                "LLM konfigurieren",
+                "Configure LLM",
                 [
                     {"name": "base_url", "label": "Base URL", "value": settings.llm.base_url},
                     {"name": "model", "label": "Model", "value": settings.llm.model},
                     {"name": "api_key_env", "label": "API key env", "value": settings.llm.api_key_env},
-                    {"name": "timeout_seconds", "label": "Timeout Sekunden", "value": str(settings.llm.timeout_seconds)},
+                    {"name": "timeout_seconds", "label": "Timeout seconds", "value": str(settings.llm.timeout_seconds)},
                     {"name": "max_tokens", "label": "Max Tokens", "value": str(settings.llm.max_tokens)},
                 ],
             ),
@@ -355,7 +355,7 @@ class HarborTui(App[None]):
         settings = load_settings()
         self.push_screen(
             DictFormScreen(
-                "Server konfigurieren",
+                "Configure Server",
                 [
                     {"name": "host", "label": "Host", "value": settings.host},
                     {"name": "port", "label": "Port", "value": str(settings.port)},
@@ -396,14 +396,14 @@ class HarborTui(App[None]):
     def action_add_module(self) -> None:
         self.push_screen(
             DictFormScreen(
-                "Modul anlegen",
+                "Create Module",
                 [
-                    {"name": "type", "label": "Typ (docs|maildir|mcp_http)", "value": "docs"},
+                    {"name": "type", "label": "Type (docs|maildir|mcp_http)", "value": "docs"},
                     {"name": "id", "label": "Module ID", "value": ""},
                     {"name": "name", "label": "Name", "value": ""},
-                    {"name": "path", "label": "Pfad (lokal) oder leer", "value": ""},
-                    {"name": "base_url", "label": "Base URL (remote) oder leer", "value": ""},
-                    {"name": "port", "label": "Port (lokal)", "value": str(reserve_port())},
+                    {"name": "path", "label": "Path (local) or empty", "value": ""},
+                    {"name": "base_url", "label": "Base URL (remote) or empty", "value": ""},
+                    {"name": "port", "label": "Port (local)", "value": str(reserve_port())},
                     {"name": "top_k", "label": "Top K", "value": "5"},
                     {"name": "api_key_env", "label": "API key env", "value": ""},
                 ],
@@ -415,14 +415,14 @@ class HarborTui(App[None]):
     def action_call_selected(self) -> None:
         module_id = self.selected_module_id
         if not module_id:
-            self._write_event("[red]Kein Modul ausgewaehlt.[/red]")
+            self._write_event("[red]No module selected.[/red]")
             return
         module = next((item for item in load_modules() if item.id == module_id), None)
         default_action = "search" if module and module.type in {"docs", "maildir"} else "health"
         default_payload = '{"query": ""}' if default_action == "search" else "{}"
         self.push_screen(
             DictFormScreen(
-                f"Modul aufrufen: {module_id}",
+                f"Call module: {module_id}",
                 [
                     {"name": "action", "label": "Action", "value": default_action},
                     {"name": "payload", "label": "Payload JSON", "value": default_payload},
@@ -438,10 +438,10 @@ class HarborTui(App[None]):
             result = install_and_optionally_enable_service(profile_id, "user", enable=True)
             self.refresh_dashboard()
             self._write_event(
-                f"[green]User-Service installiert fuer {profile_id}.[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+                f"[green]User service installed for {profile_id}.[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}"
             )
         except Exception as exc:
-            self._write_event(f"[red]Service-Install fehlgeschlagen:[/red] {exc}")
+            self._write_event(f"[red]Service install failed:[/red] {exc}")
 
     def action_enable_service(self) -> None:
         profile_id = self._current_profile_id()
@@ -449,7 +449,7 @@ class HarborTui(App[None]):
             result = service_action(profile_id, "enable")
             self._write_event(f"[green]Service enabled: {profile_id}[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
-            self._write_event(f"[red]Service enable fehlgeschlagen:[/red] {exc}")
+            self._write_event(f"[red]Service enable failed:[/red] {exc}")
 
     def action_service_status(self) -> None:
         profile_id = self._current_profile_id()
@@ -457,7 +457,7 @@ class HarborTui(App[None]):
             result = health_check_service(profile_id)
             self._write_event(f"[b]Service status {profile_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
-            self._write_event(f"[red]Service status fehlgeschlagen:[/red] {exc}")
+            self._write_event(f"[red]Service status failed:[/red] {exc}")
 
     def action_health_check(self) -> None:
         if self.selected_module_id:
@@ -467,25 +467,25 @@ class HarborTui(App[None]):
                     f"[b]Module health {self.selected_module_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}"
                 )
             except Exception as exc:
-                self._write_event(f"[red]Module health fehlgeschlagen:[/red] {exc}")
+                self._write_event(f"[red]Module health failed:[/red] {exc}")
             return
         try:
             result = health_check_service("harbor")
             self._write_event(f"[b]Harbor health[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
-            self._write_event(f"[red]Harbor health fehlgeschlagen:[/red] {exc}")
+            self._write_event(f"[red]Harbor health failed:[/red] {exc}")
 
     def _run_selected_action(self, action: Any, verb: str) -> None:
         module_id = self.selected_module_id
         if not module_id:
-            self._write_event("[red]Kein Modul ausgewaehlt.[/red]")
+            self._write_event("[red]No module selected.[/red]")
             return
         try:
             result = action(module_id)
             self.refresh_dashboard()
             self._write_event(f"[green]{module_id} {verb}.[/green]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
-            self._write_event(f"[red]Aktion fehlgeschlagen fuer {module_id}:[/red] {exc}")
+            self._write_event(f"[red]Action failed for {module_id}:[/red] {exc}")
 
     def _save_llm(self, values: dict[str, str] | None) -> None:
         if not values:
@@ -504,7 +504,7 @@ class HarborTui(App[None]):
         )
         save_settings(updated)
         self.refresh_dashboard()
-        self._write_event("[green]LLM-Konfiguration gespeichert.[/green]")
+        self._write_event("[green]LLM configuration saved.[/green]")
 
     def _save_server(self, values: dict[str, str] | None) -> None:
         if not values:
@@ -512,14 +512,14 @@ class HarborTui(App[None]):
         settings = load_settings()
         save_settings(replace(settings, host=values["host"].strip(), port=int(values["port"] or settings.port)))
         self.refresh_dashboard()
-        self._write_event("[green]Server-Einstellungen gespeichert.[/green]")
+        self._write_event("[green]Server settings saved.[/green]")
 
     def _save_prompt(self, values: dict[str, str] | None) -> None:
         if not values:
             return
         save_system_prompt(values["prompt"])
         self.refresh_dashboard()
-        self._write_event("[green]System Prompt gespeichert.[/green]")
+        self._write_event("[green]System prompt saved.[/green]")
 
     def _save_onboarding(self, values: dict[str, str] | None) -> None:
         if not values:
@@ -540,7 +540,7 @@ class HarborTui(App[None]):
         if mcp_base_url:
             upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
         self.refresh_dashboard()
-        self._write_event("[green]Onboarding abgeschlossen.[/green]")
+        self._write_event("[green]Onboarding completed.[/green]")
 
     def _save_module(self, values: dict[str, str] | None) -> None:
         if not values:
@@ -548,10 +548,10 @@ class HarborTui(App[None]):
         module_type = values["type"].strip()
         module_id = values["id"].strip()
         if not module_id:
-            self._write_event("[red]Module ID fehlt.[/red]")
+            self._write_event("[red]Module ID is missing.[/red]")
             return
         if module_type not in {"docs", "maildir", "mcp_http"}:
-            self._write_event(f"[red]Unbekannter Modultyp:[/red] {module_type}")
+            self._write_event(f"[red]Unknown module type:[/red] {module_type}")
             return
         if module_type == "mcp_http":
             module = ModuleConfig(
@@ -575,12 +575,12 @@ class HarborTui(App[None]):
             )
         errors = validate_module_config(module)
         if errors:
-            self._write_event("[red]Modul ungueltig:[/red] " + " ".join(errors))
+            self._write_event("[red]Module invalid:[/red] " + " ".join(errors))
             return
         upsert_module(module)
         self.selected_module_id = module.id
         self.refresh_dashboard()
-        self._write_event(f"[green]Modul gespeichert:[/green] {module.id}")
+        self._write_event(f"[green]Module saved:[/green] {module.id}")
 
     def _call_selected_module(self, values: dict[str, str] | None) -> None:
         module_id = self.selected_module_id
@@ -589,9 +589,9 @@ class HarborTui(App[None]):
         try:
             payload = parse_json_payload(values["payload"])
             result = execute_module(module_id, values["action"].strip(), payload)
-            self._write_event(f"[b]Antwort {module_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+            self._write_event(f"[b]Response {module_id}[/b]\n{json.dumps(result, ensure_ascii=False, indent=2)}")
         except Exception as exc:
-            self._write_event(f"[red]Modulaufruf fehlgeschlagen:[/red] {exc}")
+            self._write_event(f"[red]Module call failed:[/red] {exc}")
 
     def _write_event(self, message: str) -> None:
         self.query_one("#event-log", RichLog).write(message)

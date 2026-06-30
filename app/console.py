@@ -31,7 +31,7 @@ def run_console(console: Console) -> None:
     while True:
         _render_dashboard(console)
         choice = Prompt.ask(
-            "[bold #ffd166]Aktion[/bold #ffd166]",
+            "[bold #ffd166]Action[/bold #ffd166]",
             choices=["chat", "llm", "module", "prompt", "server", "refresh", "quit"],
             default="refresh",
             show_choices=True,
@@ -93,7 +93,7 @@ def _module_table(modules: list[ModuleConfig]) -> Table:
     table.add_column("State")
     table.add_column("Endpoint / Path")
     if not modules:
-        table.add_row("-", "-", "-", "empty", "Noch keine Module registriert")
+        table.add_row("-", "-", "-", "empty", "No modules registered yet")
         return table
     for module in modules:
         status = module_status(module)
@@ -111,7 +111,7 @@ def _llm_wizard(console: Console) -> None:
     base_url = Prompt.ask("Base URL", default=settings.llm.base_url or "http://127.0.0.1:8000/v1")
     model = Prompt.ask("Model", default=settings.llm.model or "gpt-4.1")
     api_key_env = Prompt.ask("API key env var", default=settings.llm.api_key_env or "HARBOR_LLM_API_KEY")
-    timeout_seconds = float(Prompt.ask("Timeout Sekunden", default=str(settings.llm.timeout_seconds)))
+    timeout_seconds = float(Prompt.ask("Timeout seconds", default=str(settings.llm.timeout_seconds)))
     max_tokens = IntPrompt.ask("Max Tokens", default=settings.llm.max_tokens)
     updated = replace(
         settings,
@@ -125,7 +125,7 @@ def _llm_wizard(console: Console) -> None:
         ),
     )
     save_settings(updated)
-    console.print("[green]LLM-Konfiguration gespeichert.[/green]")
+    console.print("[green]LLM configuration saved.[/green]")
 
 
 def _module_hub(console: Console) -> None:
@@ -148,11 +148,11 @@ def _module_hub(console: Console) -> None:
 
 
 def _module_add_wizard(console: Console) -> None:
-    kind = Prompt.ask("Neuer Modultyp", choices=["docs", "maildir", "mcp_http"])
+    kind = Prompt.ask("New module type", choices=["docs", "maildir", "mcp_http"])
     module_id = Prompt.ask("Module ID").strip()
-    name = Prompt.ask("Anzeigename", default=module_id).strip()
+    name = Prompt.ask("Display name", default=module_id).strip()
     if kind in {"docs", "maildir"}:
-        path = Prompt.ask("Pfad").strip()
+        path = Prompt.ask("Path").strip()
         port = IntPrompt.ask("Port", default=reserve_port())
         top_k = IntPrompt.ask("Top K", default=5)
         module = ModuleConfig(
@@ -167,7 +167,7 @@ def _module_add_wizard(console: Console) -> None:
     else:
         base_url = Prompt.ask("Base URL", default="http://127.0.0.1:9010").strip()
         api_key_env = Prompt.ask("API key env var", default="").strip()
-        timeout_seconds = float(Prompt.ask("Timeout Sekunden", default="30"))
+        timeout_seconds = float(Prompt.ask("Timeout seconds", default="30"))
         module = ModuleConfig(
             id=module_id,
             name=name,
@@ -178,8 +178,8 @@ def _module_add_wizard(console: Console) -> None:
             timeout_seconds=timeout_seconds,
         )
     upsert_module(module)
-    console.print(f"[green]Modul gespeichert:[/green] {module_id}")
-    if module.transport == "local" and Confirm.ask("Direkt starten?", default=True):
+    console.print(f"[green]Module saved:[/green] {module_id}")
+    if module.transport == "local" and Confirm.ask("Start immediately?", default=True):
         result = start_module(module.id)
         console.print_json(json.dumps(result, ensure_ascii=False))
 
@@ -187,13 +187,13 @@ def _module_add_wizard(console: Console) -> None:
 def _pick_module_id(console: Console) -> str | None:
     modules = load_modules()
     if not modules:
-        console.print("[yellow]Keine Module vorhanden.[/yellow]")
+        console.print("[yellow]No modules available.[/yellow]")
         return None
     ids = [module.id for module in modules]
-    console.print("Verfuegbare Module: " + ", ".join(ids))
+    console.print("Available modules: " + ", ".join(ids))
     selected = Prompt.ask("Module ID").strip()
     if selected not in ids:
-        console.print(f"[red]Unbekanntes Modul:[/red] {selected}")
+        console.print(f"[red]Unknown module:[/red] {selected}")
         return None
     return selected
 
@@ -206,7 +206,7 @@ def _module_manage_wizard(console: Console) -> None:
         status = module_status(next(module for module in load_modules() if module.id == module_id))
         console.print(Panel(json.dumps(status, ensure_ascii=False, indent=2), title=f"Module {module_id}", border_style="#7aa2f7"))
         action = Prompt.ask(
-            "Aktion",
+            "Action",
             choices=["start", "stop", "restart", "call", "logs", "back"],
             default="back",
         )
@@ -226,7 +226,7 @@ def _module_manage_wizard(console: Console) -> None:
         elif action == "logs":
             path = module_log_path(module_id)
             if not path.exists():
-                console.print("[yellow]Noch kein Log vorhanden.[/yellow]")
+                console.print("[yellow]No log available yet.[/yellow]")
             else:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
                 console.print(Panel("\n".join(lines[-60:]), title=f"Logs {module_id}", border_style="#ff7b72"))
@@ -238,22 +238,22 @@ def _module_remove_wizard(console: Console) -> None:
     module_id = _pick_module_id(console)
     if not module_id:
         return
-    if Confirm.ask(f"Modul {module_id} wirklich entfernen?", default=False):
+    if Confirm.ask(f"Really remove module {module_id}?", default=False):
         try:
             stop_module(module_id)
         except Exception:
             pass
         removed = remove_module(module_id)
         if removed:
-            console.print(f"[green]Modul entfernt:[/green] {module_id}")
+            console.print(f"[green]Module removed:[/green] {module_id}")
         else:
-            console.print(f"[red]Modul nicht entfernt:[/red] {module_id}")
+            console.print(f"[red]Module not removed:[/red] {module_id}")
 
 
 def _system_prompt_editor(console: Console) -> None:
     current = system_prompt()
-    console.print(Panel(current, title="Aktueller System Prompt", border_style="#7aa2f7"))
-    console.print("Neuen Prompt eingeben. Mit `END` beenden.")
+    console.print(Panel(current, title="Current System Prompt", border_style="#7aa2f7"))
+    console.print("Enter a new prompt. Finish with `END`.")
     lines: list[str] = []
     while True:
         line = Prompt.ask("")
@@ -262,10 +262,10 @@ def _system_prompt_editor(console: Console) -> None:
         lines.append(line)
     new_text = "\n".join(lines).strip()
     if not new_text:
-        console.print("[yellow]Keine Aenderung gespeichert.[/yellow]")
+        console.print("[yellow]No change saved.[/yellow]")
         return
     save_system_prompt(new_text)
-    console.print("[green]System Prompt gespeichert.[/green]")
+    console.print("[green]System prompt saved.[/green]")
 
 
 def _server_settings(console: Console) -> None:
@@ -274,20 +274,20 @@ def _server_settings(console: Console) -> None:
     host = Prompt.ask("Host", default=settings.host).strip()
     port = IntPrompt.ask("Port", default=settings.port)
     save_settings(replace(settings, host=host, port=port))
-    console.print("[green]Server-Einstellungen gespeichert.[/green]")
+    console.print("[green]Server settings saved.[/green]")
 
 
 def _chat_loop(console: Console) -> None:
     settings = load_settings()
     if not settings.llm.base_url or not settings.llm.model:
-        console.print("[red]LLM ist noch nicht konfiguriert.[/red]")
+        console.print("[red]LLM is not configured yet.[/red]")
         return
-    console.print(Panel.fit("Chat mit Harbor. Leere Eingabe beendet den Chat.", border_style="#00d1b2"))
+    console.print(Panel.fit("Chat with Harbor. Empty input exits chat.", border_style="#00d1b2"))
     while True:
-        message = Prompt.ask("[bold]Du[/bold]").strip()
+        message = Prompt.ask("[bold]You[/bold]").strip()
         if not message:
             return
-        selected = Prompt.ask("Module CSV oder leer fuer auto", default="").strip()
+        selected = Prompt.ask("Module CSV or empty for auto", default="").strip()
         selected_modules = [item.strip() for item in selected.split(",") if item.strip()]
         from .control import _build_messages
 
@@ -296,9 +296,9 @@ def _chat_loop(console: Console) -> None:
             response = complete_chat(settings, messages)
             choices = response.get("choices") or []
             reply = str(choices[0].get("message", {}).get("content", "")) if choices else ""
-            console.print(Panel(reply or "(leer)", title=f"Harbor | modules={','.join(used_modules) or '-'}", border_style="#9ece6a"))
+            console.print(Panel(reply or "(empty)", title=f"Harbor | modules={','.join(used_modules) or '-'}", border_style="#9ece6a"))
         except Exception as exc:
-            console.print(f"[red]Chat fehlgeschlagen:[/red] {exc}")
+            console.print(f"[red]Chat failed:[/red] {exc}")
 
 
 def _truncate(text: str, limit: int) -> str:

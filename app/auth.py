@@ -25,7 +25,7 @@ AUTH_MAX_FAILURES = 8
 
 def hash_password(password: str, *, salt: bytes | None = None, iterations: int = 240_000) -> str:
     if not password:
-        raise ValueError("Passwort darf nicht leer sein.")
+        raise ValueError("Password must not be empty.")
     current_salt = salt or os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), current_salt, iterations)
     return "pbkdf2_sha256${iterations}${salt}${digest}".format(
@@ -56,17 +56,17 @@ def authenticate_basic_header(header_value: str | None) -> HarborUser:
     if not header_value or not header_value.startswith("Basic "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentifizierung erforderlich.",
+            detail="Authentication required.",
             headers={"WWW-Authenticate": "Basic"},
         )
     try:
         decoded = base64.b64decode(header_value.split(" ", 1)[1]).decode("utf-8")
         username, password = decoded.split(":", 1)
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ungueltige Auth-Daten.") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication data.") from exc
     user = find_user(username)
     if user is None or not user.enabled or not verify_password(password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login fehlgeschlagen.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login failed.")
     return user
 
 
@@ -74,7 +74,7 @@ def current_user(request: Request) -> HarborUser:
     if not any_users_exist():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Harbor ist gesperrt, bis ein initialer Admin per CLI angelegt wurde.",
+            detail="Harbor is locked until an initial admin is created via CLI.",
         )
     client_key = request.client.host if request.client else "unknown"
     now = time.monotonic()
@@ -85,7 +85,7 @@ def current_user(request: Request) -> HarborUser:
         if len(failures) >= AUTH_MAX_FAILURES:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Zu viele fehlgeschlagene Login-Versuche.",
+                detail="Too many failed login attempts.",
             )
     try:
         user = authenticate_basic_header(request.headers.get("Authorization"))
@@ -102,7 +102,7 @@ def require_role(min_role: UserRole):
     def dependency(request: Request) -> HarborUser:
         user = current_user(request)
         if ROLE_LEVEL[user.role] < ROLE_LEVEL[min_role]:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rolle nicht ausreichend.")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role.")
         return user
 
     return Depends(dependency)
@@ -117,5 +117,5 @@ def require_metrics_access(request: Request) -> HarborUser | None:
             return None
     user = current_user(request)
     if ROLE_LEVEL[user.role] < ROLE_LEVEL["admin"]:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rolle nicht ausreichend.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role.")
     return user

@@ -7,7 +7,7 @@ APPLICATION_DIR="${HOME}/.local/share/applications"
 DESKTOP_FILE="${APPLICATION_DIR}/woddi-harbor-tray.desktop"
 
 if ! /usr/bin/python3 -c 'import PyQt6' >/dev/null 2>&1; then
-  printf 'Fehler: PyQt6 fehlt im System-Python. Installiere das Paket python3-pyqt6.\n' >&2
+  printf 'Error: PyQt6 is missing from the system Python. Install the python3-pyqt6 package.\n' >&2
   exit 1
 fi
 
@@ -17,7 +17,7 @@ mkdir -p "$AUTOSTART_DIR" "$APPLICATION_DIR"
     '[Desktop Entry]' \
     'Type=Application' \
     'Name=Woddi Harbor Ampel' \
-    'Comment=Harbor-Dienste starten und fuer den Spielemodus beenden' \
+    'Comment=Start Harbor services and stop them for game mode' \
     "Exec=/usr/bin/python3 ${ROOT}/tools/harbor_tray.py" \
     "Icon=${ROOT}/assets/tray/harbor-stopped.svg" \
     'Terminal=false' \
@@ -28,5 +28,5 @@ mkdir -p "$AUTOSTART_DIR" "$APPLICATION_DIR"
 chmod 755 "$DESKTOP_FILE"
 cp "$DESKTOP_FILE" "$AUTOSTART_DIR/woddi-harbor-tray.desktop"
 
-printf 'Woddi Harbor Ampel installiert.\n'
+printf 'Woddi Harbor tray app installed.\n'
 printf 'Start: /usr/bin/python3 %s/tools/harbor_tray.py\n' "$ROOT"

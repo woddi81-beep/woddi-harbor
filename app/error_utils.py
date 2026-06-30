@@ -48,14 +48,14 @@ def format_error_for_user(exc: Exception, context: str = "") -> str:
 
     if isinstance(exc, httpx.TimeoutException):
         return (
-            f"⚠️ **Zeitüberschreitung** — Der Server hat nach {getattr(exc, 'seconds', '?')}s nicht geantwortet.\n"
-            f"   -> Prüfe ob der Server erreichbar und nicht überlastet ist."
+            f"**Timeout** - The server did not respond after {getattr(exc, 'seconds', '?')}s.\n"
+            f"   -> Check whether the server is reachable and not overloaded."
         )
     if isinstance(exc, httpx.ConnectError):
         return (
-            f"⚠️ **Verbindung fehlgeschlagen** — Server nicht erreichbar.\n"
-            f"   -> Prüfe die URL und Netzwerk-Konnektivität.\n"
-            f"   -> Fehler: {exc}"
+            f"**Connection failed** - Server is unreachable.\n"
+            f"   -> Check the URL and network connectivity.\n"
+            f"   -> Error: {exc}"
         )
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
@@ -71,9 +71,9 @@ def format_error_for_user(exc: Exception, context: str = "") -> str:
             pass
         return msg
     if isinstance(exc, ValueError):
-        return f"⚠️ **Konfigurationsfehler**: {exc}"
+        return f"⚠️ **Configuration error**: {exc}"
     if context:
-        return f"⚠️ **{context} fehlgeschlagen**: {exc}"
+        return f"⚠️ **{context} failed**: {exc}"
     return f"⚠️ {exc}"
 
 

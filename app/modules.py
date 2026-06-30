@@ -304,7 +304,7 @@ def _worker_python_executable() -> str:
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
-    raise RuntimeError("Kein Python-Interpreter gefunden. Erwarte sys.executable oder python3 im PATH.")
+    raise RuntimeError("No Python interpreter found. Expected sys.executable or python3 on PATH.")
 
 
 def module_worker_command(module: ModuleConfig) -> list[str]:
@@ -411,7 +411,7 @@ def _ensure_startable_port(module: ModuleConfig) -> ModuleConfig:
     if module.port <= 0 or module.port > 65535:
         module.port = reserve_port()
         upsert_module(module)
-        _append_module_log(module.id, f"Neuen Port reserviert: {module.port}")
+        _append_module_log(module.id, f"Reserved new port: {module.port}")
         return module
     if _module_health_reachable(module, timeout=0.5):
         return module
@@ -420,7 +420,7 @@ def _ensure_startable_port(module: ModuleConfig) -> ModuleConfig:
     previous_port = module.port
     module.port = reserve_port()
     upsert_module(module)
-    _append_module_log(module.id, f"Port {previous_port} war belegt. Neuer Port: {module.port}")
+    _append_module_log(module.id, f"Port {previous_port} was already in use. New port: {module.port}")
     return module
 
 
@@ -441,7 +441,7 @@ def _spawn_worker(module: ModuleConfig) -> subprocess.Popen[str]:
                 if value and key != "OS_TOKEN"
             }
         )
-    _append_module_log(module.id, f"Starte Worker fuer Modul {module.id} auf {module.host}:{module.port} mit {python_executable}")
+    _append_module_log(module.id, f"Starting worker for module {module.id} on {module.host}:{module.port} with {python_executable}")
     with log_path.open("a", encoding="utf-8", buffering=1) as handle:
         return subprocess.Popen(
             command,
@@ -470,99 +470,99 @@ def _wait_for_worker_start(process: subprocess.Popen[str], module: ModuleConfig,
             return True, ""
         returncode = process.poll()
         if returncode is not None:
-            return False, f"Worker-Prozess wurde vorzeitig beendet (Exit-Code {returncode})."
+            return False, f"Worker process exited early (exit code {returncode})."
         time.sleep(0.2)
-    return False, f"Health-Check fuer {module.host}:{module.port} hat nicht innerhalb von {timeout_seconds:.1f}s geantwortet."
+    return False, f"Health check for {module.host}:{module.port} did not respond within {timeout_seconds:.1f}s."
 
 
 def validate_module_config(module: ModuleConfig) -> list[str]:
     errors: list[str] = []
     if not module.id.strip():
-        errors.append("Module ID fehlt.")
+        errors.append("Module ID is missing.")
     if module.type not in {"docs", "maildir", "mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
-        errors.append(f"Unbekannter Modultyp: {module.type}")
+        errors.append(f"Unknown module type: {module.type}")
     if module.transport not in {"local", "remote"}:
-        errors.append(f"Ungueltiger Transport: {module.transport}")
+        errors.append(f"Invalid transport: {module.transport}")
     if module.remote_protocol not in {"auto", "harbor_execute", "mcp"}:
-        errors.append(f"Ungueltiges Remote-Protokoll: {module.remote_protocol}")
+        errors.append(f"Invalid remote protocol: {module.remote_protocol}")
     if module.api_key.strip():
-        errors.append("Inline API-Key ist nicht erlaubt; nutze api_key_env.")
+        errors.append("Inline API keys are not allowed; use api_key_env.")
     inline_secret_paths = _inline_secret_paths(module.settings)
     if inline_secret_paths:
         errors.append(
-            "Inline-Secrets sind nicht erlaubt; nutze ENV-Referenzen: "
+            "Inline secrets are not allowed; use environment references: "
             + ", ".join(sorted(inline_secret_paths))
         )
     if module.type in {"docs", "maildir"}:
         if module.transport != "local":
-            errors.append(f"{module.type} muss lokal sein.")
+            errors.append(f"{module.type} must be local.")
         sources = module_sources(module, enabled_only=False)
         if not sources:
-            errors.append("Mindestens eine lokale Quelle fehlt.")
+            errors.append("At least one local source is required.")
         seen_source_ids: set[str] = set()
         for source in sources:
             if not source.id.strip():
-                errors.append("Quellen-ID fehlt.")
+                errors.append("Source ID is missing.")
                 continue
             if source.id in seen_source_ids:
-                errors.append(f"Doppelte Quellen-ID: {source.id}")
+                errors.append(f"Duplicate source ID: {source.id}")
             seen_source_ids.add(source.id)
             root = resolve_module_source_path(source)
             if not source.path.strip():
-                errors.append(f"Pfad fehlt fuer Quelle {source.id}.")
+                errors.append(f"Path is missing for source {source.id}.")
             elif not root.exists():
-                errors.append(f"Pfad existiert nicht: {root}")
+                errors.append(f"Path does not exist: {root}")
             elif not root.is_dir():
-                errors.append(f"Pfad ist kein Verzeichnis: {root}")
+                errors.append(f"Path is not a directory: {root}")
         if module.port < 0 or module.port > 65535:
-            errors.append(f"Port ungueltig: {module.port}")
+            errors.append(f"Invalid port: {module.port}")
         if module.top_k <= 0:
-            errors.append("top_k muss groesser als 0 sein.")
+            errors.append("top_k must be greater than 0.")
     if module.type == "mcp_http":
         if module.transport != "remote":
-            errors.append("mcp_http muss remote sein.")
+            errors.append("mcp_http must be remote.")
         if not module.base_url.strip():
-            errors.append("Base URL fehlt.")
+            errors.append("Base URL is missing.")
         else:
             parsed = urlparse(module.base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                errors.append(f"Base URL ungueltig: {module.base_url}")
+                errors.append(f"Invalid Base URL: {module.base_url}")
     if module.type == "netbox_mcp":
         if module.transport != "local":
-            errors.append("netbox_mcp muss lokal sein.")
+            errors.append("netbox_mcp must be local.")
         netbox_url = _netbox_url(module)
         if not netbox_url:
-            errors.append("NetBox URL fehlt.")
+            errors.append("NetBox URL is missing.")
         else:
             parsed = urlparse(netbox_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                errors.append(f"NetBox URL ungueltig: {netbox_url}")
+                errors.append(f"Invalid NetBox URL: {netbox_url}")
         if module.port < 0 or module.port > 65535:
-            errors.append(f"Port ungueltig: {module.port}")
+            errors.append(f"Invalid port: {module.port}")
     if module.type == "openstack_mcp":
         if module.transport != "local":
-            errors.append("openstack_mcp muss lokal sein.")
+            errors.append("openstack_mcp must be local.")
         openstack = _openstack_settings(module)
         if not openstack["OS_AUTH_URL"]:
-            errors.append("OpenStack Auth URL fehlt.")
+            errors.append("OpenStack Auth URL is missing.")
         else:
             parsed = urlparse(openstack["OS_AUTH_URL"])
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                errors.append(f"OpenStack Auth URL ungueltig: {openstack['OS_AUTH_URL']}")
+                errors.append(f"Invalid OpenStack Auth URL: {openstack['OS_AUTH_URL']}")
         if module.port < 0 or module.port > 65535:
-            errors.append(f"Port ungueltig: {module.port}")
+            errors.append(f"Invalid port: {module.port}")
     if module.type == "sap_docs_mcp":
         if module.transport != "local":
-            errors.append("sap_docs_mcp muss lokal sein.")
+            errors.append("sap_docs_mcp must be local.")
         docs_url = _sap_docs_url(module)
         if not docs_url:
-            errors.append("SAP Docs URL fehlt.")
+            errors.append("SAP Docs URL is missing.")
         else:
             parsed = urlparse(docs_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                errors.append(f"SAP Docs URL ungueltig: {docs_url}")
+                errors.append(f"Invalid SAP Docs URL: {docs_url}")
         if module.port < 0 or module.port > 65535:
-            errors.append(f"Port ungueltig: {module.port}")
+            errors.append(f"Invalid port: {module.port}")
     return errors
 
 
@@ -578,7 +578,7 @@ def validation_errors_by_module(modules: list[ModuleConfig] | None = None) -> di
     for (host, port), module_ids in port_usage.items():
         if len(module_ids) < 2:
             continue
-        detail = f"Port-Konflikt: {host}:{port} wird mehrfach genutzt ({', '.join(sorted(module_ids))})."
+        detail = f"Port conflict: {host}:{port} is used multiple times ({', '.join(sorted(module_ids))})."
         for module_id in module_ids:
             errors.setdefault(module_id, []).append(detail)
     return errors
@@ -782,7 +782,7 @@ def health_check_module(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     errors = validation_errors_by_module().get(module.id, [])
     status = module_status(module)
     payload: dict[str, Any] = {
@@ -826,7 +826,7 @@ def module_diagnostics(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     payload: dict[str, Any] = {
         "ok": True,
         "module_id": module_id,
@@ -912,7 +912,7 @@ def module_diagnostics(
             "Worker/MCP Upstream",
         ],
         "llm_used": False,
-        "note": "Dieser Diagnosepfad ruft keine LLM-Completion auf.",
+        "note": "This diagnostics path does not call an LLM completion.",
     }
     if not payload["ok"] and module.transport == "local":
         payload["hint"] = _module_diagnostics_hint(module, payload)
@@ -984,8 +984,8 @@ def _module_diagnostics_hint(module: ModuleConfig, payload: dict[str, Any]) -> s
     if module.type == "openstack_mcp" and any(
         marker in lower
         for marker in (
-            "credentials fehlen",
-            "token erneuern",
+            "credentials missing",
+            "renew token",
             "projektgescoped",
             "project-scoped",
             "project scoped",
@@ -995,10 +995,10 @@ def _module_diagnostics_hint(module: ModuleConfig, payload: dict[str, Any]) -> s
         )
     ):
         return (
-            "OpenStack-Zugang fuer diesen Harbor-Benutzer erneuern: "
-            "im Chat oder Admin-Dialog einen projektgescopten User-Token speichern."
+            "Renew OpenStack access for this Harbor user: "
+            "save a project-scoped user token in chat or the admin dialog."
         )
-    return f"Lokalen Worker pruefen oder starten: ./harbor.sh module start {module.id}"
+    return f"Check or start the local worker: ./harbor.sh module start {module.id}"
 
 
 def _connect_endpoint(module: ModuleConfig) -> str:
@@ -1017,15 +1017,15 @@ def _module_browse_payload(diagnostics: dict[str, Any]) -> dict[str, Any] | None
 
 def _browse_summary(browse: dict[str, Any] | None) -> tuple[bool, str, dict[str, Any]]:
     if not browse:
-        return False, "Es wurde keine Discovery-/Browse-Antwort erzeugt.", {}
+        return False, "No discovery/browse response was produced.", {}
     tools = browse.get("tools") or browse.get("actions") or browse.get("capabilities") or []
     count = len(tools) if isinstance(tools, list) else 0
     if browse.get("ok"):
         if count:
-            return True, f"Browse erfolgreich, {count} Tool(s)/Action(s) sichtbar.", {"items": tools[:40]}
-        return True, "Browse erfolgreich, aber ohne Tool-/Action-Liste.", {}
-    reason = _join_error_fragments(browse) or "Browse hat keine erfolgreiche Antwort geliefert."
-    return False, f"Browse fehlgeschlagen: {reason}", browse
+            return True, f"Browse succeeded; {count} tool(s)/action(s) visible.", {"items": tools[:40]}
+        return True, "Browse succeeded, but returned no tool/action list.", {}
+    reason = _join_error_fragments(browse) or "Browse did not return a successful response."
+    return False, f"Browse failed: {reason}", browse
 
 
 def _structured_tool_payload(result: dict[str, Any]) -> Any:
@@ -1133,12 +1133,12 @@ def _summarize_openstack_server_count(data: Any) -> str:
             if isinstance(server, dict):
                 used = server.get("count")
     if used is None:
-        return "Serverzahl konnte aus der OpenStack-Antwort nicht gelesen werden."
+        return "The server count could not be read from the OpenStack response."
     used_text = int(used) if isinstance(used, float) and used.is_integer() else used
     if limit is None:
-        return f"OpenStack meldet {used_text} Server im Projekt."
+        return f"OpenStack reports {used_text} servers in the project."
     limit_text = int(limit) if isinstance(limit, float) and limit.is_integer() else limit
-    return f"OpenStack meldet {used_text} Server im Projekt; Quota {used_text} von {limit_text}."
+    return f"OpenStack reports {used_text} servers in the project; quota {used_text} of {limit_text}."
 
 
 def _summarize_named_rows(data: Any, resource_label: str) -> str:
@@ -1149,14 +1149,14 @@ def _summarize_named_rows(data: Any, resource_label: str) -> str:
     prefix = f"{count} {resource_label}" if count is not None else f"{len(rows)} {resource_label}"
     if names:
         return f"{prefix}: {', '.join(names)}"
-    return f"{prefix}; keine Namen in der Antwort gefunden."
+    return f"{prefix}; no names found in the response."
 
 
 def _summarize_netbox_count(data: Any) -> str:
     count = _probe_collection_count(data)
     if count is None:
-        return "NetBox-Zahl konnte aus der Antwort nicht gelesen werden."
-    return f"NetBox meldet {count} passende Systeme/Geraete fuer Hersteller NetApp in eu-de-1."
+        return "The NetBox count could not be read from the response."
+    return f"NetBox reports {count} matching systems/devices for manufacturer NetApp in eu-de-1."
 
 
 def _summarize_memory_top10(data: Any) -> str:
@@ -1170,9 +1170,9 @@ def _summarize_memory_top10(data: Any) -> str:
         ranked.append((float(memory), name))
     ranked.sort(reverse=True)
     if not ranked:
-        return "Keine RAM-/Memory-Werte in den zurueckgegebenen NetBox-Objekten gefunden."
+        return "No RAM/memory values were found in the returned NetBox objects."
     parts = [f"{name}: {int(memory) if memory.is_integer() else round(memory, 1)} MiB" for memory, name in ranked[:10]]
-    return "Top-10 nach Arbeitsspeicher: " + "; ".join(parts)
+    return "Top 10 by memory: " + "; ".join(parts)
 
 
 def _summarize_docs_hits(data: Any) -> str:
@@ -1183,7 +1183,7 @@ def _summarize_docs_hits(data: Any) -> str:
         elif isinstance(data.get("results"), list):
             hits = data["results"]
     if not hits:
-        return "Keine Dokumenttreffer gefunden."
+        return "No document hits found."
     parts: list[str] = []
     for item in hits[:3]:
         if not isinstance(item, dict):
@@ -1194,7 +1194,7 @@ def _summarize_docs_hits(data: Any) -> str:
             parts.append(f"{title} ({location})")
         elif title or location:
             parts.append(title or location)
-    return f"{len(hits)} Dokumenttreffer: " + ("; ".join(parts) if parts else "Treffer ohne Titel/Link.")
+    return f"{len(hits)} document hits: " + ("; ".join(parts) if parts else "hits without title/link.")
 
 
 def _diagnostic_probe(
@@ -1237,7 +1237,7 @@ def _diagnostic_probe(
             "tool": tool,
             "payload": _redact_mapping(payload),
             "duration_ms": round((time.monotonic() - started_at) * 1000.0, 2),
-            "summary": f"Probe fehlgeschlagen: {exc}",
+            "summary": f"Probe failed: {exc}",
             "error": str(exc),
         }
 
@@ -1266,7 +1266,7 @@ def _first_successful_probe(
         attempts.append(probe)
         if probe["ok"]:
             if len(attempts) > 1:
-                probe["attempts"] = attempts
+                probe["attempts"] = [dict(attempt) for attempt in attempts]
             return probe
     failed = attempts[-1] if attempts else {
         "ok": False,
@@ -1274,7 +1274,7 @@ def _first_successful_probe(
         "question": question,
         "tool": "",
         "payload": {},
-        "summary": "Keine Probe definiert.",
+        "summary": "No probe defined.",
     }
     return {**failed, "attempts": attempts}
 
@@ -1287,7 +1287,7 @@ def module_default_probes(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     probes: list[dict[str, Any]] = []
     if module.type == "openstack_mcp" or module.provider == "openstack-mcp-server" or module.id == "openstack":
         effective_token = openstack_token.strip() or os.getenv("OS_TOKEN", "").strip()
@@ -1295,8 +1295,8 @@ def module_default_probes(
             [
                 _first_successful_probe(
                     module_id,
-                    "OpenStack Server im Projekt",
-                    "Wieviele Server sind in meinem Projekt?",
+                    "OpenStack servers in project",
+                    "How many servers are in my project?",
                     [
                         ("get_compute_limits", {}, _summarize_openstack_server_count),
                         ("get_project_statistics", {}, _summarize_openstack_server_count),
@@ -1306,18 +1306,18 @@ def module_default_probes(
                 ),
                 _diagnostic_probe(
                     module_id,
-                    "OpenStack Netze",
-                    "Welche Netze siehst Du?",
+                    "OpenStack networks",
+                    "Which networks do you see?",
                     "list_networks",
                     {"limit": 20},
-                    lambda data: _summarize_named_rows(data, "Netz(e)"),
+                    lambda data: _summarize_named_rows(data, "network(s)"),
                     openstack_token=effective_token,
                     openstack_user=openstack_user,
                 ),
                 _diagnostic_probe(
                     module_id,
                     "OpenStack Flavor",
-                    "Welche Flavor gibt es?",
+                    "Which flavors are available?",
                     "list_flavors",
                     {"limit": 20},
                     lambda data: _summarize_named_rows(data, "Flavor"),
@@ -1326,8 +1326,8 @@ def module_default_probes(
                 ),
                 _diagnostic_probe(
                     module_id,
-                    "OpenStack Regionen/Zonen",
-                    "Welche Regionen oder Availability Zones gibt es?",
+                    "OpenStack regions/zones",
+                    "Which regions or availability zones are available?",
                     "list_availability_zones",
                     {"limit": 20},
                     lambda data: _summarize_named_rows(data, "Zone(n)"),
@@ -1342,7 +1342,7 @@ def module_default_probes(
                 _first_successful_probe(
                     module_id,
                     "NetBox NetApp in eu-de-1",
-                    "Wieviele Systeme vom Hersteller NetApp stehen in eu-de-1?",
+                    "How many NetApp systems are in eu-de-1?",
                     [
                         (
                             "get_objects",
@@ -1378,8 +1378,8 @@ def module_default_probes(
                 ),
                 _first_successful_probe(
                     module_id,
-                    "NetBox Arbeitsspeicher Top 10",
-                    "Welches ist der Server mit dem meisten Arbeitsspeicher? Bitte TOP10.",
+                    "NetBox memory top 10",
+                    "Which servers have the most memory? Please return the top 10.",
                     [
                         (
                             "get_objects",
@@ -1409,9 +1409,9 @@ def module_default_probes(
         )
     elif module.type in {"docs", "maildir"}:
         for label, query in (
-            ("Doku Cinder vs Manila", "was ist der unterschied zwischen cinder und manila"),
-            ("Doku Regionen", "welche regionen gibt es"),
-            ("Doku Flavor", "welche flavor gibt es"),
+            ("Docs Cinder vs Manila", "what is the difference between cinder and manila"),
+            ("Docs regions", "which regions are available"),
+            ("Docs flavor", "which flavors are available"),
         ):
             probes.append(
                 _diagnostic_probe(
@@ -1425,9 +1425,9 @@ def module_default_probes(
             )
     elif module.type == "sap_docs_mcp":
         for label, query in (
-            ("Doku Cinder vs Manila", "cinder manila difference"),
-            ("Doku Regionen", "available regions"),
-            ("Doku Flavor", "available flavors"),
+            ("Docs Cinder vs Manila", "cinder manila difference"),
+            ("Docs regions", "available regions"),
+            ("Docs flavor", "available flavors"),
         ):
             probes.append(
                 _diagnostic_probe(
@@ -1447,14 +1447,14 @@ def module_default_probes(
         "probe_count": len(probes),
         "ok_probe_count": len(ok_probes),
         "summary": (
-            f"{len(ok_probes)} von {len(probes)} Default-Probe(s) erfolgreich."
+            f"{len(ok_probes)} of {len(probes)} default probe(s) succeeded."
             if probes
-            else f"Keine fachlichen Default-Probes fuer Modultyp {module.type} definiert."
+            else f"No domain-specific default probes are defined for module type {module.type}."
         ),
         "data_flow": {
             "path": "module_default_probes -> execute_module -> worker/MCP upstream",
             "llm_used": False,
-            "note": "Diese Probes umgehen das LLM vollstaendig und pruefen die Quelle direkt.",
+            "note": "These probes bypass the LLM completely and check the source directly.",
         },
         "probes": probes,
     }
@@ -1468,48 +1468,48 @@ def _connect_next_steps(module: ModuleConfig, checks: list[dict[str, Any]], erro
     config_check = next((check for check in checks if check["key"] == "config"), None)
     config_detail = config_check.get("detail") if isinstance(config_check, dict) else None
     if isinstance(config_detail, list) and config_detail:
-        steps.append("Modulkonfiguration korrigieren: " + "; ".join(str(item) for item in config_detail[:4]))
+        steps.append("Fix module configuration: " + "; ".join(str(item) for item in config_detail[:4]))
 
     if "enabled" in failed_keys:
-        steps.append("Modul aktivieren oder bewusst deaktiviert lassen; deaktivierte Module werden im Chat nicht genutzt.")
+        steps.append("Enable the module or leave it intentionally disabled; disabled modules are not used in chat.")
 
     if module.transport == "local" and "worker" in failed_keys:
-        steps.append(f"Lokalen Worker starten oder neu starten: ./harbor.sh module start {module.id}")
-        steps.append(f"Worker-Log pruefen: {module_log_path(module.id)}")
+        steps.append(f"Start or restart the local worker: ./harbor.sh module start {module.id}")
+        steps.append(f"Check the worker log: {module_log_path(module.id)}")
 
     if "index" in failed_keys:
-        steps.append(f"Lokalen Suchindex neu aufbauen: ./harbor.sh module reindex {module.id}")
+        steps.append(f"Rebuild the local search index: ./harbor.sh module reindex {module.id}")
 
     if "fields" in failed_keys:
-        steps.append("Feldkatalog ueber die Modulansicht aktualisieren und danach Browse/Test erneut starten.")
+        steps.append("Refresh the field catalog from the module view, then rerun Browse/Test.")
 
     if "credential" in lower or "token" in lower or "unauthorized" in lower or "401" in lower:
         if module.type == "openstack_mcp":
-            steps.append("OpenStack-Zugang fuer diesen Harbor-Benutzer erneuern: projektgescopten User-Token speichern.")
+            steps.append("Renew OpenStack access for this Harbor user: save a project-scoped user token.")
         elif module.type == "netbox_mcp":
-            steps.append("NetBox API anonym aus dem Harbor-Netz erreichbar machen; URL, sichere Netze und read-only API-Rechte pruefen.")
+            steps.append("Make the NetBox API reachable anonymously from the Harbor network; check the URL, trusted networks, and read-only API permissions.")
         else:
-            steps.append("API-Token/Auth-Konfiguration des Moduls pruefen und danach Browse erneut ausfuehren.")
+            steps.append("Check the module API token/auth configuration, then rerun Browse.")
 
     if "projektgescoped" in lower or "project-scoped" in lower or "project scoped" in lower:
-        steps.append("OpenStack-Token ist nicht projektgescopet: Token direkt im Zielprojekt erzeugen und neu speichern.")
+        steps.append("The OpenStack token is not project-scoped: create the token directly in the target project and save it again.")
 
     if "connection refused" in lower or "connect call failed" in lower:
-        steps.append("Zielprozess lauscht nicht auf dem konfigurierten Host/Port; Port, Service und Firewall pruefen.")
+        steps.append("The target process is not listening on the configured host/port; check the port, service, and firewall.")
 
     if "temporary failure in name resolution" in lower or "name or service not known" in lower or "dns" in lower:
-        steps.append("DNS/URL des Upstreams pruefen; vom Harbor-Host muss der Name aufloesbar sein.")
+        steps.append("Check upstream DNS/URL; the name must resolve from the Harbor host.")
 
     if "timed out" in lower or "timeout" in lower:
-        steps.append("Upstream antwortet zu langsam oder ist blockiert; Erreichbarkeit pruefen und ggf. Modul-Timeout erhoehen.")
+        steps.append("The upstream is too slow or blocked; check reachability and increase the module timeout if needed.")
 
     if "browse" in failed_keys or "test" in failed_keys:
-        steps.append("Browse-JSON und Modultest vergleichen: Discovery muss Tools liefern und der Test muss aussagekraeftige Nutzdaten zurueckgeben.")
+        steps.append("Compare Browse JSON and the module test: discovery must return tools and the test must return meaningful data.")
 
     if not steps and failed_keys:
-        steps.append("Raw JSON, Health-Block und Log-Auszug in dieser Ansicht pruefen; dort steht die letzte technische Ursache.")
+        steps.append("Check the raw JSON, health block, and log excerpt in this view; they contain the latest technical cause.")
     if not steps:
-        steps.append("Kein Connect-Problem sichtbar. Falls der Chat trotzdem scheitert, Rollen-/Tool-Berechtigungen und Prompt-Routing pruefen.")
+        steps.append("No Connect problem is visible. If chat still fails, check role/tool permissions and prompt routing.")
 
     deduped: list[str] = []
     for step in steps:
@@ -1528,23 +1528,23 @@ def module_connect_diagnostics(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
 
     status = module_status(module)
     validation_errors = status.get("validation_errors") or []
     checks: list[dict[str, Any]] = [
         _diagnostic_check(
             "config",
-            "Konfiguration",
+            "Configuration",
             not validation_errors,
-            "Konfiguration ist gueltig." if not validation_errors else "Konfiguration blockiert das Modul.",
+            "Configuration is valid." if not validation_errors else "Configuration blocks the module.",
             detail=validation_errors,
         ),
         _diagnostic_check(
             "enabled",
-            "Aktivierung",
+            "Activation",
             bool(module.enabled),
-            "Modul ist aktiviert." if module.enabled else "Modul ist deaktiviert.",
+            "Module is enabled." if module.enabled else "Module is disabled.",
             severity="warning" if not module.enabled else "ok",
         ),
     ]
@@ -1556,9 +1556,9 @@ def module_connect_diagnostics(
                 "worker",
                 "Worker",
                 running,
-                "Lokaler Worker antwortet auf Health-Checks."
+                "Local worker responds to health checks."
                 if running
-                else "Lokaler Worker antwortet nicht auf Health-Checks.",
+                else "Local worker does not respond to health checks.",
                 detail={"pid": status.get("pid"), "health": status.get("health")},
             )
         )
@@ -1568,7 +1568,7 @@ def module_connect_diagnostics(
                 "worker",
                 "Worker",
                 True,
-                "Remote-Modul braucht keinen Harbor-Worker.",
+                "Remote module does not need a Harbor worker.",
                 severity="ok",
                 detail={"endpoint": _connect_endpoint(module)},
             )
@@ -1581,9 +1581,9 @@ def module_connect_diagnostics(
                 "credential",
                 "OpenStack Token",
                 bool(effective_openstack_token),
-                "Projektgescoptes User-Token ist fuer diesen Diagnoseaufruf vorhanden."
+                "A project-scoped user token is present for this diagnostics run."
                 if effective_openstack_token
-                else "Fuer diesen Harbor-Benutzer ist kein OpenStack User-Token hinterlegt.",
+                else "No OpenStack user token is stored for this Harbor user.",
                 detail={
                     "token_present": bool(effective_openstack_token),
                     "token_source": "request_or_user_secret" if openstack_token.strip() else "environment" if effective_openstack_token else "missing",
@@ -1598,7 +1598,7 @@ def module_connect_diagnostics(
                 "auth_mode",
                 "NetBox Auth",
                 True,
-                "NetBox wird anonym und read-only abgefragt.",
+                "NetBox is queried anonymously and read-only.",
                 severity="ok",
                 detail={"authentication": "anonymous", "read_only": True, "netbox_url": _netbox_url(module)},
             )
@@ -1612,9 +1612,9 @@ def module_connect_diagnostics(
                 "index",
                 "Index",
                 indexed,
-                f"Index vorhanden mit {index.get('document_count', 0)} Dokument(en)."
+                f"Index exists with {index.get('document_count', 0)} document(s)."
                 if indexed
-                else "Noch kein lokaler Suchindex vorhanden.",
+                else "No local search index exists yet.",
                 severity="warning" if not indexed else "ok",
                 detail=index,
             )
@@ -1626,11 +1626,11 @@ def module_connect_diagnostics(
         checks.append(
             _diagnostic_check(
                 "fields",
-                "Feldkatalog",
+                "Field Catalog",
                 field_ok,
-                f"Feldkatalog enthaelt {field_catalog.get('resource_count', 0)} Ressource(n)."
+                f"Field catalog contains {field_catalog.get('resource_count', 0)} resource(s)."
                 if field_ok
-                else "Feldkatalog ist leer oder fehlerhaft.",
+                else "Field catalog is empty or invalid.",
                 severity="warning" if not field_ok else "ok",
                 detail=field_catalog,
             )
@@ -1651,11 +1651,11 @@ def module_connect_diagnostics(
         checks.append(
             _diagnostic_check(
                 "diagnose",
-                "Diagnose",
+                "Diagnostics",
                 bool(diagnostics.get("ok")),
-                "Diagnose meldet keine technischen Fehler."
+                "Diagnostics report no technical errors."
                 if diagnostics.get("ok")
-                else (_join_error_fragments(diagnostics) or "Diagnose hat Fehler erkannt."),
+                else (_join_error_fragments(diagnostics) or "Diagnostics found errors."),
                 detail={
                     "errors": diagnostics.get("errors", []),
                     "hint": diagnostics.get("hint", ""),
@@ -1670,13 +1670,13 @@ def module_connect_diagnostics(
             checks.append(
                 _diagnostic_check(
                     "source",
-                    "Upstream-Daten",
+                    "Upstream Data",
                     source_ok,
-                    f"{source_tool or 'Source discovery'} liefert verwertbare Nutzdaten."
+                    f"{source_tool or 'Source discovery'} returns usable data."
                     if source_ok
                     else (
-                        f"{source_tool or 'Source discovery'} ist fehlgeschlagen: "
-                        f"{source_diagnostics.get('error') or _join_error_fragments(source_diagnostics) or 'unbekannter Fehler'}"
+                        f"{source_tool or 'Source discovery'} failed: "
+                        f"{source_diagnostics.get('error') or _join_error_fragments(source_diagnostics) or 'unknown error'}"
                     ),
                     detail=source_diagnostics,
                 )
@@ -1699,15 +1699,15 @@ def module_connect_diagnostics(
             openstack_user=openstack_user,
         )
         if test_result.get("ok"):
-            test_message = str(test_result.get("message") or "Modultest erfolgreich.")
+            test_message = str(test_result.get("message") or "Module test succeeded.")
         elif test_result.get("connected"):
-            test_message = str(test_result.get("message") or "Verbindung steht, Ausgabe ist aber nicht aussagekraeftig.")
+            test_message = str(test_result.get("message") or "Connection is up, but the output is not meaningful.")
         else:
-            test_message = str(test_result.get("message") or "Modultest konnte keine Verbindung herstellen.")
+            test_message = str(test_result.get("message") or "Module test could not connect.")
         checks.append(
             _diagnostic_check(
                 "test",
-                "Modultest",
+                "Module Test",
                 bool(test_result.get("ok")),
                 test_message,
                 severity="warning" if test_result.get("connected") and not test_result.get("ok") else None,
@@ -1737,9 +1737,9 @@ def module_connect_diagnostics(
             checks.append(
                 _diagnostic_check(
                     "default_probes",
-                    "Fachliche Probes",
+                    "Domain Probes",
                     bool(probes.get("ok")),
-                    str(probes.get("summary") or "Default-Probes ausgefuehrt."),
+                    str(probes.get("summary") or "Default probes executed."),
                     severity="ok" if probes.get("ok") else "warning" if ok_probe_count else "error",
                     detail={
                         "probe_count": probe_count,
@@ -1762,12 +1762,12 @@ def module_connect_diagnostics(
     )
     next_steps = _connect_next_steps(module, checks, error_text)
     if severity == "ok":
-        summary = "Connect-Pfad ist sauber: Status, Browse und Test liefern verwertbare Antworten." if run_checks else "Basisstatus ohne erkennbare Connect-Fehler."
+        summary = "Connect path is clean: status, Browse, and test return usable responses." if run_checks else "Base status has no visible Connect errors."
     elif severity == "warning":
-        summary = "Connect-Pfad ist erreichbar, aber es gibt Warnungen oder unvollstaendige Nutzdaten."
+        summary = "Connect path is reachable, but there are warnings or incomplete data."
     else:
         failing = next((check for check in checks if not check.get("ok") and check.get("severity") != "warning"), None)
-        summary = failing["message"] if failing else "Connect-Diagnose hat blockierende Fehler erkannt."
+        summary = failing["message"] if failing else "Connect diagnostics found blocking errors."
 
     return {
         "ok": severity != "error",
@@ -1785,14 +1785,14 @@ def module_connect_diagnostics(
         "data_flow": {
             "chat_path": [
                 "Browser/CLI",
-                "Harbor API /api/chat oder /api/chat/stream",
+                "Harbor API /api/chat or /api/chat/stream",
                 "_context_for_chat",
                 "execute_module",
                 "Worker/MCP Upstream",
-                "LLM nur zur Formulierung, wenn kein direkter deterministischer Antwortpfad greift",
+                "LLM only for wording when no direct deterministic answer path applies",
             ],
             "diagnostic_path": [
-                "Connect Diagnose",
+                "Connect Diagnostics",
                 "module_connect_diagnostics",
                 "module_default_probes",
                 "execute_module",
@@ -1811,9 +1811,9 @@ def module_connect_diagnostics(
 def module_field_catalog(module_id: str) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     if not _field_catalog_service(module):
-        raise ValueError(f"Feldkatalog ist fuer Modultyp {module.type} nicht verfuegbar.")
+        raise ValueError(f"Field catalog is not available for module type {module.type}.")
     return load_field_catalog(module.id)
 
 
@@ -1847,10 +1847,10 @@ def refresh_module_field_catalog(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     service = _field_catalog_service(module)
     if not service:
-        raise ValueError(f"Feldkatalog ist fuer Modultyp {module.type} nicht verfuegbar.")
+        raise ValueError(f"Field catalog is not available for module type {module.type}.")
     limit = max(1, min(500, int(limit or 25)))
     errors: list[str] = []
     try:
@@ -1858,8 +1858,8 @@ def refresh_module_field_catalog(
             effective_openstack_token = openstack_token.strip() or os.getenv("OS_TOKEN", "").strip()
             if not effective_openstack_token and not openstack_user.strip():
                 raise ValueError(
-                    "OpenStack Credentials fehlen fuer diesen Benutzer. "
-                    "Projektgescopten User-Token im OpenStack-Dialog speichern."
+                    "OpenStack credentials are missing for this user. "
+                    "Save a project-scoped user token in the OpenStack dialog."
                 )
             execute_module(
                 module.id,
@@ -1966,7 +1966,7 @@ def module_test(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     action, payload, expected_terms = _default_test_config(module)
     if module.test_action.strip():
         action = module.test_action.strip()
@@ -2014,9 +2014,9 @@ def module_test(
                 meaningful_output = bool(output_summary.strip())
             if meaningful_output and expected_terms:
                 meaningful_output = _contains_expected_terms(output_summary, expected_terms)
-        message = "Modultest erfolgreich." if connected and meaningful_output else "Verbindung ok, aber Ausgabe ist nicht aussagekraeftig genug."
+        message = "Module test succeeded." if connected and meaningful_output else "Connection is OK, but the output is not meaningful enough."
         if not connected:
-            message = "Verbindungstest fehlgeschlagen."
+            message = "Connection test failed."
         update_module_runtime_state(
             module.id,
             last_test_at=_timestamp(),
@@ -2099,7 +2099,7 @@ def _mcp_request(
     if "error" in payload:
         detail = _redact_mapping(payload["error"])
         raise ValueError(
-            f"MCP-Fehler {method}: "
+            f"MCP error {method}: "
             f"{json.dumps(detail, ensure_ascii=False, sort_keys=True, default=str)}"
         )
     return payload, next_session_id
@@ -2285,8 +2285,8 @@ def discover_remote_module(
             module.id,
             last_discovery_at=_timestamp(),
             last_discovery_ok=False,
-            last_discovery_error="Discovery ohne erfolgreiche Antwort.",
-            last_error="Discovery ohne erfolgreiche Antwort.",
+            last_discovery_error="Discovery produced no successful response.",
+            last_error="Discovery produced no successful response.",
         )
     return {
         "ok": bool(successful),
@@ -2358,8 +2358,8 @@ def discover_standard_mcp_module(
                         and discovery.get("source") == "unavailable"
                     ):
                         raise ValueError(
-                            "NetBox Upstream nicht erreichbar: "
-                            + str(discovery.get("error") or "Discovery nicht verfuegbar")
+                            "NetBox upstream is unreachable: "
+                            + str(discovery.get("error") or "Discovery unavailable")
                         )
     except Exception as exc:
         attempts.append({"label": "mcp", "ok": False, "error": str(exc)})
@@ -2414,17 +2414,17 @@ def discover_standard_mcp_module(
 def start_module(module_id: str) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     if module.transport != "local":
-        return {"ok": True, "message": "Remote-Modul hat keinen lokalen Prozess.", "status": module_status(module)}
+        return {"ok": True, "message": "Remote module has no local process.", "status": module_status(module)}
     update_module_runtime_state(module.id, last_start_attempt_at=_timestamp(), last_start_error="")
     if read_module_pid(module_id) is not None:
-        return {"ok": True, "message": "Modul laeuft bereits.", "status": module_status(module)}
+        return {"ok": True, "message": "Module is already running.", "status": module_status(module)}
     if _module_health_reachable(module, timeout=0.5):
-        _append_module_log(module.id, "Health-Endpoint antwortet bereits, aber die PID-Datei fehlt.")
+        _append_module_log(module.id, "Health endpoint already responds, but the PID file is missing.")
         return {
             "ok": True,
-            "message": "Modul antwortet bereits, aber die PID-Datei fehlt.",
+            "message": "Module already responds, but the PID file is missing.",
             "status": module_status(module),
         }
     module = _ensure_startable_port(module)
@@ -2432,11 +2432,11 @@ def start_module(module_id: str) -> dict[str, Any]:
     try:
         process = _spawn_worker(module)
     except Exception as exc:
-        _append_module_log(module.id, f"Worker-Start fehlgeschlagen: {exc}")
+        _append_module_log(module.id, f"Worker start failed: {exc}")
         update_module_runtime_state(module.id, last_start_error=str(exc), last_error=str(exc))
         return {
             "ok": False,
-            "message": f"Worker konnte nicht gestartet werden: {exc}",
+            "message": f"Worker could not be started: {exc}",
             "status": module_status(module),
             "log_tail": _read_module_log_tail(module.id),
         }
@@ -2452,7 +2452,7 @@ def start_module(module_id: str) -> dict[str, Any]:
             "status": module_status(module),
             "log_tail": _read_module_log_tail(module.id),
         }
-    _append_module_log(module.id, f"Worker ist erreichbar auf {module.host}:{module.port} (PID {process.pid})")
+    _append_module_log(module.id, f"Worker is reachable on {module.host}:{module.port} (PID {process.pid})")
     state = load_module_runtime_state(module.id)
     update_module_runtime_state(
         module.id,
@@ -2462,16 +2462,16 @@ def start_module(module_id: str) -> dict[str, Any]:
         last_error="",
         restart_count=int(state.get("restart_count", 0)),
     )
-    return {"ok": True, "message": "Modul gestartet.", "status": module_status(module)}
+    return {"ok": True, "message": "Module started.", "status": module_status(module)}
 
 
 def stop_module(module_id: str) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
     pid = read_module_pid(module_id)
     if pid is None:
-        return {"ok": True, "message": "Modul lief nicht.", "status": module_status(module)}
+        return {"ok": True, "message": "Module was not running.", "status": module_status(module)}
     os.killpg(pid, signal.SIGTERM)
     for _ in range(15):
         time.sleep(0.2)
@@ -2481,7 +2481,7 @@ def stop_module(module_id: str) -> dict[str, Any]:
         os.killpg(pid, signal.SIGKILL)
     module_pid_path(module_id).unlink(missing_ok=True)
     update_module_runtime_state(module.id, last_stopped_at=_timestamp())
-    return {"ok": True, "message": "Modul gestoppt.", "status": module_status(module)}
+    return {"ok": True, "message": "Module stopped.", "status": module_status(module)}
 
 
 def restart_module(module_id: str) -> dict[str, Any]:
@@ -2501,7 +2501,7 @@ def execute_module(
 ) -> dict[str, Any]:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Unbekanntes Modul: {module_id}")
+        raise ValueError(f"Unknown module: {module_id}")
 
     if module.transport == "local" and module.type in {"docs", "maildir"}:
         return worker_execute(module, action, payload)
@@ -2536,8 +2536,8 @@ def execute_module(
                     effective_openstack_token = os.getenv("OS_TOKEN", "").strip()
                 if module.type == "openstack_mcp" and not effective_openstack_token and not openstack_user.strip():
                     raise ValueError(
-                        "OpenStack Credentials fehlen fuer diesen Benutzer. "
-                        "Projektgescopten User-Token im OpenStack-Dialog speichern."
+                        "OpenStack credentials are missing for this user. "
+                        "Save a project-scoped user token in the OpenStack dialog."
                     )
                 result = _call_mcp_tool(
                     module,
@@ -2564,7 +2564,7 @@ def execute_module(
             raise
 
     if module.transport != "local":
-        raise ValueError(f"Nicht unterstuetztes Transportmodell fuer {module.id}")
+        raise ValueError(f"Unsupported transport model for {module.id}")
     with httpx.Client(timeout=module.timeout_seconds) as client:
         response = client.post(
             f"{module_url(module)}/execute",
@@ -2830,7 +2830,7 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             _query_cache_set(module, action, {"query": query, "top_k": top_k}, index.built_at, result)
             update_module_runtime_state(module.id, last_query_duration_ms=round((time.monotonic() - started_at) * 1000.0, 2))
             return result
-        raise ValueError(f"Aktion fuer docs nicht bekannt: {action}")
+        raise ValueError(f"Unknown docs action: {action}")
     if module.type == "maildir":
         index_path = module_index_path(module.id)
         if action == "health":
@@ -2927,8 +2927,8 @@ def worker_execute(module: ModuleConfig, action: str, payload: dict[str, Any]) -
             _query_cache_set(module, action, {"query": query, "top_k": top_k}, index.built_at, result)
             update_module_runtime_state(module.id, last_query_duration_ms=round((time.monotonic() - started_at) * 1000.0, 2))
             return result
-        raise ValueError(f"Aktion fuer maildir nicht bekannt: {action}")
-    raise ValueError(f"Worker-Typ nicht unterstuetzt: {module.type}")
+        raise ValueError(f"Unknown maildir action: {action}")
+    raise ValueError(f"Unsupported worker type: {module.type}")
 
 
 def parse_json_payload(raw: str) -> dict[str, Any]:
@@ -2937,5 +2937,5 @@ def parse_json_payload(raw: str) -> dict[str, Any]:
         return {}
     parsed = json.loads(raw_text)
     if not isinstance(parsed, dict):
-        raise ValueError("Payload muss ein JSON-Objekt sein.")
+        raise ValueError("Payload must be a JSON object.")
     return parsed

@@ -10,7 +10,7 @@ from app.sources import configure_document_sources
 
 class ReferenceImportTests(unittest.TestCase):
     def test_configure_document_sources_rejects_missing_directories(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Dokumentverzeichnis nicht gefunden"):
+        with self.assertRaisesRegex(ValueError, "Document directory not found"):
             configure_document_sources("/missing/operations", "/missing/customer")
 
     def test_configure_document_sources_uses_markdown_repositories(self) -> None:

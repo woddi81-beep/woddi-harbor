@@ -81,7 +81,7 @@ app = typer.Typer(
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=False,
-    help="woddi-harbor control hub. Ohne Unterbefehl startet die interaktive Konsole.",
+    help="woddi-harbor control hub. Without a subcommand, starts the interactive console.",
 )
 module_app = typer.Typer(no_args_is_help=True)
 llm_app = typer.Typer(no_args_is_help=True)
@@ -122,15 +122,15 @@ def _print_update_result(result: dict[str, object]) -> None:
     if result.get("skipped"):
         reason = str(result.get("reason", "unknown"))
         if reason != "disabled":
-            console.print(f"[harbor] Git-Update uebersprungen: {reason}")
+            console.print(f"[harbor] Git update skipped: {reason}")
         return
     if result.get("ok") and result.get("changed"):
-        console.print(f"[harbor] Git-Update angewendet: {result.get('before')} -> {result.get('after')}")
+        console.print(f"[harbor] Git update applied: {result.get('before')} -> {result.get('after')}")
     elif result.get("ok"):
-        console.print("[harbor] Git-Update: bereits aktuell")
+        console.print("[harbor] Git update: already current")
     else:
         detail = result.get("stderr") or result.get("reason") or "unknown"
-        console.print(f"[harbor] Git-Update fehlgeschlagen: {detail}")
+        console.print(f"[harbor] Git update failed: {detail}")
 
 
 def _exec_serve(host: Optional[str], port: Optional[int]) -> None:
@@ -175,7 +175,7 @@ def root(
     if ctx.invoked_subcommand is not None:
         return
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        console.print("Interaktive Konsole benötigt ein Terminal. Nutze `./harbor.sh --help` für Automatisierung.")
+        console.print("Interactive console requires a terminal. Use `./harbor.sh --help` for automation.")
         raise typer.Exit(code=2)
     _open_console()
 
@@ -307,9 +307,9 @@ def backup_create(label: str = typer.Option("manual")) -> None:
 @backup_app.command("restore")
 def backup_restore(source: str = typer.Argument(...), yes: bool = typer.Option(False, "--yes")) -> None:
     if not yes:
-        raise typer.BadParameter("Restore ist destruktiv. Bestaetige explizit mit --yes.")
+        raise typer.BadParameter("Restore is destructive. Confirm explicitly with --yes.")
     safety_backup = restore_backup(source)
-    console.print(f"Restore abgeschlossen. Safety-Backup: {safety_backup}")
+    console.print(f"Restore complete. Safety backup: {safety_backup}")
 
 
 @source_app.command("list")
@@ -369,7 +369,7 @@ def runtime_restart_all() -> None:
 def runtime_uninstall(yes: bool = typer.Option(False, "--yes", help="Confirm removal of managed runtime services.")) -> None:
     """Stop and remove Harbor runtime services while preserving all data."""
     if not yes:
-        raise typer.BadParameter("Bestaetige das Entfernen der Runtime-Dienste mit --yes.")
+        raise typer.BadParameter("Confirm removal of runtime services with --yes.")
     result = uninstall_runtime()
     console.print_json(json.dumps(result, ensure_ascii=False))
     if not result["ok"]:
@@ -439,7 +439,7 @@ def onboard(
     if mcp_base_url:
         upsert_module(ModuleConfig(id="mcp-remote", type="mcp_http", transport="remote", base_url=mcp_base_url))
     sync_service_profiles()
-    console.print(Panel.fit("Onboarding gespeichert. Danach `./harbor.sh console` starten.", title="Onboard"))
+    console.print(Panel.fit("Onboarding saved. Then start `./harbor.sh console`.", title="Onboard"))
 
 
 @app.command("init-admin")
@@ -455,14 +455,14 @@ def init_admin(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     if load_users():
-        raise typer.BadParameter("Benutzer existieren bereits. Nutze `./harbor.sh user add`.")
+        raise typer.BadParameter("Users already exist. Use `./harbor.sh user add`.")
     if generate:
         password = secrets.token_urlsafe(32)
     else:
         password = getpass.getpass("Password: ")
         password_confirm = getpass.getpass("Confirm Password: ")
         if password != password_confirm:
-            raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+            raise typer.BadParameter("Passwords do not match.")
     save_users([HarborUser(username=username, password_hash=hash_password(password), role=parsed_role, enabled=True)])
     if generate:
         password_path = SECRETS_DIR / "bootstrap-admin-password"
@@ -470,12 +470,12 @@ def init_admin(
         password_path.chmod(0o600)
         console.print(
             Panel.fit(
-                f"Initialer Benutzer angelegt: {username}\nBootstrap-Passwort: {password_path}",
+                f"Initial user created: {username}\nBootstrap password: {password_path}",
                 title="Auth",
             )
         )
     else:
-        console.print(Panel.fit(f"Initialer Benutzer angelegt: {username}", title="Auth"))
+        console.print(Panel.fit(f"Initial user created: {username}", title="Auth"))
 
 
 @app.command("check-prerequisites")
@@ -580,7 +580,7 @@ def server_set(
     """Persist the Harbor listen address and port."""
     normalized_host = host.strip()
     if not normalized_host:
-        raise typer.BadParameter("Host darf nicht leer sein.")
+        raise typer.BadParameter("Host must not be empty.")
     settings = load_settings()
     settings.host = normalized_host
     settings.port = port
@@ -617,7 +617,7 @@ def chat(message: str, modules: str = "") -> None:
     llm_messages, used_modules = _build_messages(settings, message, selected_modules or None)
     response = complete_chat(settings, llm_messages)
     reply = extract_chat_content(response)
-    console.print(Panel(reply or "(leer)", title=f"Harbor Reply | modules={','.join(used_modules) or '-'}"))
+    console.print(Panel(reply or "(empty)", title=f"Harbor Reply | modules={','.join(used_modules) or '-'}"))
 
 
 @llm_app.command("set")
@@ -644,7 +644,7 @@ def llm_set(
         ),
     )
     save_settings(updated)
-    console.print(Panel.fit(f"LLM gesetzt: {model} @ {base_url}", title="LLM"))
+    console.print(Panel.fit(f"LLM set: {model} @ {base_url}", title="LLM"))
 
 
 @llm_app.command("check")
@@ -685,7 +685,7 @@ def module_add_docs(
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
-    console.print(Panel.fit(f"Docs-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"Docs module registered: {module_id}", title="Module"))
 
 
 @module_app.command("add-maildir")
@@ -711,7 +711,7 @@ def module_add_maildir(
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
-    console.print(Panel.fit(f"Mail-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"Mail module registered: {module_id}", title="Module"))
 
 
 @module_app.command("add-mcp")
@@ -743,16 +743,16 @@ def module_add_mcp(
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
-    console.print(Panel.fit(f"MCP-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"MCP module registered: {module_id}", title="Module"))
 
 
 @module_app.command("add-netbox-mcp")
 def module_add_netbox_mcp(
     module_id: str = typer.Argument("netbox"),
     name: str = typer.Option("NetBox MCP"),
-    netbox_url: str = typer.Option(..., help="Basis-URL der NetBox-Instanz, z. B. https://netbox.example.com"),
+    netbox_url: str = typer.Option(..., help="Base URL of the NetBox instance, e.g. https://netbox.example.com"),
     host: str = typer.Option("127.0.0.1"),
-    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
+    port: int = typer.Option(0, help="Optional local port; default is dynamic"),
     timeout_seconds: float = typer.Option(30.0),
 ) -> None:
     """Register an anonymous read-only NetBox MCP server managed by Harbor."""
@@ -780,14 +780,14 @@ def module_add_netbox_mcp(
             "netbox_url": netbox_url,
             "upstream_repo": "https://github.com/netboxlabs/netbox-mcp-server",
         },
-        notes="Harbor startet den anonymen, strikt read-only NetBox MCP Worker.",
+        notes="Harbor starts the anonymous, strictly read-only NetBox MCP worker.",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
     delete_module_named_secret(module_id, "netbox_token")
-    console.print(Panel.fit(f"NetBox MCP-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"NetBox MCP module registered: {module_id}", title="Module"))
 
 
 @module_app.command("add-sap-docs-mcp")
@@ -795,9 +795,9 @@ def module_add_sap_docs_mcp(
     module_id: str = typer.Argument("sap_docs"),
     name: str = typer.Option("SAP Docs MCP"),
     host: str = typer.Option("127.0.0.1"),
-    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
+    port: int = typer.Option(0, help="Optional local port; default is dynamic"),
     timeout_seconds: float = typer.Option(30.0),
-    docs_url: str = typer.Option(..., help="SAP Help Dokumentations-URL"),
+    docs_url: str = typer.Option(..., help="SAP Help documentation URL"),
 ) -> None:
     """Register a local SAP documentation MCP server managed by Harbor."""
     module = ModuleConfig(
@@ -814,13 +814,13 @@ def module_add_sap_docs_mcp(
         test_action="discover",
         test_expect_contains=["search_sap_docs"],
         settings={"docs_url": docs_url},
-        notes="Harbor startet den lokalen SAP Docs MCP Worker und exponiert /mcp sowie /health.",
+        notes="Harbor starts the local SAP Docs MCP worker and exposes /mcp and /health.",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
-    console.print(Panel.fit(f"SAP Docs MCP-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"SAP Docs MCP module registered: {module_id}", title="Module"))
 
 
 @module_app.command("add-openstack-mcp")
@@ -828,8 +828,8 @@ def module_add_openstack_mcp(
     module_id: str = typer.Argument("openstack"),
     base_url: str = typer.Option(..., help="HTTP MCP Endpoint, z. B. http://127.0.0.1:8080/mcp"),
     name: str = typer.Option("OpenStack MCP"),
-    api_key: str = typer.Option("", help="Optionaler Bearer Token fuer den MCP Endpoint"),
-    api_key_env: str = typer.Option("", help="ENV-Name fuer den MCP Bearer Token"),
+    api_key: str = typer.Option("", help="Optional bearer token for the MCP endpoint"),
+    api_key_env: str = typer.Option("", help="ENV name for the MCP bearer token"),
     timeout_seconds: float = typer.Option(30.0),
 ) -> None:
     """Register an external OpenStack MCP endpoint."""
@@ -856,13 +856,13 @@ def module_add_openstack_mcp(
         test_payload={},
         test_expect_contains=["list_servers"],
         settings={"upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops"},
-        notes="Remote MCP endpoint fuer einen OpenStack MCP Server.",
+        notes="Remote MCP endpoint for an OpenStack MCP server.",
     )
     errors = validate_module_config(module)
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(module)
-    console.print(Panel.fit(f"OpenStack MCP-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"OpenStack MCP module registered: {module_id}", title="Module"))
 
 
 @module_app.command("add-openstack-local-mcp")
@@ -870,21 +870,21 @@ def module_add_openstack_local_mcp(
     module_id: str = typer.Argument("openstack"),
     name: str = typer.Option("OpenStack MCP"),
     host: str = typer.Option("127.0.0.1"),
-    port: int = typer.Option(0, help="Optionaler lokaler Port; Standard ist dynamisch"),
+    port: int = typer.Option(0, help="Optional local port; default is dynamic"),
     timeout_seconds: float = typer.Option(30.0),
     auth_url: str = typer.Option("", help="OpenStack Auth URL"),
     auth_url_env: str = typer.Option("OS_AUTH_URL"),
     region_name: str = typer.Option("", help="OpenStack Region"),
     region_name_env: str = typer.Option("OS_REGION_NAME"),
-    token: str = typer.Option("", help="Projektgescoptes OpenStack User-Token"),
-    token_env: str = typer.Option("OS_TOKEN", help="ENV-Name fuer das User-Token"),
-    user: str = typer.Option("", help="Harbor-Benutzer, dem das Token exklusiv gehoert"),
+    token: str = typer.Option("", help="Project-scoped OpenStack user token"),
+    token_env: str = typer.Option("OS_TOKEN", help="ENV name for the user token"),
+    user: str = typer.Option("", help="Harbor user who exclusively owns the token"),
 ) -> None:
     """Register a token-only local OpenStack MCP server managed by Harbor."""
     token_value = token.strip() if isinstance(token, str) else ""
     normalized_user = user.strip() if isinstance(user, str) else ""
     if token_value and not normalized_user:
-        raise typer.BadParameter("--user ist erforderlich, wenn --token gesetzt wird.")
+        raise typer.BadParameter("--user is required when --token is set.")
     token_env_name = token_env.strip() if isinstance(token_env, str) else ""
     if normalized_user and not token_value and token_env_name:
         token_value = os.getenv(token_env_name, "").strip()
@@ -917,7 +917,7 @@ def module_add_openstack_local_mcp(
             "region_name_env": region_name_env,
             "upstream_repo": "https://github.com/call518/MCP-OpenStack-Ops",
         },
-        notes="Harbor nutzt ausschliesslich den Projektkontext des projektgescopten User-Tokens.",
+        notes="Harbor uses only the project context of the project-scoped user token.",
     )
     errors = validate_module_config(module)
     if errors:
@@ -928,35 +928,35 @@ def module_add_openstack_local_mcp(
     delete_module_named_secret(module_id, "openstack_token")
     delete_module_named_secret(module_id, "openstack_application_credential_secret")
     delete_module_named_secret(module_id, "openstack_password")
-    console.print(Panel.fit(f"Lokales OpenStack MCP-Modul registriert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"Local OpenStack MCP module registered: {module_id}", title="Module"))
 
 
 @module_app.command("set")
 def module_set(
     module_id: str,
-    name: str = typer.Option("", help="Neuer Anzeigename"),
+    name: str = typer.Option("", help="New display name"),
     enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled"),
-    provider: str = typer.Option("", help="Provider, z. B. netbox-mcp-server"),
+    provider: str = typer.Option("", help="Provider, e.g. netbox-mcp-server"),
     base_url: str = typer.Option("", help="Remote URL"),
-    path: str = typer.Option("", help="Lokaler Pfad"),
-    host: str = typer.Option("", help="Lokaler Host"),
-    port: int = typer.Option(-1, help="Lokaler Port"),
-    top_k: int = typer.Option(-1, help="Top-K fuer Suchmodule"),
+    path: str = typer.Option("", help="Local path"),
+    host: str = typer.Option("", help="Local host"),
+    port: int = typer.Option(-1, help="Local port"),
+    top_k: int = typer.Option(-1, help="Top-K for search modules"),
     timeout_seconds: float = typer.Option(-1.0),
     api_key: str = typer.Option(""),
     api_key_env: str = typer.Option(""),
     remote_protocol: str = typer.Option("", help="auto|harbor_execute|mcp"),
-    notes: str = typer.Option("", help="Notizen"),
-    tool_names: str = typer.Option("", help="Kommagetrennte Tool-Namen"),
-    test_action: str = typer.Option("", help="Probe-Aktion fuer module test"),
-    test_payload: str = typer.Option("", help="Probe-Payload als JSON-Objekt"),
-    test_expect_contains: str = typer.Option("", help="Kommagetrennte Begriffe, die in der Ausgabe vorkommen sollen"),
-    settings_json: str = typer.Option("", help="Zusatzkonfiguration als JSON-Objekt"),
+    notes: str = typer.Option("", help="Notes"),
+    tool_names: str = typer.Option("", help="Comma-separated tool names"),
+    test_action: str = typer.Option("", help="Probe action for module test"),
+    test_payload: str = typer.Option("", help="Probe payload as JSON object"),
+    test_expect_contains: str = typer.Option("", help="Comma-separated terms expected in the output"),
+    settings_json: str = typer.Option("", help="Additional configuration as JSON object"),
 ) -> None:
     """Update an existing module or addon configuration."""
     module = find_module(module_id)
     if module is None:
-        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
+        raise typer.BadParameter(f"Module not found: {module_id}")
     updated = replace(module)
     if name:
         updated.name = name.strip()
@@ -1001,7 +1001,7 @@ def module_set(
     if errors:
         raise typer.BadParameter(" ".join(errors))
     upsert_module(updated)
-    console.print(Panel.fit(f"Modul aktualisiert: {module_id}", title="Module"))
+    console.print(Panel.fit(f"Module updated: {module_id}", title="Module"))
 
 
 @module_app.command("remove")
@@ -1013,8 +1013,8 @@ def module_remove(module_id: str) -> None:
         pass
     removed = remove_module(module_id)
     if not removed:
-        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
-    console.print(Panel.fit(f"Modul entfernt: {module_id}", title="Module"))
+        raise typer.BadParameter(f"Module not found: {module_id}")
+    console.print(Panel.fit(f"Module removed: {module_id}", title="Module"))
 
 
 @module_app.command("start")
@@ -1042,15 +1042,15 @@ def module_restart(module_id: str) -> None:
 def module_call(
     module_id: str,
     action: str,
-    payload: str = typer.Argument("{}", help="JSON-Payload als Positionsargument"),
-    payload_option: Optional[str] = typer.Option(None, "--payload", help="JSON-Payload als Option"),
+    payload: str = typer.Argument("{}", help="JSON payload as positional argument"),
+    payload_option: Optional[str] = typer.Option(None, "--payload", help="JSON payload as option"),
 ) -> None:
     """Call a module action."""
     try:
         effective_payload = payload_option if payload_option is not None else payload
         result = execute_module(module_id, action, parse_json_payload(effective_payload))
     except Exception as exc:
-        console.print(f"[red]Modulaufruf fehlgeschlagen:[/red] {exc}")
+        console.print(f"[red]Module call failed:[/red] {exc}")
         raise typer.Exit(code=2) from exc
     console.print_json(json.dumps(result, ensure_ascii=False))
 
@@ -1060,7 +1060,7 @@ def module_logs(module_id: str, lines: int = 50) -> None:
     """Show recent module logs."""
     log_path = module_log_path(module_id)
     if not log_path.exists():
-        raise typer.BadParameter(f"Kein Log fuer {module_id}: {log_path}")
+        raise typer.BadParameter(f"No log for {module_id}: {log_path}")
     text = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     console.print(Panel("\n".join(text[-lines:]), title=f"Logs {module_id}"))
 
@@ -1084,13 +1084,13 @@ def module_discover(module_id: str) -> None:
     """Run capability discovery for a remote or local MCP module."""
     module = find_module(module_id)
     if module is None:
-        raise typer.BadParameter(f"Modul nicht gefunden: {module_id}")
+        raise typer.BadParameter(f"Module not found: {module_id}")
     if module.type not in {"mcp_http", "netbox_mcp", "openstack_mcp", "sap_docs_mcp"}:
-        raise typer.BadParameter("discover ist nur fuer MCP-Module sinnvoll.")
+        raise typer.BadParameter("discover is only meaningful for MCP modules.")
     try:
         result = discover_remote_module(module)
     except Exception as exc:
-        raise typer.BadParameter(f"Discovery fehlgeschlagen: {exc}") from exc
+        raise typer.BadParameter(f"Discovery failed: {exc}") from exc
     console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Discovery"))
 
 
@@ -1101,7 +1101,7 @@ def module_diagnose(module_id: str, lines: int = 40) -> None:
         result = module_diagnostics(module_id, log_lines=lines)
     except Exception as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Diagnose"))
+    console.print(Panel.fit(json.dumps(result, ensure_ascii=False, indent=2), title="Module Diagnostics"))
 
 
 @module_app.command("probe")
@@ -1217,25 +1217,25 @@ def user_add(
 ) -> None:
     """Add a new local user."""
     if role not in {"admin", "operator", "viewer"}:
-        raise typer.BadParameter("role muss admin, operator oder viewer sein.")
+        raise typer.BadParameter("role must be admin, operator, or viewer.")
     parsed_role = parse_user_role(role)
     users = load_users()
     if any(user.username == username for user in users):
-        raise typer.BadParameter(f"Benutzer existiert bereits: {username}")
+        raise typer.BadParameter(f"User already exists: {username}")
     password = getpass.getpass("Password: ")
     password_confirm = getpass.getpass("Confirm Password: ")
     if password != password_confirm:
-        raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+        raise typer.BadParameter("Passwords do not match.")
     users.append(HarborUser(username=username, password_hash=hash_password(password), role=parsed_role, enabled=True))
     save_users(users)
-    console.print(Panel.fit(f"Benutzer angelegt: {username}", title="User"))
+    console.print(Panel.fit(f"User created: {username}", title="User"))
 
 
 @user_app.command("set-role")
 def user_set_role(username: str, role: str) -> None:
     """Change a user's role."""
     if role not in {"admin", "operator", "viewer"}:
-        raise typer.BadParameter("role muss admin, operator oder viewer sein.")
+        raise typer.BadParameter("role must be admin, operator, or viewer.")
     parsed_role = parse_user_role(role)
     users = load_users()
     changed = False
@@ -1245,9 +1245,9 @@ def user_set_role(username: str, role: str) -> None:
             changed = True
             break
     if not changed:
-        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+        raise typer.BadParameter(f"User not found: {username}")
     save_users(users)
-    console.print(Panel.fit(f"Rolle gesetzt: {username} -> {role}", title="User"))
+    console.print(Panel.fit(f"Role set: {username} -> {role}", title="User"))
 
 
 @user_app.command("passwd")
@@ -1256,23 +1256,23 @@ def user_password(username: str) -> None:
     users = load_users()
     user = next((item for item in users if item.username == username), None)
     if user is None:
-        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+        raise typer.BadParameter(f"User not found: {username}")
     password = getpass.getpass("New password: ")
     password_confirm = getpass.getpass("Confirm password: ")
     if password != password_confirm:
-        raise typer.BadParameter("Passwoerter stimmen nicht ueberein.")
+        raise typer.BadParameter("Passwords do not match.")
     user.password_hash = hash_password(password)
     save_users(users)
     bootstrap_path = SECRETS_DIR / "bootstrap-admin-password"
     bootstrap_path.unlink(missing_ok=True)
-    console.print(Panel.fit(f"Passwort aktualisiert: {username}", title="User"))
+    console.print(Panel.fit(f"Password updated: {username}", title="User"))
 
 
 @user_app.command("set-permissions")
 def user_set_permissions(
     username: str,
-    modules: str = typer.Option("*", help="Kommagetrennte Modul-IDs oder *"),
-    tools: str = typer.Option("*", help="Kommagetrennte Tool-Namen oder *"),
+    modules: str = typer.Option("*", help="Comma-separated module IDs or *"),
+    tools: str = typer.Option("*", help="Comma-separated tool names or *"),
 ) -> None:
     """Set per-user module and tool allowlists."""
     users = load_users()
@@ -1284,9 +1284,9 @@ def user_set_permissions(
             changed = True
             break
     if not changed:
-        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+        raise typer.BadParameter(f"User not found: {username}")
     save_users(users)
-    console.print(Panel.fit(f"Berechtigungen aktualisiert: {username}", title="User"))
+    console.print(Panel.fit(f"Permissions updated: {username}", title="User"))
 
 
 @user_app.command("disable")
@@ -1300,9 +1300,9 @@ def user_disable(username: str) -> None:
             changed = True
             break
     if not changed:
-        raise typer.BadParameter(f"Benutzer nicht gefunden: {username}")
+        raise typer.BadParameter(f"User not found: {username}")
     save_users(users)
-    console.print(Panel.fit(f"Benutzer deaktiviert: {username}", title="User"))
+    console.print(Panel.fit(f"User disabled: {username}", title="User"))
 
 
 @app.command(hidden=True)

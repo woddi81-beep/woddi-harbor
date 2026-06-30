@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import FastAPI
+from pydantic import TypeAdapter
 
 from app import cli
 from app import modules as modules_module
@@ -639,7 +640,7 @@ class ModuleTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(RuntimeError, "nicht projektgescoped"):
+        with self.assertRaisesRegex(RuntimeError, "not project-scoped"):
             backend.call_tool("list_servers", {})
 
     def test_openstack_backend_reports_compute_timeout_with_operation(self) -> None:
@@ -803,8 +804,8 @@ class ModuleTests(unittest.TestCase):
             "validation_errors": [],
         }
         credential_error = ValueError(
-            "OpenStack Credentials fehlen fuer diesen Benutzer. "
-            "Projektgescopten User-Token im OpenStack-Dialog speichern."
+            "OpenStack credentials are missing for this user. "
+            "Save a project-scoped user token in the OpenStack dialog."
         )
         with (
             patch("app.modules.find_module", return_value=module),
@@ -818,7 +819,7 @@ class ModuleTests(unittest.TestCase):
             result = module_diagnostics("openstack")
 
         self.assertFalse(result["ok"])
-        self.assertIn("OpenStack-Zugang", result["hint"])
+        self.assertIn("Renew OpenStack access", result["hint"])
         self.assertNotIn("module start openstack", result["hint"])
 
     def test_module_connect_diagnostics_explains_refused_worker(self) -> None:
@@ -843,7 +844,7 @@ class ModuleTests(unittest.TestCase):
             "errors": ["Health: Connection refused"],
             "health": {"ok": False, "error": "Connection refused"},
             "remote": {"ok": False, "attempts": [{"label": "mcp", "ok": False, "error": "Connection refused"}]},
-            "hint": "Lokalen Worker pruefen oder starten: ./harbor.sh module start netbox",
+            "hint": "Check or start the local worker: ./harbor.sh module start netbox",
             "log_tail": "connection refused",
         }
         test_result = {
@@ -863,7 +864,7 @@ class ModuleTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["severity"], "error")
-        self.assertIn("Lokaler Worker antwortet nicht", result["summary"])
+        self.assertIn("Local worker does not respond", result["summary"])
         self.assertFalse({check["key"]: check for check in result["checks"]}["worker"]["ok"])
         self.assertTrue(any("module start netbox" in step for step in result["next_steps"]))
 
@@ -895,7 +896,7 @@ class ModuleTests(unittest.TestCase):
             "connected": True,
             "meaningful_output": True,
             "action": "discover",
-            "message": "Modultest erfolgreich.",
+            "message": "Module test succeeded.",
             "output_summary": "[\"search\", \"stats\"]",
         }
         with (
@@ -908,7 +909,7 @@ class ModuleTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["severity"], "ok")
-        self.assertIn("Connect-Pfad ist sauber", result["summary"])
+        self.assertIn("Connect path is clean", result["summary"])
         self.assertTrue({check["key"]: check for check in result["checks"]}["browse"]["ok"])
 
     def test_module_default_probes_call_openstack_tools_directly(self) -> None:
@@ -944,7 +945,42 @@ class ModuleTests(unittest.TestCase):
         self.assertFalse(result["data_flow"]["llm_used"])
         self.assertIn("get_compute_limits", calls)
         self.assertIn("list_networks", calls)
-        self.assertIn("3 Server", result["probes"][0]["summary"])
+        self.assertIn("3 servers", result["probes"][0]["summary"])
+
+    def test_netbox_default_probe_attempts_are_serializable(self) -> None:
+        module = ModuleConfig(
+            id="netbox",
+            type="netbox_mcp",
+            provider="netbox-mcp-server",
+            transport="local",
+            port=41002,
+            settings={"netbox_url": "https://netbox.example"},
+        )
+
+        def fake_execute(module_id: str, action: str, payload: dict[str, object], **_credentials: str) -> dict[str, object]:
+            self.assertEqual(module_id, "netbox")
+            self.assertEqual(action, "get_objects")
+            filters = payload.get("filters")
+            if not isinstance(filters, dict):
+                raise AssertionError("expected NetBox filters")
+            if "device_type__manufacturer" in filters or payload.get("object_type") == "virtualization.virtual-machines":
+                raise RuntimeError("unsupported NetBox filter")
+            if filters.get("manufacturer") == "NetApp":
+                data = {"count": 2, "results": [{"name": "netapp-01"}, {"name": "netapp-02"}]}
+            else:
+                data = {"count": 1, "results": [{"name": "server-01", "custom_fields": {"memory": 65536}}]}
+            return {"ok": True, "data": {"structuredContent": {"data": data}}}
+
+        with (
+            patch("app.modules.find_module", return_value=module),
+            patch("app.modules.execute_module", side_effect=fake_execute),
+        ):
+            result = module_default_probes("netbox")
+
+        self.assertTrue(result["ok"])
+        self.assertIn("attempts", result["probes"][0])
+        self.assertIsNot(result["probes"][0]["attempts"][-1], result["probes"][0])
+        TypeAdapter(dict[str, object]).dump_json(result)
 
     def test_module_named_secret_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as secret_dir:
@@ -983,8 +1019,8 @@ class ModuleTests(unittest.TestCase):
             ),
         ]
         errors = validation_errors_by_module(modules)
-        self.assertIn("Port-Konflikt", " ".join(errors["netbox-a"]))
-        self.assertIn("Port-Konflikt", " ".join(errors["netbox-b"]))
+        self.assertIn("Port conflict", " ".join(errors["netbox-a"]))
+        self.assertIn("Port conflict", " ".join(errors["netbox-b"]))
 
     def test_worker_execute_uses_query_cache_for_repeated_docs_searches(self) -> None:
         with tempfile.TemporaryDirectory() as docs_dir, tempfile.TemporaryDirectory() as runtime_dir:

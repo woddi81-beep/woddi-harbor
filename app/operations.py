@@ -177,7 +177,7 @@ def service_overview(*, include_health: bool = True) -> dict[str, Any]:
 def service_profile_status(profile_id: str) -> dict[str, Any]:
     profile = find_service_profile(profile_id)
     if profile is None:
-        raise ValueError(f"Service-Profil nicht gefunden: {profile_id}")
+        raise ValueError(f"Service profile not found: {profile_id}")
     if profile.kind == "harbor":
         return health_check_service(profile_id)
 
@@ -191,11 +191,11 @@ def service_profile_status(profile_id: str) -> dict[str, Any]:
     if profile.systemd_mode in {"user", "system"}:
         payload["systemd"] = service_action(profile_id, "status")
     else:
-        payload["systemd"] = {"ok": False, "message": "Keine systemd-Unit installiert."}
+        payload["systemd"] = {"ok": False, "message": "No systemd unit installed."}
 
     module = find_module(profile.module_id)
     if module is None:
-        payload["runtime"] = {"ok": False, "error": f"Modul nicht gefunden: {profile.module_id}"}
+        payload["runtime"] = {"ok": False, "error": f"Module not found: {profile.module_id}"}
         payload["ok"] = False
         return payload
 
@@ -210,13 +210,13 @@ def service_profile_status(profile_id: str) -> dict[str, Any]:
 def run_service_profile_action(profile_id: str, action: str) -> dict[str, Any]:
     profile = find_service_profile(profile_id)
     if profile is None:
-        raise ValueError(f"Service-Profil nicht gefunden: {profile_id}")
+        raise ValueError(f"Service profile not found: {profile_id}")
     if action == "status":
         return service_profile_status(profile_id)
     if action == "check":
         return health_check_service(profile_id)
     if action not in {"start", "stop", "restart", "enable", "disable"}:
-        raise ValueError(f"Unbekannte Service-Aktion: {action}")
+        raise ValueError(f"Unknown service action: {action}")
 
     if action in {"enable", "disable"}:
         return service_action(profile_id, action)

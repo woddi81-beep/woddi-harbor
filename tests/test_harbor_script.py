@@ -92,7 +92,7 @@ fi
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Erstinstallation automatisch" in result.stdout
+    assert "first-time installation automatically" in result.stdout
     assert "forwarded:status" in result.stdout
 
 
@@ -139,6 +139,6 @@ fi
     )
 
     assert result.returncode == 0, result.stderr
-    assert "nicht aktuell" in result.stdout
+    assert "not current" in result.stdout
     assert "forwarded:status" in result.stdout
     assert "stale:status" not in result.stdout

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,10 +12,10 @@
       <div class="brand-block">
         <span class="eyebrow">Local AI Control Plane</span>
         <h1 class="brand">Woddi Harbor</h1>
-        <p class="muted">Sicherer KI-Arbeitsplatz für Infrastruktur und Wissen.</p>
+        <p class="muted">Secure AI workspace for infrastructure and knowledge.</p>
       </div>
-      <button id="new-chat" class="primary wide">Neuer Chat</button>
-      <div class="section-heading"><span>Verlauf</span><span id="session-count" class="count">0</span></div>
+      <button id="new-chat" class="primary wide">New Chat</button>
+      <div class="section-heading"><span>History</span><span id="session-count" class="count">0</span></div>
       <div id="sessions" class="stack sessions"></div>
       <div class="sidebar-footer">
         <section id="openstack-credential" class="credential-card" aria-live="polite">
@@ -35,25 +35,25 @@
       <div class="topbar">
         <div>
           <span class="eyebrow">Assistant</span>
-          <h2 id="chat-title">Neuer Chat</h2>
-          <div id="module-state" class="meta status-line"><span class="status-dot"></span>Module werden geladen</div>
-          <div id="login-context" class="meta user-context">OpenStack Kontext wird geladen</div>
+          <h2 id="chat-title">New Chat</h2>
+          <div id="module-state" class="meta status-line"><span class="status-dot"></span>Loading modules</div>
+          <div id="login-context" class="meta user-context">Loading OpenStack context</div>
         </div>
-        <button id="stop" class="danger hidden">Antwort stoppen</button>
+        <button id="stop" class="danger hidden">Stop Answer</button>
       </div>
       <section class="panel chat-panel">
         <div id="messages" class="messages" aria-live="polite"></div>
         <form id="composer" class="composer">
-          <label class="module-picker">Kontext
+          <label class="module-picker">Context
             <select id="module-select" multiple aria-describedby="module-help"></select>
-            <span id="module-help" class="field-help">Leer lassen für automatische Auswahl</span>
+            <span id="module-help" class="field-help">Leave empty for automatic selection</span>
           </label>
           <label class="prompt-field">
-            <span class="sr-only">Nachricht</span>
-            <textarea id="prompt" rows="2" maxlength="12000" placeholder="Frage zu Infrastruktur, Dokumenten oder Betrieb..." required></textarea>
-            <span class="composer-hint"><kbd>Enter</kbd> senden · <kbd>Shift</kbd> + <kbd>Enter</kbd> neue Zeile</span>
+            <span class="sr-only">Message</span>
+            <textarea id="prompt" rows="2" maxlength="12000" placeholder="Ask about infrastructure, documents, or operations..." required></textarea>
+            <span class="composer-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd> + <kbd>Enter</kbd> new line</span>
           </label>
-          <button id="send" class="primary send-button" type="submit">Senden</button>
+          <button id="send" class="primary send-button" type="submit">Send</button>
         </form>
         <div id="notice" class="notice" role="status"></div>
       </section>
@@ -62,13 +62,13 @@
   <dialog id="openstack-token-dialog">
     <form id="openstack-token-form" class="stack">
       <div>
-        <span class="eyebrow">Persönlicher Projektzugriff</span>
+        <span class="eyebrow">Personal Project Access</span>
         <h3>OpenStack User Token</h3>
       </div>
       <p id="openstack-token-owner" class="muted"></p>
       <label>
         Project-scoped User Token
-        <input name="token" type="password" autocomplete="new-password" maxlength="8192" required placeholder="Neues Token eingeben">
+        <input name="token" type="password" autocomplete="new-password" maxlength="8192" required placeholder="Enter new token">
       </label>
       <p class="muted">This token is scoped to your Harbor user only. Other users will not have access to the token, your OpenStack cache, or project context.</p>
       <div class="row">

@@ -92,7 +92,7 @@ def _format_llm_error(exc: Exception, timeout_seconds: float) -> str:
 
 def llm_health(settings: HarborSettings) -> dict[str, Any]:
     if not settings.llm.base_url or not settings.llm.model:
-        return {"ok": False, "status": "unconfigured", "detail": "LLM ist nicht konfiguriert."}
+        return {"ok": False, "status": "unconfigured", "detail": "LLM is not configured."}
     base_url = settings.llm.base_url.rstrip("/")
     headers: dict[str, str] = {}
     secret = llm_api_key(settings)
@@ -117,7 +117,7 @@ def llm_health(settings: HarborSettings) -> dict[str, Any]:
             "model": settings.llm.model,
             "models": models,
             "latency_ms": round((time.monotonic() - started) * 1000, 2),
-            "detail": "LLM erreichbar." if model_available else "Konfiguriertes Modell ist nicht verfuegbar.",
+            "detail": "LLM reachable." if model_available else "Configured model is not available.",
         }
     except Exception as exc:
         timeout_val = settings.llm.timeout_seconds
@@ -135,7 +135,7 @@ def llm_health(settings: HarborSettings) -> dict[str, Any]:
 
 def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> dict[str, Any]:
     if not settings.llm.base_url or not settings.llm.model:
-        raise ValueError("LLM ist noch nicht konfiguriert.")
+        raise ValueError("LLM is not configured yet.")
     base_url = settings.llm.base_url.rstrip("/")
     headers = {"Content-Type": "application/json"}
     secret = llm_api_key(settings)
@@ -181,7 +181,7 @@ def complete_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> d
 
 def stream_chat(settings: HarborSettings, messages: list[dict[str, str]]) -> Iterator[str]:
     if not settings.llm.base_url or not settings.llm.model:
-        raise ValueError("LLM ist noch nicht konfiguriert.")
+        raise ValueError("LLM is not configured yet.")
     base_url = settings.llm.base_url.rstrip("/")
     headers = {"Content-Type": "application/json"}
     secret = llm_api_key(settings)

@@ -92,7 +92,7 @@ def configure_document_sources(operations_path: str, customer_path: str) -> dict
     customer = resolve_path(customer_path)
     missing = [str(path) for path in (operations, customer) if not path.is_dir()]
     if missing:
-        raise ValueError(f"Dokumentverzeichnis nicht gefunden: {', '.join(missing)}")
+        raise ValueError(f"Document directory not found: {', '.join(missing)}")
 
     extensions = sorted(DOCUMENT_TEXT_EXTENSIONS | DOCUMENT_ASSET_EXTENSIONS)
     sources = [
@@ -165,19 +165,19 @@ def _source_lock(source_id: str):
 
 def _validate_source(source: ManagedSource) -> None:
     if not source.id or not all(character.isalnum() or character in "._-" for character in source.id):
-        raise ValueError("Quellen-ID enthaelt ungueltige Zeichen.")
+        raise ValueError("Source ID contains invalid characters.")
     if source.kind not in {"local", "git"}:
-        raise ValueError("Quellentyp muss local oder git sein.")
+        raise ValueError("Source type must be local or git.")
     if source.kind == "local" and not source.source_path:
-        raise ValueError("Lokale Quelle braucht source_path.")
+        raise ValueError("Local source requires source_path.")
     if source.kind == "git" and not source.repository:
-        raise ValueError("Git-Quelle braucht repository.")
+        raise ValueError("Git source requires repository.")
 
 
 def _copy_local(source: ManagedSource, staging: Path) -> None:
     origin = resolve_path(source.source_path)
     if not origin.is_dir():
-        raise ValueError(f"Quellverzeichnis nicht gefunden: {origin}")
+        raise ValueError(f"Source directory not found: {origin}")
     shutil.copytree(origin, staging, dirs_exist_ok=True, symlinks=False)
     _filter_staging(staging, source.include_extensions)
 
@@ -196,7 +196,7 @@ def _clone_git(source: ManagedSource, staging: Path) -> None:
     ]
     completed = subprocess.run(command, check=False, text=True, capture_output=True, timeout=300)
     if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or "Git-Import fehlgeschlagen.")
+        raise RuntimeError(completed.stderr.strip() or "Git import failed.")
     shutil.rmtree(staging / ".git", ignore_errors=True)
     _filter_staging(staging, source.include_extensions)
 
@@ -275,7 +275,7 @@ def _tree_digest(path: Path) -> str:
 def sync_source(source_id: str, *, reindex: bool = True) -> dict[str, Any]:
     source = find_source(source_id)
     if source is None:
-        raise ValueError(f"Quelle nicht gefunden: {source_id}")
+        raise ValueError(f"Source not found: {source_id}")
     _validate_source(source)
     target = source.target()
     with _source_lock(source.id):
@@ -292,7 +292,7 @@ def sync_source(source_id: str, *, reindex: bool = True) -> dict[str, Any]:
                     _clone_git(source, staging)
                 quality = source_quality(staging, source.include_extensions)
                 if not quality["healthy"]:
-                    raise ValueError(f"Quelle {source.id} besteht die Mindestqualitaet nicht: {quality}")
+                    raise ValueError(f"Source {source.id} does not meet the minimum quality threshold: {quality}")
                 changed = not target.exists() or _tree_digest(staging) != _tree_digest(target)
                 if changed:
                     previous = target.with_name(f".{target.name}.previous")
@@ -307,7 +307,7 @@ def sync_source(source_id: str, *, reindex: bool = True) -> dict[str, Any]:
         if reindex and source.module_id:
             module = find_module(source.module_id)
             if module is None:
-                raise ValueError(f"Zugehoeriges Modul nicht gefunden: {source.module_id}")
+                raise ValueError(f"Associated module not found: {source.module_id}")
             if module.transport == "local" and module.type in {"docs", "maildir"}:
                 reindex_result = worker_execute(module, "reindex", {})
                 reindex_mode = "direct"

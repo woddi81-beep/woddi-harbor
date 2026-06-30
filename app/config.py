@@ -32,21 +32,21 @@ INTERNAL_ENV_PATH = SECRETS_DIR / "worker.env"
 def parse_module_type(value: object) -> ModuleType:
     normalized = str(value).strip()
     if normalized not in MODULE_TYPES:
-        raise ValueError(f"Ungueltiger Modultyp: {normalized}")
+        raise ValueError(f"Invalid module type: {normalized}")
     return cast(ModuleType, normalized)
 
 
 def parse_service_kind(value: object) -> ServiceKind:
     normalized = str(value).strip()
     if normalized not in SERVICE_KINDS:
-        raise ValueError(f"Ungueltige Service-Art: {normalized}")
+        raise ValueError(f"Invalid service kind: {normalized}")
     return cast(ServiceKind, normalized)
 
 
 def parse_user_role(value: object) -> UserRole:
     normalized = str(value).strip()
     if normalized not in USER_ROLES:
-        raise ValueError(f"Ungueltige Rolle: {normalized}")
+        raise ValueError(f"Invalid role: {normalized}")
     return cast(UserRole, normalized)
 
 
@@ -170,9 +170,9 @@ def ensure_layout() -> None:
         modules_file.write_text('{\n  "modules": []\n}\n', encoding="utf-8")
     if not prompt_file.exists():
         prompt_file.write_text(
-            "Du bist Harbor, ein praeziser lokaler AI-Assistent. "
-            "Nutze bereitgestellten Modul-Kontext bevorzugt vor Vermutungen. "
-            "Wenn Daten fehlen, sage das klar.\n",
+            "You are Harbor, a precise local AI assistant. "
+            "Prefer provided module context over guesses. "
+            "If data is missing, say so clearly.\n",
             encoding="utf-8",
         )
     if not services_file.exists():
@@ -502,7 +502,7 @@ def module_secret(module: ModuleConfig) -> str:
 def module_named_secret_path(module_id: str, secret_name: str) -> Path:
     for value, label in ((module_id, "module_id"), (secret_name, "secret_name")):
         if not value or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in value):
-            raise ValueError(f"Ungueltiger Wert fuer {label}.")
+            raise ValueError(f"Invalid value for {label}.")
     return SECRETS_DIR / "modules" / module_id / f"{secret_name}.secret"
 
 
@@ -516,7 +516,7 @@ def load_module_named_secret(module_id: str, secret_name: str) -> str:
 def save_module_named_secret(module_id: str, secret_name: str, value: str) -> Path:
     secret = value.strip()
     if not secret:
-        raise ValueError("Secret darf nicht leer sein.")
+        raise ValueError("Secret must not be empty.")
     path = module_named_secret_path(module_id, secret_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)
@@ -532,12 +532,12 @@ def delete_module_named_secret(module_id: str, secret_name: str) -> None:
 def user_named_secret_path(username: str, secret_name: str) -> Path:
     normalized_username = username.strip()
     if not normalized_username:
-        raise ValueError("Benutzername darf nicht leer sein.")
+        raise ValueError("Username must not be empty.")
     if not secret_name or any(
         character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
         for character in secret_name
     ):
-        raise ValueError("Ungueltiger Wert fuer secret_name.")
+        raise ValueError("Invalid value for secret_name.")
     user_id = hashlib.sha256(normalized_username.encode("utf-8")).hexdigest()
     return SECRETS_DIR / "users" / user_id / f"{secret_name}.secret"
 
@@ -552,7 +552,7 @@ def load_user_named_secret(username: str, secret_name: str) -> str:
 def save_user_named_secret(username: str, secret_name: str, value: str) -> Path:
     secret = value.strip()
     if not secret:
-        raise ValueError("Secret darf nicht leer sein.")
+        raise ValueError("Secret must not be empty.")
     path = user_named_secret_path(username, secret_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)

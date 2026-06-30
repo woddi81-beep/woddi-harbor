@@ -104,7 +104,7 @@ activate_hint() {
 }
 
 ensure_python() {
-  command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "python3 nicht gefunden. $(bootstrap_hint)"
+  command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "python3 not found. $(bootstrap_hint)"
 }
 
 show_version() {
@@ -115,7 +115,7 @@ show_version() {
   ensure_python
   local version
   version="$(cd "$ROOT_DIR" && "$PYTHON_BIN" -c 'from app.version import __version__; print(__version__)')" \
-    || fail "Version konnte nicht aus app/version.py gelesen werden."
+    || fail "Version could not be read from app/version.py."
 
   if [[ "${1:-}" == "--short" ]]; then
     printf '%s\n' "$version"
@@ -127,19 +127,19 @@ show_version() {
 ensure_venv() {
   ensure_python
   if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-    log "Erzeuge virtuelle Umgebung unter $VENV_DIR"
-    "$PYTHON_BIN" -m venv "$VENV_DIR" || fail "venv-Erzeugung fehlgeschlagen. Unter Ubuntu fehlt oft python3-venv, unter SLES python3-virtualenv."
+    log "Creating virtual environment at $VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR" || fail "venv creation failed. On Ubuntu python3-venv is often missing; on SLES python3-virtualenv is often missing."
   fi
 }
 
 install_project() {
   ensure_venv
   "$PYTHON_BIN" "$ROOT_DIR/tools/verify_installation.py" --source-only
-  log "Installiere woddi-harbor in die virtuelle Umgebung"
+  log "Installing woddi-harbor into the virtual environment"
   if "$VENV_DIR/bin/python" -c 'import setuptools.build_meta, wheel' >/dev/null 2>&1; then
     "$VENV_DIR/bin/python" -m pip install --no-build-isolation -e "$ROOT_DIR"
   else
-    log "Initialisiere die Python-Build-Umgebung"
+    log "Initializing the Python build environment"
     "$VENV_DIR/bin/python" -m pip install -e "$ROOT_DIR"
   fi
   "$VENV_DIR/bin/python" "$ROOT_DIR/tools/verify_installation.py"
@@ -153,50 +153,50 @@ auto_update_checkout() {
       ;;
   esac
   if [[ ! -d "$ROOT_DIR/.git" ]]; then
-    log "Git-Update uebersprungen: kein Git-Checkout"
+    log "Git update skipped: not a Git checkout"
     return 0
   fi
   if ! command -v git >/dev/null 2>&1; then
-    log "Git-Update uebersprungen: git nicht gefunden"
+    log "Git update skipped: git not found"
     return 0
   fi
   if ! git -C "$ROOT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    log "Git-Update uebersprungen: kein Upstream konfiguriert"
+    log "Git update skipped: no upstream configured"
     return 0
   fi
   local status
   status="$(git -C "$ROOT_DIR" status --porcelain)" || {
-    log "Git-Update uebersprungen: Status konnte nicht gelesen werden"
+    log "Git update skipped: status could not be read"
     return 0
   }
   if [[ -n "$status" ]]; then
-    log "Git-Update uebersprungen: Working Tree ist nicht sauber"
+    log "Git update skipped: working tree is not clean"
     return 0
   fi
   local before after
   before="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   if ! git -C "$ROOT_DIR" pull --ff-only; then
-    log "Git-Update fehlgeschlagen; starte vorhandene Version"
+    log "Git update failed; starting the installed version"
     if [[ "${HARBOR_AUTO_UPDATE_STRICT:-0}" =~ ^(1|true|yes|on)$ ]]; then
-      fail "Git-Update fehlgeschlagen."
+      fail "Git update failed."
     fi
     return 0
   fi
   after="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   if [[ "$before" != "$after" ]]; then
-    log "Git-Update angewendet: ${before:0:7} -> ${after:0:7}"
+    log "Git update applied: ${before:0:7} -> ${after:0:7}"
   else
-    log "Git-Update: bereits aktuell"
+    log "Git update: already current"
   fi
 }
 
 run_cli() {
   ensure_venv
   if [[ ! -x "$VENV_DIR/bin/woddi-harbor" ]]; then
-    log "Harbor CLI fehlt; fuehre die Erstinstallation automatisch aus"
+    log "Harbor CLI is missing; running first-time installation automatically"
     install_project
   elif ! "$VENV_DIR/bin/python" "$ROOT_DIR/tools/verify_installation.py" >/dev/null 2>&1; then
-    log "Installierte Harbor-Version ist nicht aktuell; aktualisiere die virtuelle Umgebung"
+    log "Installed Harbor version is not current; updating the virtual environment"
     install_project
   fi
   exec "$VENV_DIR/bin/woddi-harbor" "$@"
@@ -208,7 +208,7 @@ start_harbor() {
   "$VENV_DIR/bin/woddi-harbor" init >/dev/null
   local host="${HARBOR_HOST:-0.0.0.0}"
   local port="${HARBOR_PORT:-9680}"
-  log "Starte woddi-harbor auf ${host}:${port}"
+  log "Starting woddi-harbor on ${host}:${port}"
   exec "$VENV_DIR/bin/woddi-harbor" serve --host "$host" --port "$port"
 }
 
@@ -230,7 +230,7 @@ case "$cmd" in
     ;;
   install)
     install_project
-    log "Fertig. Aktivierung fuer $(detect_shell_name): $(activate_hint)"
+    log "Done. Activation for $(detect_shell_name): $(activate_hint)"
     ;;
   init)
     install_project

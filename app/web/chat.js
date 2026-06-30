@@ -15,7 +15,7 @@ function emptyState() {
   if ($("messages").children.length) return;
   const node = document.createElement("div");
   node.className = "empty-state";
-  node.innerHTML = "<strong>Womit soll Harbor helfen?</strong><span>Frage nach Systemen, NetBox-Daten, OpenStack-Ressourcen oder lokaler Dokumentation.</span>";
+  node.innerHTML = "<strong>How can Harbor help?</strong><span>Ask about systems, NetBox data, OpenStack resources, or local documentation.</span>";
   $("messages").append(node);
 }
 
@@ -24,7 +24,7 @@ function message(role, text = "") {
   const node = document.createElement("article");
   node.className = `message ${role}`;
   node.dataset.raw = text;
-  node.setAttribute("aria-label", role === "user" ? "Deine Nachricht" : "Harbor Antwort");
+  node.setAttribute("aria-label", role === "user" ? "Your message" : "Harbor answer");
   renderMessage(node, text);
   $("messages").append(node);
   scrollMessages();
@@ -46,15 +46,15 @@ function renderMessage(node, text) {
     const copy = document.createElement("button");
     copy.className = "copy-message";
     copy.type = "button";
-    copy.textContent = "Kopieren";
+    copy.textContent = "Copy";
     copy.onclick = async () => {
       try {
         await navigator.clipboard.writeText(text);
-        copy.textContent = "Kopiert";
+        copy.textContent = "Copied";
       } catch {
-        copy.textContent = "Nicht möglich";
+        copy.textContent = "Not possible";
       }
-      setTimeout(() => { copy.textContent = "Kopieren"; }, 1200);
+      setTimeout(() => { copy.textContent = "Copy"; }, 1200);
     };
     node.append(copy);
   }
@@ -88,7 +88,7 @@ async function loadModules() {
     option.selected = selected.has(item.id);
     return option;
   }));
-  $("module-state").lastChild.textContent = active.length ? `${active.length} Module verfügbar` : "Keine Module verfügbar";
+  $("module-state").lastChild.textContent = active.length ? `${active.length} modules available` : "No modules available";
   $("module-state").classList.toggle("unavailable", !active.length);
 }
 
@@ -104,17 +104,17 @@ async function loadOpenStackCredential() {
   $("openstack-credential").classList.toggle("ready", configured && ready);
   $("openstack-credential").classList.toggle("warning", !configured || !ready);
   $("openstack-token-status").textContent = !ready
-    ? "Integration noch nicht eingerichtet"
+    ? "Integration is not configured yet"
     : configured
-      ? `Token für ${configuration.token_owner} aktiv`
-      : `Token für ${configuration.token_owner} fehlt`;
+      ? `Token active for ${configuration.token_owner}`
+      : `Token missing for ${configuration.token_owner}`;
   $("login-context").textContent = ready && configured
-    ? `Du bist eingeloggt in Domain ${domain || "n/a"} und Projekt ${project || "n/a"} als User ${user || "n/a"}.`
-    : `Du bist in Harbor als ${configuration.token_owner || "n/a"} eingeloggt; OpenStack-Projektkontext fehlt.`;
+    ? `You are logged in to domain ${domain || "n/a"} and project ${project || "n/a"} as user ${user || "n/a"}.`
+    : `You are logged in to Harbor as ${configuration.token_owner || "n/a"}; OpenStack project context is missing.`;
   $("openstack-token-open").textContent = configured ? "Renew Token" : "Add Token";
   $("openstack-token-remove").classList.toggle("hidden", !configured);
   $("openstack-token-owner").textContent =
-    `Dieses Token gilt ausschließlich für den Harbor-Benutzer ${configuration.token_owner}.`;
+    `This token applies only to Harbor user ${configuration.token_owner}.`;
 }
 
 async function loadSessions() {
@@ -127,16 +127,16 @@ async function loadSessions() {
     const button = document.createElement("button");
     button.className = `session ${session.id === state.sessionId ? "active" : ""}`;
     button.innerHTML = "<strong></strong><span class=\"meta\"></span>";
-    button.querySelector("strong").textContent = session.title || "Unbenannter Chat";
-    button.querySelector("span").textContent = `${session.message_count} Nachrichten`;
+    button.querySelector("strong").textContent = session.title || "Untitled Chat";
+    button.querySelector("span").textContent = `${session.message_count} messages`;
     button.onclick = () => openSession(session.id, session.title);
     const remove = document.createElement("button");
     remove.className = "session-delete danger";
-    remove.title = "Chat löschen";
-    remove.setAttribute("aria-label", `Chat ${session.title || "Unbenannter Chat"} löschen`);
+    remove.title = "Delete chat";
+    remove.setAttribute("aria-label", `Delete chat ${session.title || "Untitled Chat"}`);
     remove.textContent = "×";
     remove.onclick = async () => {
-      if (!confirm(`Chat "${session.title || "Unbenannter Chat"}" löschen?`)) return;
+      if (!confirm(`Delete chat "${session.title || "Untitled Chat"}"?`)) return;
       await api(`/api/chat/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
       if (state.sessionId === session.id) resetChat();
       else loadSessions();
@@ -160,7 +160,7 @@ async function openSession(id, title) {
 function resetChat() {
   state.sessionId = "";
   localStorage.removeItem("harbor.session");
-  $("chat-title").textContent = "Neuer Chat";
+  $("chat-title").textContent = "New Chat";
   $("messages").replaceChildren();
   emptyState();
   loadSessions();
@@ -203,7 +203,7 @@ async function send(event) {
       cache: "no-store",
     });
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `HTTP ${response.status}`);
-    if (!response.body) throw new Error("Streaming wird vom Browser nicht unterstützt.");
+    if (!response.body) throw new Error("Streaming is not supported by this browser.");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -218,7 +218,7 @@ async function send(event) {
         if (item.event === "meta") {
           state.sessionId = item.data.session_id;
           localStorage.setItem("harbor.session", state.sessionId);
-          $("module-state").lastChild.textContent = item.data.used_modules.length ? `Kontext: ${item.data.used_modules.join(", ")}` : "Ohne Modulkontext";
+          $("module-state").lastChild.textContent = item.data.used_modules.length ? `Context: ${item.data.used_modules.join(", ")}` : "Without module context";
         } else if (item.event === "token") {
           reply.dataset.raw += item.data.text;
           scheduleReplyRender(reply);
@@ -236,7 +236,7 @@ async function send(event) {
     scrollMessages();
     await loadSessions();
   } catch (error) {
-    $("notice").textContent = error.name === "AbortError" ? "Antwort abgebrochen." : error.message;
+    $("notice").textContent = error.name === "AbortError" ? "Answer stopped." : error.message;
     if (!reply.dataset.raw) reply.remove();
   } finally {
     state.controller = null;

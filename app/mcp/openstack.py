@@ -106,27 +106,27 @@ def _diagnostic_payload(
     lower_message = message.lower()
     hints: list[str] = []
     if not credentials.get("OS_AUTH_URL"):
-        hints.append("OS_AUTH_URL fehlt.")
+        hints.append("OS_AUTH_URL is missing.")
     if not credentials.get("OS_TOKEN"):
-        hints.append("Es ist kein OpenStack User-Token fuer diesen Harbor-Benutzer konfiguriert.")
+        hints.append("No OpenStack user token is configured for this Harbor user.")
     if "connection refused" in lower_message or "unreachable" in lower_message:
-        hints.append("Identity/Auth URL, DNS, Routing und Firewall pruefen.")
+        hints.append("Check Identity/Auth URL, DNS, routing, and firewall.")
     if "timeout" in lower_message or "timed out" in lower_message:
-        hints.append("Keystone oder ein OpenStack-Service hat nicht innerhalb des konfigurierten Timeouts geantwortet.")
+        hints.append("Keystone or an OpenStack service did not respond within the configured timeout.")
     if "unscoped" in lower_message or "project-scoped" in lower_message:
         hints.append(
-            "Der Token muss projektgescopt sein; "
-            "Harbor liest den Projektkontext direkt aus Keystone."
+            "The token must be project-scoped; "
+            "Harbor reads the project context directly from Keystone."
         )
-        hints.append("Token direkt im Zielprojekt erzeugen/ausstellen lassen.")
+        hints.append("Create/issue the token directly in the target project.")
     if "service catalog" in lower_message:
         hints.append(
-            "Ein projektgescopter Token ohne Service-Katalog wird als Auth-Kontext akzeptiert; "
-            "einzelne OpenStack-Serviceaufrufe koennen aber bei Endpoint-Discovery scheitern."
+            "A project-scoped token without a service catalog is accepted as auth context; "
+            "individual OpenStack service calls may still fail during endpoint discovery."
         )
-        hints.append("OS_AUTH_URL, OS_REGION_NAME, OS_INTERFACE und die Provider-Endpoint-Policy pruefen.")
+        hints.append("Check OS_AUTH_URL, OS_REGION_NAME, OS_INTERFACE, and the provider endpoint policy.")
     if not hints:
-        hints.append("OpenStack-Fehler im SDK/Service-Katalog pruefen; Detail steht in message und error_type.")
+        hints.append("Check the OpenStack SDK/service catalog error; details are in message and error_type.")
     payload: dict[str, Any] = {
         "operation": operation,
         "phase": phase,
@@ -224,7 +224,7 @@ def validate_openstack_token_scope(credentials: dict[str, str]) -> dict[str, Any
     token = credentials.get("OS_TOKEN", "").strip()
     auth_url = credentials.get("OS_AUTH_URL", "").strip()
     if not token or not auth_url:
-        message = "OpenStack Token-Validierung nicht moeglich: OS_AUTH_URL oder OS_TOKEN fehlt."
+        message = "OpenStack token validation is not possible: OS_AUTH_URL or OS_TOKEN is missing."
         raise OpenStackDiagnosticError(
             message,
             _diagnostic_payload(
@@ -251,12 +251,12 @@ def validate_openstack_token_scope(credentials: dict[str, str]) -> dict[str, Any
         status = exc.response.status_code
         if status in {401, 403, 404}:
             message = (
-                f"OpenStack Token konnte bei Keystone nicht validiert werden "
-                f"(HTTP {status}). Token ist ungueltig, abgelaufen oder der "
-                "Provider erlaubt keine Self-Validation dieses Tokens."
+                f"OpenStack token could not be validated with Keystone "
+                f"(HTTP {status}). The token is invalid, expired, or the "
+                "provider does not allow self-validation for this token."
             )
         else:
-            message = f"OpenStack Token-Validierung fehlgeschlagen (HTTP {status})."
+            message = f"OpenStack token validation failed (HTTP {status})."
         raise OpenStackDiagnosticError(
             message,
             _diagnostic_payload(
@@ -270,11 +270,11 @@ def validate_openstack_token_scope(credentials: dict[str, str]) -> dict[str, Any
     except Exception as exc:
         if _is_timeout_error(exc):
             message = (
-                f"OpenStack Token-Validierung an {endpoint} timed out after "
+                f"OpenStack token validation at {endpoint} timed out after "
                 f"{_timeout_seconds(credentials):.0f}s."
             )
         else:
-            message = f"OpenStack Token-Validierung fehlgeschlagen: {exc}"
+            message = f"OpenStack token validation failed: {exc}"
         raise OpenStackDiagnosticError(
             message,
             _diagnostic_payload(
@@ -288,8 +288,8 @@ def validate_openstack_token_scope(credentials: dict[str, str]) -> dict[str, Any
     scope = _scope_from_token_body(body if isinstance(body, dict) else {})
     if not scope.get("project_scoped"):
         message = (
-            "OpenStack Token ist gueltig, aber Keystone meldet keinen Projekt-Scope. "
-            "Erzeuge den Token direkt im Zielprojekt und speichere den Wert aus dem Feld 'id'."
+            "OpenStack token is valid, but Keystone reports no project scope. "
+            "Create the token directly in the target project and save the value from the 'id' field."
         )
         raise OpenStackDiagnosticError(
             message,
@@ -325,7 +325,7 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         from openstack.connection import Connection
     except ImportError as exc:
         raise RuntimeError(
-            "OpenStack SDK nicht installiert. Installiere Harbor erneut oder fuehre aus: "
+            "OpenStack SDK is not installed. Reinstall Harbor or run: "
             "python -m pip install openstacksdk"
         ) from exc
 
@@ -349,7 +349,7 @@ def create_openstack_connection(credentials: dict[str, str]) -> Any:
         if token_project_id:
             options["project_id"] = token_project_id
     else:
-        raise ValueError("OpenStack: OS_TOKEN fehlt. Harbor verwendet ausschliesslich User-Tokens.")
+        raise ValueError("OpenStack: OS_TOKEN is missing. Harbor uses user tokens only.")
 
     return Connection(**{key: value for key, value in options.items() if value is not None})
 
@@ -691,7 +691,7 @@ class OpenStackBackend:
             project_scoped = bool(token_scope.get("project_scoped"))
             has_service_catalog = bool(token_scope.get("has_service_catalog"))
             if not project_scoped:
-                msg = "OpenStack token ist nicht projektgescoped / not project-scoped. "
+                msg = "OpenStack token is not project-scoped. "
                 msg += (
                     "Create the token directly in the target project (OpenStack CLI: "
                     "'openstack token issue --project <name>'). "
@@ -752,7 +752,7 @@ class OpenStackBackend:
             or self.credentials.get(HARBOR_TOKEN_PROJECT_ID)
             or self.credentials.get("OS_PROJECT_NAME")
             or self.credentials.get("OS_PROJECT_ID")
-            or "unbekannt"
+            or "unknown"
         )
 
     def _cached(self, operation: str, arguments: dict[str, Any], loader: Callable[[], Any]) -> Any:
@@ -767,8 +767,8 @@ class OpenStackBackend:
                 if _is_timeout_error(exc):
                     message = (
                         f"OpenStack {operation} timed out after "
-                        f"{_timeout_seconds(self.credentials):.0f}s nicht geantwortet. "
-                        "Pruefe Service-Katalog, Region, Routing und Firewall."
+                        f"{_timeout_seconds(self.credentials):.0f}s. "
+                        "Check service catalog, region, routing, and firewall."
                     )
                     raise OpenStackDiagnosticError(
                         message,
@@ -898,10 +898,10 @@ class OpenStackBackend:
         if value is None:
             return []
         if not isinstance(value, list):
-            raise ValueError("fields muss eine Liste sein.")
+            raise ValueError("fields must be a list.")
         fields = list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
         if len(fields) > 50:
-            raise ValueError("fields unterstuetzt maximal 50 Eintraege.")
+            raise ValueError("fields supports at most 50 entries.")
         return fields
 
     @classmethod
@@ -924,9 +924,9 @@ class OpenStackBackend:
         try:
             limit = int(arguments.get("limit", DEFAULT_RESULT_LIMIT) or DEFAULT_RESULT_LIMIT)
         except (TypeError, ValueError) as exc:
-            raise ValueError("limit muss eine Ganzzahl sein.") from exc
+            raise ValueError("limit must be an integer.") from exc
         if limit < 1 or limit > MAX_RESULT_LIMIT:
-            raise ValueError(f"limit muss zwischen 1 und {MAX_RESULT_LIMIT} liegen.")
+            raise ValueError(f"limit must be between 1 and {MAX_RESULT_LIMIT}.")
         return limit
 
     def _list_resources(
@@ -1222,14 +1222,14 @@ class OpenStackBackend:
         if raw_resources is None:
             resources = list(RESOURCE_CATALOG)
         elif not isinstance(raw_resources, list):
-            raise ValueError("resources muss eine Liste sein.")
+            raise ValueError("resources must be a list.")
         else:
             resources = list(dict.fromkeys(str(item).strip().lower() for item in raw_resources if str(item).strip()))
             if not resources or len(resources) > len(RESOURCE_CATALOG):
-                raise ValueError(f"resources muss 1 bis {len(RESOURCE_CATALOG)} Eintraege enthalten.")
+                raise ValueError(f"resources must contain 1 to {len(RESOURCE_CATALOG)} entries.")
         unknown = [resource for resource in resources if resource not in RESOURCE_CATALOG]
         if unknown:
-            raise ValueError(f"Unbekannte Ressourcen: {', '.join(unknown)}")
+            raise ValueError(f"Unknown resources: {', '.join(unknown)}")
         include_sample = bool(arguments.get("include_sample", False))
         discovered: list[dict[str, Any]] = []
         for resource in resources:
@@ -1435,22 +1435,22 @@ class OpenStackBackend:
                 "load_balancer",
             }
             if resource not in allowed_resources:
-                raise ValueError("Resource ist nicht freigegeben.")
+                raise ValueError("Resource is not allowed.")
             if operation == "show":
                 target = str(arguments.get("target", "")).strip()
                 if not target:
-                    raise ValueError("target ist fuer show erforderlich.")
+                    raise ValueError("target is required for show.")
                 tool_payload: Any = self._project_fields(self._resource_show(resource, target), arguments)
             elif operation == "list":
                 filters = arguments.get("filters")
                 tool_payload = self._resource_list(resource, {"limit": arguments.get("limit", DEFAULT_RESULT_LIMIT)})
                 if filters is not None:
                     if not isinstance(filters, dict):
-                        raise ValueError("filters muss ein Objekt sein.")
+                        raise ValueError("filters must be an object.")
                     tool_payload = self._apply_generic_filters(tool_payload, {str(key): value for key, value in filters.items()})
                 tool_payload = self._project_fields(tool_payload, arguments)
             else:
-                raise ValueError("Nur list/show ist erlaubt.")
+                raise ValueError("Only list/show is allowed.")
             return self._tool_result(name, arguments, tool_payload)
         raise ValueError(f"Unknown tool: {name}")
 
@@ -1505,15 +1505,15 @@ class OpenStackUserBackendRegistry:
                 credentials["OS_AUTH_TYPE"] = "token"
                 return credentials
         raise ValueError(
-            "OpenStack Credentials fehlen fuer diesen Benutzer. "
-            "Projektgescopten User-Token im OpenStack-Dialog speichern."
+            "OpenStack credentials are missing for this user. "
+            "Save a project-scoped user token in the OpenStack dialog."
         )
 
     def get(self, username: str, token: str = "") -> OpenStackBackend:
         normalized_username = username.strip()
         normalized_token = token.strip()
         if not normalized_username:
-            raise ValueError("Harbor-Benutzer fuer OpenStack fehlt.")
+            raise ValueError("Harbor user for OpenStack is missing.")
         credentials = self._credentials_for_user(normalized_username, normalized_token)
         now = time.monotonic()
         credential_digest = sha256(json.dumps(credentials, sort_keys=True).encode("utf-8")).hexdigest()

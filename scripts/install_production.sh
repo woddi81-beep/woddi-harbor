@@ -12,8 +12,8 @@ python3 -m venv .venv
 ./harbor.sh init
 
 if [[ "$MODE" == "manual" ]]; then
-  echo "Manuelle Installation abgeschlossen. Es wurden keine systemd-Units installiert."
-  echo "Jetzt Admin, LLM und Quellen konfigurieren, production-check ausfuehren und mit ./harbor.sh start starten."
+  echo "Manual installation complete. No systemd units were installed."
+  echo "Now configure the admin user, LLM, and sources, run production-check, then start with ./harbor.sh start."
   exit 0
 fi
 
@@ -24,7 +24,7 @@ elif [[ "$MODE" == "user" ]]; then
   UNIT_DIR="${HOME}/.config/systemd/user"
   SYSTEMCTL=(systemctl --user)
 else
-  echo "Unbekannter Modus: $MODE (erlaubt: manual, user, system)" >&2
+  echo "Unknown mode: $MODE (allowed: manual, user, system)" >&2
   exit 2
 fi
 
@@ -36,4 +36,4 @@ cp systemd/woddi-harbor-backup.timer "$UNIT_DIR/woddi-harbor-backup.timer"
 "${SYSTEMCTL[@]}" daemon-reload
 "${SYSTEMCTL[@]}" enable woddi-harbor-jobs.service woddi-harbor-backup.timer
 
-echo "Installation vorbereitet. Jetzt Admin, LLM und Quellen konfigurieren, production-check ausfuehren und Services starten."
+echo "Installation prepared. Now configure the admin user, LLM, and sources, run production-check, then start the services."

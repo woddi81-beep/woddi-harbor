@@ -35,5 +35,5 @@ class StateJobTests(unittest.TestCase):
         self.assertIsNone(second)
 
     def test_unknown_job_kind_fails_closed(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unbekannter Job-Typ"):
+        with self.assertRaisesRegex(ValueError, "Unknown job type"):
             execute_job({"kind": "shell", "target": "", "payload": {}})

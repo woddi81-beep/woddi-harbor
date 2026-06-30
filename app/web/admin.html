@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,18 +12,18 @@
       <div class="brand-block">
         <span class="eyebrow">Control Plane</span>
         <h1 class="brand">Harbor Admin</h1>
-        <p class="muted">Module, Zugriffe und Betrieb zentral verwalten.</p>
+        <p class="muted">Manage modules, access, and operations centrally.</p>
       </div>
       <nav id="nav" class="nav"></nav>
       <div class="sidebar-footer">
-        <a class="nav-link" href="/chat">Zum Chat</a>
-        <details class="runtime-help"><summary>Runtime-Befehle</summary><code>./harbor.sh stop</code><code>./harbor.sh uninstall-runtime</code></details>
+        <a class="nav-link" href="/chat">To Chat</a>
+        <details class="runtime-help"><summary>Runtime Commands</summary><code>./harbor.sh stop</code><code>./harbor.sh uninstall-runtime</code></details>
       </div>
     </aside>
     <main class="main">
       <div class="topbar">
-        <div><span class="eyebrow">Administration</span><h2 id="title">Übersicht</h2></div>
-        <button id="refresh">Aktualisieren</button>
+        <div><span class="eyebrow">Administration</span><h2 id="title">Overview</h2></div>
+        <button id="refresh">Refresh</button>
       </div>
       <div id="notice" class="notice" role="status"></div>
       <section id="content" class="stack"></section>
@@ -31,30 +31,30 @@
   </div>
   <dialog id="user-dialog">
     <form id="user-form" class="stack">
-      <h3>Benutzer</h3>
+      <h3>User</h3>
       <label>Name<input name="username" required></label>
-      <label>Passwort<input name="password" type="password" placeholder="Bei Änderung optional"></label>
-      <label>Rolle<select name="role"><option>viewer</option><option>operator</option><option>admin</option></select></label>
+      <label>Password<input name="password" type="password" placeholder="Optional when editing"></label>
+      <label>Role<select name="role"><option>viewer</option><option>operator</option><option>admin</option></select></label>
       <label><span>Enabled</span><input name="enabled" type="checkbox" checked></label>
-      <label>Module, kommasepariert<input name="allowed_modules" value="*"></label>
-      <label>Tools, kommasepariert<input name="allowed_tools" value="*"></label>
+      <label>Modules, comma-separated<input name="allowed_modules" value="*"></label>
+      <label>Tools, comma-separated<input name="allowed_tools" value="*"></label>
       <div class="row"><button class="primary">Save</button><button type="button" id="user-cancel">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="module-dialog">
     <form id="module-form" class="stack">
-      <h3>Modul konfigurieren</h3>
+      <h3>Configure Module</h3>
       <label>ID<input name="id" required pattern="[A-Za-z0-9._-]+"></label>
       <label>Name<input name="name"></label>
-      <label>Typ<select name="type"><option value="docs">Dokumente</option><option value="maildir">Maildir</option><option value="mcp_http">MCP HTTP</option></select></label>
-      <label>Lokaler Pfad<input name="path" placeholder="/srv/data/docs"></label>
-      <label>MCP-Endpunkt<input name="base_url" placeholder="http://127.0.0.1:61000/mcp"></label>
+      <label>Type<select name="type"><option value="docs">Documents</option><option value="maildir">Maildir</option><option value="mcp_http">MCP HTTP</option></select></label>
+      <label>Local Path<input name="path" placeholder="/srv/data/docs"></label>
+      <label>MCP Endpoint<input name="base_url" placeholder="http://127.0.0.1:61000/mcp"></label>
       <div class="form-grid">
         <label>Port<input name="port" type="number" min="0" value="0"></label>
         <label>Top K<input name="top_k" type="number" min="1" value="5"></label>
         <label>Timeout<input name="timeout_seconds" type="number" min="1" value="30"></label>
       </div>
-      <label>Notizen<textarea name="notes" rows="2"></textarea></label>
+      <label>Notes<textarea name="notes" rows="2"></textarea></label>
       <div class="row"><button class="primary">Save</button><button type="button" data-close="module-dialog">Cancel</button></div>
       </form>
   </dialog>
@@ -63,8 +63,8 @@
       <h3>Connect NetBox</h3>
       <label>NetBox URL<input name="netbox_url" type="url" required placeholder="https://netbox.example.com"></label>
       <div class="form-grid">
-        <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="30"></label>
-        <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
+        <label>Timeout (seconds)<input name="timeout_seconds" type="number" min="5" max="600" value="30"></label>
+        <label>Local Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
       <p class="muted">Harbor accesses the public NetBox API anonymously. The adapter allows GET requests only and does not follow links to other hosts.</p>
       <div class="row"><button class="primary">Save</button><button type="button" data-close="netbox-dialog">Cancel</button></div>
@@ -73,50 +73,50 @@
   <dialog id="openstack-dialog">
     <form id="openstack-form" class="stack">
       <h3>Connect OpenStack</h3>
-      <p class="muted">Harbor verwendet ausschließlich projektgescopte OpenStack User-Tokens. Der Projektkontext wird aus Keystone gelesen.</p>
+      <p class="muted">Harbor uses only project-scoped OpenStack user tokens. The project context is read from Keystone.</p>
       <label>
-        <span>Projektgescoptes User-Token <span class="help" title="Nur das Feld id aus 'openstack token issue -f json' eintragen; vollständiges JSON wird beim Speichern auf id reduziert." aria-label="Hinweis zum Projektkontext">?</span></span>
-        <input name="token" type="password" autocomplete="new-password" placeholder="User-Token eingeben">
+        <span>Project-scoped User Token <span class="help" title="Paste only the id field from 'openstack token issue -f json'; full JSON is reduced to id on save." aria-label="Project context hint">?</span></span>
+        <input name="token" type="password" autocomplete="new-password" placeholder="Enter user token">
       </label>
       <p id="openstack-token-state" class="muted"></p>
       <hr>
       <label>Identity / Auth URL<input name="auth_url" type="url" required placeholder="https://identity.example/v3" value="https://identity.eu-de-1.cloud.sap/v3"></label>
       <div class="form-grid">
         <label>Region<input name="region_name" placeholder="eu-de-1" value="eu-de-1"></label>
-        <label>Timeout (Sekunden)<input name="timeout_seconds" type="number" min="5" max="600" value="60"></label>
-        <label>Lokaler Port<input name="port" type="number" min="0" max="65535" value="0"></label>
+        <label>Timeout (seconds)<input name="timeout_seconds" type="number" min="5" max="600" value="60"></label>
+        <label>Local Port<input name="port" type="number" min="0" max="65535" value="0"></label>
       </div>
       <div class="row"><button class="primary">Save</button><button type="button" data-close="openstack-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="mcp-package-dialog">
     <form id="mcp-package-form" class="stack">
-      <h3>MCP-Paket installieren</h3>
-      <label>Serverseitiger Paketpfad<input name="source" required placeholder="/srv/mcp/mein-paket"></label>
+      <h3>Install MCP Package</h3>
+      <label>Server-side Package Path<input name="source" required placeholder="/srv/mcp/my-package"></label>
       <div class="row"><button class="primary">Install</button><button type="button" data-close="mcp-package-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="mcp-instance-dialog">
     <form id="mcp-instance-form" class="stack">
-      <h3>MCP-Instanz anlegen</h3>
-      <label>Instanz-ID<input name="id" required pattern="[A-Za-z0-9._-]+"></label>
-      <label>Paket<select name="package_id" required></select></label>
+      <h3>Create MCP Instance</h3>
+      <label>Instance ID<input name="id" required pattern="[A-Za-z0-9._-]+"></label>
+      <label>Package<select name="package_id" required></select></label>
       <label>Version<input name="version" required></label>
-      <label>Umgebung (KEY=VALUE, eine Zeile je Wert)<textarea name="environment" rows="4" placeholder="MCP_PORT=61000"></textarea></label>
+      <label>Environment (KEY=VALUE, one value per line)<textarea name="environment" rows="4" placeholder="MCP_PORT=61000"></textarea></label>
       <div class="row"><button class="primary">Create</button><button type="button" data-close="mcp-instance-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="discovery-dialog">
     <div class="dialog-head">
-      <div><span class="eyebrow">Quelle</span><h2 id="discovery-title">Discovery</h2></div>
-      <button type="button" class="icon-button" data-close="discovery-dialog" aria-label="Schließen">×</button>
+      <div><span class="eyebrow">Source</span><h2 id="discovery-title">Discovery</h2></div>
+      <button type="button" class="icon-button" data-close="discovery-dialog" aria-label="Close">×</button>
     </div>
     <pre id="discovery-result" class="discovery-result"></pre>
   </dialog>
   <dialog id="fields-dialog" class="wide-dialog">
     <div class="dialog-head">
-      <div><span class="eyebrow">Feldkatalog</span><h2>Felder: <span id="fields-module-id"></span></h2></div>
-      <div class="row"><button type="button" id="fields-refresh">Aktualisieren</button><button type="button" class="icon-button" data-close="fields-dialog" aria-label="Schließen">×</button></div>
+      <div><span class="eyebrow">Field Catalog</span><h2>Fields: <span id="fields-module-id"></span></h2></div>
+      <div class="row"><button type="button" id="fields-refresh">Refresh</button><button type="button" class="icon-button" data-close="fields-dialog" aria-label="Close">×</button></div>
     </div>
     <div id="fields-status" class="muted"></div>
     <div id="fields-summary"></div>
@@ -126,24 +126,24 @@
   <dialog id="stellen-dialog">
     <form id="stellen-form" class="stack">
       <h3>Edit Position</h3>
-      <label>Titel<input name="title" required></label>
-      <label>Abteilung<input name="department"></label>
-      <label>Beschreibung<textarea name="description" rows="4"></textarea></label>
-      <label>Status<select name="status"><option value="offen">Open</option><option value="besetzt">Filled</option><option value="geschlossen">Closed</option></select></label>
+      <label>Title<input name="title" required></label>
+      <label>Department<input name="department"></label>
+      <label>Description<textarea name="description" rows="4"></textarea></label>
+      <label>Status<select name="status"><option value="open">Open</option><option value="filled">Filled</option><option value="closed">Closed</option></select></label>
       <div class="row"><button class="primary">Save</button><button type="button" data-close="stellen-dialog">Cancel</button></div>
     </form>
   </dialog>
   <dialog id="diagnose-dialog" class="wide-dialog">
     <div id="diagnose-content" class="diagnose-content">
       <div class="dialog-head">
-        <div><span class="eyebrow">Diagnose</span><h2>Module: <span id="diagnose-module-id"></span></h2></div>
-        <div class="row"><button type="button" id="diagnose-copy">Kopieren</button><button type="button" class="icon-button" data-close="diagnose-dialog" aria-label="Schließen">×</button></div>
+        <div><span class="eyebrow">Diagnostics</span><h2>Module: <span id="diagnose-module-id"></span></h2></div>
+        <div class="row"><button type="button" id="diagnose-copy">Copy</button><button type="button" class="icon-button" data-close="diagnose-dialog" aria-label="Close">×</button></div>
       </div>
       <div id="diagnose-status" class="muted"></div>
-      <details open><summary>Letzte Log-Einträge</summary>
+      <details open><summary>Latest Log Entries</summary>
         <pre id="diagnose-log" class="diagnose-pre diagnose-log-pre"></pre>
       </details>
-      <details open><summary>Fachliche Probes</summary>
+      <details open><summary>Domain Probes</summary>
         <pre id="diagnose-probes" class="diagnose-pre"></pre>
       </details>
       <details><summary>Data-Flow</summary>
@@ -159,7 +159,7 @@
         <pre id="diagnose-raw" class="diagnose-pre diagnose-raw-pre"></pre>
       </details>
       <p id="diagnose-hint" class="muted diagnose-hint"></p>
-      <div class="row"><button data-close="diagnose-dialog">Schliessen</button><button id="diagnose-restart" class="danger">Worker neustarten</button></div>
+      <div class="row"><button data-close="diagnose-dialog">Close</button><button id="diagnose-restart" class="danger">Restart Worker</button></div>
     </div>
   </dialog>
   <script src="/static/admin.js" defer></script>

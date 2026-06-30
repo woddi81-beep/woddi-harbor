@@ -24,7 +24,7 @@ def _openstack_credentials(module_id: str) -> dict[str, str]:
 
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
 
     settings = module.settings or {}
     resolved = {
@@ -37,7 +37,7 @@ def _openstack_credentials(module_id: str) -> dict[str, str]:
     }
 
     if not resolved["OS_AUTH_URL"]:
-        raise ValueError("OS_AUTH_URL fehlt. Bitte im Admin-UI konfigurieren.")
+        raise ValueError("OS_AUTH_URL is missing. Configure it in the admin UI.")
 
     return resolved
 
@@ -65,7 +65,7 @@ def _openstack_user_credentials(username: str) -> dict[str, str]:
 def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
     return install_worker_auth(create_app(_openstack_credentials(module_id), credential_provider=_openstack_user_credentials))
 
 
@@ -91,7 +91,7 @@ def _restore_signal_handlers(previous_handlers: dict[int, Any]) -> None:
 def run_worker(module_id: str, port: int) -> None:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
     api = create_worker_app(module_id)
     config = uvicorn.Config(api, host=module.host, port=port, log_level="warning")
     server = uvicorn.Server(config)

@@ -64,7 +64,7 @@ def initialize_database() -> Path:
                     title TEXT NOT NULL,
                     department TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'offen',
+                    status TEXT NOT NULL DEFAULT 'open',
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
@@ -406,7 +406,7 @@ def set_mcp_instance_state(instance_id: str, desired_state: str) -> None:
             (desired_state, time.time(), instance_id),
         )
         if cursor.rowcount != 1:
-            raise ValueError(f"MCP-Instanz nicht gefunden: {instance_id}")
+            raise ValueError(f"MCP instance not found: {instance_id}")
 
 
 def list_mcp_instances() -> list[dict[str, Any]]:
@@ -436,13 +436,13 @@ def change_mcp_instance_version(instance_id: str, version: str) -> None:
             (instance_id,),
         ).fetchone()
         if row is None:
-            raise ValueError(f"MCP-Instanz nicht gefunden: {instance_id}")
+            raise ValueError(f"MCP instance not found: {instance_id}")
         package = connection.execute(
             "SELECT 1 FROM mcp_packages WHERE id=? AND version=?",
             (row["package_id"], version),
         ).fetchone()
         if package is None:
-            raise ValueError(f"MCP-Paketversion nicht installiert: {row['package_id']}@{version}")
+            raise ValueError(f"MCP package version not installed: {row['package_id']}@{version}")
         connection.execute(
             """
             INSERT INTO mcp_deployment_history(
@@ -588,7 +588,7 @@ def create_stellen(data: dict[str, Any]) -> str:
     try:
         connection.execute(
             "INSERT INTO stellen (id, title, department, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id, data["title"], data.get("department", ""), data.get("description", ""), data.get("status", "offen"), now, now)
+            (id, data["title"], data.get("department", ""), data.get("description", ""), data.get("status", "open"), now, now)
         )
         connection.commit()
     finally:
@@ -603,7 +603,7 @@ def update_stellen(id: str, data: dict[str, Any]) -> bool:
     try:
         connection.execute(
             "UPDATE stellen SET title=?, department=?, description=?, status=?, updated_at=? WHERE id=?",
-            (data["title"], data.get("department", ""), data.get("description", ""), data.get("status", "offen"), now, id)
+            (data["title"], data.get("department", ""), data.get("description", ""), data.get("status", "open"), now, id)
         )
         connection.commit()
         return connection.total_changes > 0
@@ -630,9 +630,9 @@ def seed_stellen() -> None:
         return
     now = time.time()
     items = [
-        {"id": "stellen-1", "title": "System Engineer (m/w/d) – Linux & Infrastructure", "department": "IT-Infrastruktur", "description": "Betreuung und Weiterentwicklung unserer Linux-basierten Infrastruktur. Erfahrung mit Docker, Kubernetes und CI/CD wuenschenswert.", "status": "offen"},
-        {"id": "stellen-2", "title": "Python Backend Developer (m/w/d)", "department": "Softwareentwicklung", "description": "Entwicklung von Microservices und APIs mit Python/FastAPI. Kenntnisse in PostgreSQL und asynchroner Programmierung von Vorteil.", "status": "offen"},
-        {"id": "stellen-3", "title": "Technical Writer / Dokumentationsengineer (m/w/d)", "department": "Dokumentation", "description": "Erstellung und Pflege technischer Dokumentation fuer Infrastruktur und Betrieb. Erfahrung mit Markdown und Docs-as-Code von Vorteil.", "status": "besetzt"},
+        {"id": "stellen-1", "title": "System Engineer - Linux & Infrastructure", "department": "IT Infrastructure", "description": "Maintain and evolve our Linux-based infrastructure. Experience with Docker, Kubernetes, and CI/CD is preferred.", "status": "open"},
+        {"id": "stellen-2", "title": "Python Backend Developer", "department": "Software Development", "description": "Build microservices and APIs with Python/FastAPI. Experience with PostgreSQL and asynchronous programming is a plus.", "status": "open"},
+        {"id": "stellen-3", "title": "Technical Writer / Documentation Engineer", "department": "Documentation", "description": "Create and maintain technical documentation for infrastructure and operations. Experience with Markdown and docs-as-code is a plus.", "status": "filled"},
     ]
     connection = _connect()
     try:
@@ -644,4 +644,3 @@ def seed_stellen() -> None:
         connection.commit()
     finally:
         connection.close()
-

@@ -19,7 +19,7 @@ class ExecuteRequest(BaseModel):
 def create_worker_app(module_id: str) -> FastAPI:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
 
     api = FastAPI(title=f"Harbor Worker {module_id}")
 
@@ -37,7 +37,7 @@ def create_worker_app(module_id: str) -> FastAPI:
 def run_worker(module_id: str) -> None:
     module = find_module(module_id)
     if module is None:
-        raise ValueError(f"Modul nicht gefunden: {module_id}")
+        raise ValueError(f"Module not found: {module_id}")
     api = create_worker_app(module_id)
     uvicorn.run(api, host=module.host, port=module.port, log_level="warning")
 

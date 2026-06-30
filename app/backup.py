@@ -58,7 +58,7 @@ def create_backup(label: str = "manual") -> Path:
 def restore_backup(source: str) -> Path:
     archive_path = Path(source).expanduser().resolve()
     if not archive_path.is_file():
-        raise ValueError("Backup-Datei nicht gefunden.")
+        raise ValueError("Backup file not found.")
     safety_backup = create_backup("pre-restore")
     with tempfile.TemporaryDirectory(prefix="harbor-restore-") as temporary:
         staging = Path(temporary)
